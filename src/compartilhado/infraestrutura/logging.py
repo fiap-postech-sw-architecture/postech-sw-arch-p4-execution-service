@@ -108,7 +108,8 @@ _MASCARA = "***"
 # Loggers que o uvicorn configura com handler proprio + `propagate=False`.
 # `configurar_logging` os religa ao root para passarem pelo scrubber (issue #86
 # do p2: https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p2/issues/86).
-_LOGGERS_UVICORN = ("uvicorn", "uvicorn.error", "uvicorn.access")
+_LOGGER_DE_ACESSO = "uvicorn.access"
+_LOGGERS_UVICORN = ("uvicorn", "uvicorn.error", _LOGGER_DE_ACESSO)
 
 # Teto de profundidade do scrub em estruturas aninhadas: protege contra payload
 # ciclico ou patologico sem perder o aninhamento real (eventos tem 2 ou 3
@@ -278,9 +279,15 @@ def configurar_logging(stream: TextIO | None = None) -> None:
 def _religar_loggers_do_uvicorn() -> None:
     # O uvicorn (lancado por CLI no container) instala handlers proprios com
     # `propagate=False`: seus logs nao passariam pelo scrub do root. Isto roda
-    # no lifespan, depois de o uvicorn montar os loggers: tira os handlers crus
-    # e religa a propagacao (JSON unico e scrubado). Issue #86 do p2.
+    # com o app montado, depois de o uvicorn montar os loggers: tira os handlers
+    # crus e religa a propagacao (JSON unico e scrubado). Issue #86 do p2.
     for nome in _LOGGERS_UVICORN:
         uvlog = logging.getLogger(nome)
+        if nome == _LOGGER_DE_ACESSO and not uvlog.handlers and not uvlog.propagate:
+            # `--no-access-log` deixa o logger assim, e o uvicorn decide por
+            # `hasHandlers()`, a cada conexao, se escreve o acesso. Religar a
+            # propagacao o ligaria de novo ao handler do root: a linha de texto
+            # voltaria, em duplicidade com o `http_request` do middleware.
+            continue
         uvlog.handlers = []
         uvlog.propagate = True
