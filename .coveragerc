@@ -1,0 +1,20 @@
+[run]
+relative_files = True
+# Cobertura de ramos, nao so de linhas: expoe if/for exercitados de um lado so.
+branch = True
+source = src
+omit =
+    */__init__.py
+    # Protocols puros (sem logica, so importados sob TYPE_CHECKING): nunca
+    # executam, entao so baixariam o numero sem medir codigo. Mesmo criterio
+    # do p3. Port com codigo de verdade (execucao/aplicacao/ports.py) fica.
+    src/*/dominio/repository.py
+    src/diagnostico/aplicacao/ports.py
+    src/compartilhado/aplicacao/unit_of_work.py
+
+[report]
+# Minimo da fase 4 por servico: 90% (o enunciado exige 80%).
+fail_under = 90
+show_missing = True
+exclude_also =
+    if __name__ == .__main__.:

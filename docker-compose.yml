@@ -1,0 +1,47 @@
+# Dev do servico isolado: API + PostgreSQL 16 proprio (banco `execucao`).
+# A stack completa (OS, Billing, RabbitMQ, observabilidade) fica no repo platform.
+# Sem o OS Service no ar, rota autenticada com token responde 503 (JWKS
+# indisponivel) e sem token 401; aponte JWKS_URL/BILLING_URL para servicos
+# acessiveis quando quiser exercita-las. Portas so em 127.0.0.1.
+services:
+  api:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_DATE: ${GIT_DATE:-unknown}
+    image: ${API_IMAGE:-pytstop-execution-service:dev}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${API_PORT:-8003}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Credencial de demonstracao, so do banco local do compose.
+      DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
+      JWKS_URL: ${JWKS_URL:-http://os-service:8000/.well-known/jwks.json}
+      BILLING_URL: ${BILLING_URL:-http://billing-service:8000}
+      RUN_MIGRATIONS_ON_STARTUP: "true"
+      RUN_SEED_ON_STARTUP: "true"
+    # Healthcheck: o HEALTHCHECK do Dockerfile (um lugar so); `--wait` espera ele.
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: execucao
+      POSTGRES_USER: execucao
+      POSTGRES_PASSWORD: execucao-demo  # gitleaks:allow - so o banco local do compose
+    volumes:
+      - execucao_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U execucao -d execucao"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  execucao_data:

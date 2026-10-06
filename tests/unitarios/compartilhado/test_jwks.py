@@ -1,0 +1,436 @@
+from __future__ import annotations
+
+import socket
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt import PyJWKClient
+from prometheus_client import REGISTRY
+
+from src.compartilhado.infraestrutura.jwks import (
+    FRESCO_SEGUNDOS,
+    MEMORIA_DA_FALHA_SEGUNDOS,
+    VELHO_MAXIMO_SEGUNDOS,
+    JwksIndisponivelError,
+    TokenExpiradoError,
+    TokenInvalidoError,
+    ValidadorDeTokenJWKS,
+)
+from tests.conftest import assinar, claims_padrao
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from tests.conftest import ServidorJwks
+
+
+class _Relogio:
+    def __init__(self) -> None:
+        self.agora = 1000.0
+
+    def __call__(self) -> float:
+        return self.agora
+
+
+@pytest.fixture
+def validador(jwks_url: str) -> ValidadorDeTokenJWKS:
+    return ValidadorDeTokenJWKS(jwks_url)
+
+
+def _falhas() -> float:
+    return REGISTRY.get_sample_value("pytstop_jwks_falhas_total") or 0.0
+
+
+def _porta_livre() -> int:
+    with socket.socket() as livre:
+        livre.bind(("127.0.0.1", 0))
+        return int(livre.getsockname()[1])
+
+
+def test_token_valido_devolve_as_claims(
+    validador: ValidadorDeTokenJWKS, emitir_token: Callable[..., str]
+) -> None:
+    sub = uuid4()
+    claims = validador.validar(emitir_token("mecanico", sub))
+    assert claims["sub"] == str(sub)
+    assert claims["papel"] == "mecanico"
+
+
+def test_jwks_fica_em_cache_entre_validacoes(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    validador.validar(emitir_token("mecanico"))
+    validador.validar(emitir_token("admin"))
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_token_expirado(
+    validador: ValidadorDeTokenJWKS, emitir_token: Callable[..., str]
+) -> None:
+    token = emitir_token("mecanico", exp=datetime.now(UTC) - timedelta(minutes=1))
+    with pytest.raises(TokenExpiradoError):
+        validador.validar(token)
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [
+        pytest.param({"iat": timedelta(seconds=5)}, id="iat-5s-no-futuro"),
+        pytest.param({"nbf": timedelta(seconds=5)}, id="nbf-5s-no-futuro"),
+        pytest.param({"exp": timedelta(seconds=-5)}, id="exp-vencido-ha-5s"),
+    ],
+)
+def test_leeway_de_10s_aceita_relogio_dessincronizado(
+    validador: ValidadorDeTokenJWKS,
+    emitir_token: Callable[..., str],
+    extras: dict[str, timedelta],
+) -> None:
+    agora = datetime.now(UTC)
+    token = emitir_token(
+        "mecanico", **{claim: agora + delta for claim, delta in extras.items()}
+    )
+    assert validador.validar(token)["papel"] == "mecanico"
+
+
+def test_alem_do_leeway_continua_expirado(
+    validador: ValidadorDeTokenJWKS, emitir_token: Callable[..., str]
+) -> None:
+    token = emitir_token("mecanico", exp=datetime.now(UTC) - timedelta(seconds=15))
+    with pytest.raises(TokenExpiradoError):
+        validador.validar(token)
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [
+        pytest.param({"iss": "outro-emissor"}, id="iss-errado"),
+        pytest.param({"aud": "outra-audiencia"}, id="aud-errada"),
+    ],
+)
+def test_emissor_ou_audiencia_errados(
+    validador: ValidadorDeTokenJWKS,
+    emitir_token: Callable[..., str],
+    extras: dict[str, Any],
+) -> None:
+    token = emitir_token("mecanico", **extras)
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(token)
+
+
+@pytest.mark.parametrize("claim", ["exp", "iss", "aud", "sub"])
+def test_claim_obrigatoria_ausente(
+    validador: ValidadorDeTokenJWKS, chave_privada: rsa.RSAPrivateKey, claim: str
+) -> None:
+    # Sem `exp` obrigatorio, um token sem validade valeria para sempre.
+    claims = claims_padrao("mecanico", uuid4())
+    del claims[claim]
+    token = assinar(chave_privada, claims)
+    with pytest.raises(TokenInvalidoError, match=claim):
+        validador.validar(token)
+
+
+def test_assinatura_de_outra_chave_com_o_mesmo_kid(
+    validador: ValidadorDeTokenJWKS,
+) -> None:
+    intrusa = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    token = assinar(intrusa, claims_padrao("admin", uuid4()))
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(token)
+
+
+def test_algoritmo_simetrico_e_recusado(validador: ValidadorDeTokenJWKS) -> None:
+    # Confusao de algoritmo: HS256 com "segredo" qualquer e o kid valido.
+    token = jwt.encode(
+        claims_padrao("admin", uuid4()),
+        "segredo-qualquer-com-32-bytes-ou-mais!!",
+        algorithm="HS256",
+        headers={"kid": "chave-de-teste"},
+    )
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(token)
+
+
+@pytest.mark.parametrize(
+    "kid",
+    [pytest.param("kid-desconhecido", id="desconhecido"), pytest.param(None, id="sem")],
+)
+def test_kid_desconhecido_ou_ausente(
+    validador: ValidadorDeTokenJWKS, chave_privada: rsa.RSAPrivateKey, kid: str | None
+) -> None:
+    token = assinar(chave_privada, claims_padrao("admin", uuid4()), kid=kid)
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(token)
+
+
+def test_kid_novo_busca_o_jwks_de_novo_no_maximo_a_cada_30s(
+    servidor_jwks_proprio: ServidorJwks,
+    chave_privada: rsa.RSAPrivateKey,
+    emitir_token: Callable[..., str],
+) -> None:
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    validador.validar(emitir_token("admin"))
+    rotacionada = assinar(chave_privada, claims_padrao("admin", uuid4()), kid="nova")
+
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(rotacionada)  # acabou de buscar: nao busca de novo
+    assert servidor_jwks_proprio.requisicoes == 1
+    relogio.agora += 30
+    with pytest.raises(TokenInvalidoError):
+        validador.validar(rotacionada)
+    assert servidor_jwks_proprio.requisicoes == 2
+
+
+def test_token_malformado(validador: ValidadorDeTokenJWKS) -> None:
+    with pytest.raises(TokenInvalidoError):
+        validador.validar("isto-nao-e-um-jwt")
+
+
+@pytest.mark.parametrize(
+    "corpo",
+    [
+        pytest.param(b"<html>nao e json</html>", id="nao-e-json"),
+        pytest.param(b"[]", id="nao-e-objeto"),
+        pytest.param(b'{"keys": []}', id="sem-chaves"),
+        pytest.param(b'{"keys": [{"kty": "XYZ", "kid": "x"}]}', id="chave-ilegivel"),
+    ],
+)
+def test_jwks_sem_chave_de_assinatura_utilizavel_e_indisponibilidade(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str], corpo: bytes
+) -> None:
+    servidor_jwks_proprio.corpo = corpo
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError) as erro:
+        validador.validar(token)
+    assert erro.value.retry_after == MEMORIA_DA_FALHA_SEGUNDOS
+
+
+@pytest.mark.parametrize(
+    "jwk_extra",
+    [
+        pytest.param({"use": "enc"}, id="so-cifra"),
+        pytest.param({"kid": None}, id="sem-kid"),
+    ],
+)
+def test_jwks_so_com_chave_que_nao_assina_e_indisponibilidade(
+    servidor_jwks_proprio: ServidorJwks,
+    jwk_publico: dict[str, Any],
+    emitir_token: Callable[..., str],
+    jwk_extra: dict[str, Any],
+) -> None:
+    jwk = {k: v for k, v in {**jwk_publico, **jwk_extra}.items() if v is not None}
+    servidor_jwks_proprio.jwks = {"keys": [jwk]}
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+
+
+def test_jwks_fora_do_ar_conta_a_falha(emitir_token: Callable[..., str]) -> None:
+    url = f"http://127.0.0.1:{_porta_livre()}/.well-known/jwks.json"
+    validador, antes = ValidadorDeTokenJWKS(url), _falhas()
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+    assert _falhas() == antes + 1
+
+
+def test_conexao_derrubada_no_meio_do_corpo_e_indisponibilidade(
+    monkeypatch: pytest.MonkeyPatch,
+    validador: ValidadorDeTokenJWKS,
+    emitir_token: Callable[..., str],
+) -> None:
+    # O PyJWKClient so traduz URLError/TimeoutError/HTTPException; um reset da
+    # conexao durante a leitura do corpo sai como OSError cru (seria 500).
+    def derrubar(_self: PyJWKClient, refresh: bool = False) -> list[Any]:
+        raise ConnectionResetError
+
+    monkeypatch.setattr(PyJWKClient, "get_signing_keys", derrubar)
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+
+
+def test_jwks_lento_desiste_em_2s(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    servidor_jwks_proprio.atraso = 3
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    inicio = time.monotonic()
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+    assert 1.5 < time.monotonic() - inicio < 2.9
+
+
+def test_falha_memorizada_responde_na_hora_sem_buscar_de_novo(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    relogio = _Relogio()
+    servidor_jwks_proprio.status = 500
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+
+    relogio.agora += 2
+    with pytest.raises(JwksIndisponivelError) as erro:
+        validador.validar(token)
+    assert erro.value.retry_after == MEMORIA_DA_FALHA_SEGUNDOS - 2
+    assert servidor_jwks_proprio.requisicoes == 1
+
+    relogio.agora += MEMORIA_DA_FALHA_SEGUNDOS
+    servidor_jwks_proprio.status = 200
+    assert validador.validar(token)["papel"] == "admin"
+    assert servidor_jwks_proprio.requisicoes == 2
+
+
+def test_jwks_cai_depois_de_cacheado_e_a_chave_conhecida_vale_por_ate_1h(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+    servidor_jwks_proprio.status = 503
+
+    relogio.agora += FRESCO_SEGUNDOS + 1  # venceu o cache: tenta renovar e falha
+    assert validador.validar(token)["papel"] == "admin"
+    assert servidor_jwks_proprio.requisicoes == 2
+
+    relogio.agora = 1000.0 + VELHO_MAXIMO_SEGUNDOS + 1  # copia velha demais
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+
+
+def test_tres_falhas_abrem_o_circuito_e_param_as_buscas(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    relogio = _Relogio()
+    servidor_jwks_proprio.status = 500
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    for _ in range(3):
+        with pytest.raises(JwksIndisponivelError):
+            validador.validar(token)
+        relogio.agora += MEMORIA_DA_FALHA_SEGUNDOS  # passa a memoria da falha
+
+    with pytest.raises(JwksIndisponivelError) as erro:
+        validador.validar(token)
+    assert servidor_jwks_proprio.requisicoes == 3  # aberto: nem tentou
+    assert erro.value.retry_after == 30 - MEMORIA_DA_FALHA_SEGUNDOS
+
+    relogio.agora += 30
+    servidor_jwks_proprio.status = 200
+    assert validador.validar(token)["papel"] == "admin"  # prova fecha o circuito
+    assert servidor_jwks_proprio.requisicoes == 4
+
+
+def _validar_em_paralelo(
+    validador: ValidadorDeTokenJWKS, token: str, quantos: int
+) -> list[tuple[float, BaseException | None]]:
+    """Duracao e erro (ou None) de cada uma de ``quantos`` validacoes simultaneas."""
+    largada = threading.Barrier(quantos)
+
+    def validar() -> tuple[float, BaseException | None]:
+        largada.wait(5)
+        inicio = time.monotonic()
+        try:
+            validador.validar(token)
+        except JwksIndisponivelError as exc:
+            return time.monotonic() - inicio, exc
+        return time.monotonic() - inicio, None
+
+    with ThreadPoolExecutor(quantos) as executor:
+        futuros = [executor.submit(validar) for _ in range(quantos)]
+        return [futuro.result(30) for futuro in futuros]
+
+
+def test_jwks_pendurado_com_copia_em_cache_so_atrasa_quem_busca(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+    servidor_jwks_proprio.atraso = 3
+    relogio.agora += FRESCO_SEGUNDOS + 1  # copia vencida: alguem tenta renovar
+
+    resultados = _validar_em_paralelo(validador, token, 10)
+
+    assert all(erro is None for _, erro in resultados)  # copia velha serve
+    duracoes = sorted(duracao for duracao, _ in resultados)
+    assert duracoes[-2] < 0.5  # so um request esperou o JWKS pendurado
+    assert servidor_jwks_proprio.requisicoes == 2
+
+
+def test_jwks_pendurado_no_boot_nao_enfileira_as_validacoes(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # Sem copia nenhuma: cada request espera no maximo uma busca (2 s), e nao
+    # 2 s vezes a fila (o lock do PyJWKClient serializava a busca de cada um).
+    servidor_jwks_proprio.atraso = 3
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    inicio = time.monotonic()
+
+    resultados = _validar_em_paralelo(validador, emitir_token("admin"), 10)
+
+    assert all(isinstance(erro, JwksIndisponivelError) for _, erro in resultados)
+    assert time.monotonic() - inicio < 3.5
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_no_boot_quem_espera_a_busca_de_outro_usa_o_resultado_dela(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # Sem copia nenhuma, os demais esperam a busca em curso e, quando ela da
+    # certo, validam com o JWK Set que ela trouxe, sem buscar de novo.
+    servidor_jwks_proprio.atraso = 0.3
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+
+    resultados = _validar_em_paralelo(validador, emitir_token("admin"), 10)
+
+    assert all(erro is None for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_no_boot_quem_espera_uma_busca_que_falhou_nao_busca_de_novo(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # A falha da busca em curso fica memorizada: quem esperava por ela responde
+    # 503 na hora, sem repetir a busca ao emissor fora do ar.
+    servidor_jwks_proprio.atraso = 0.3
+    servidor_jwks_proprio.status = 500
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+
+    resultados = _validar_em_paralelo(validador, emitir_token("admin"), 10)
+
+    assert all(isinstance(erro, JwksIndisponivelError) for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_copia_de_mais_de_1h_espera_a_busca_em_curso_como_no_boot(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # Depois de mais de 1 h sem trafego a copia nao serve mais: quem chega
+    # durante a renovacao espera por ela, em vez de responder 503 na hora.
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+    relogio.agora += VELHO_MAXIMO_SEGUNDOS + 1
+    servidor_jwks_proprio.atraso = 0.3
+
+    resultados = _validar_em_paralelo(validador, token, 10)
+
+    assert all(erro is None for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 2

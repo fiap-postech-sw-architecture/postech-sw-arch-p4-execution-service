@@ -1,0 +1,225 @@
+"""Envelope de erro da API: ``{"erro": {codigo, mensagem, id_requisicao}}``.
+
+Os handlers sao ``async`` de proposito, sem ``await`` (por isso o NOSONAR da
+regra S7503): o Starlette chama handler async direto no event loop; um sync
+iria para o threadpool, e com o pool cheio (JWKS pendurado, por exemplo) ate a
+resposta de erro esperaria uma thread.
+"""
+
+from __future__ import annotations
+
+from http import HTTPStatus
+from typing import TYPE_CHECKING
+
+import structlog
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from src.compartilhado.dominio.exceptions import (
+    DadosInvalidosException,
+    DependenciaIndisponivelException,
+    DomainException,
+    EntidadeDuplicadaException,
+    EntidadeNaoEncontradaException,
+    EstoqueInsuficienteException,
+    OperacaoNaoPermitidaException,
+    RespostaInvalidaDaDependenciaException,
+    TransicaoStatusInvalidaException,
+    ValorInvalidoError,
+    ViolacaoRegraDeNegocioException,
+)
+from src.compartilhado.infraestrutura.database import descrever_erro_de_banco
+from src.compartilhado.infraestrutura.logging import redigir_pii_erro
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+logger = structlog.get_logger(__name__)
+
+_EXCEPTION_STATUS_MAP: dict[type[DomainException], int] = {
+    EntidadeNaoEncontradaException: 404,
+    ViolacaoRegraDeNegocioException: 409,
+    TransicaoStatusInvalidaException: 409,
+    EstoqueInsuficienteException: 409,
+    EntidadeDuplicadaException: 409,
+    OperacaoNaoPermitidaException: 403,
+    DadosInvalidosException: 422,
+    DependenciaIndisponivelException: 503,
+    RespostaInvalidaDaDependenciaException: 502,
+}
+
+# DomainException fora do mapa e, por definicao, regra de negocio violada.
+_STATUS_DEFAULT = 409
+
+# Erros HTTP levantados pelo framework ou pela autenticacao (HTTPException).
+_CODIGOS_HTTP: dict[int, str] = {
+    401: "NAO_AUTENTICADO",
+    403: "ACESSO_NEGADO",
+    # Mesmo codigo do 404 de dominio: o cliente trata "nao encontrado" de um jeito so.
+    404: "ENTIDADE_NAO_ENCONTRADA",
+    405: "METODO_NAO_PERMITIDO",
+    503: "SERVICO_INDISPONIVEL",
+}
+# O roteamento do Starlette usa a frase HTTP em ingles como detail ("Not Found");
+# a API responde em portugues.
+_MENSAGENS_PADRAO: dict[int, str] = {
+    404: "Recurso nao encontrado",
+    405: "Metodo nao permitido para este recurso",
+}
+
+
+def _status_para(exc: DomainException) -> int:
+    """Resolve o status pela hierarquia (MRO): a subclasse mais especifica vence."""
+    for classe in type(exc).__mro__:
+        code = _EXCEPTION_STATUS_MAP.get(classe)
+        if code is not None:
+            return code
+    return _STATUS_DEFAULT
+
+
+def _cabecalhos_de_nova_tentativa(exc: DomainException) -> dict[str, str] | None:
+    if isinstance(exc, DependenciaIndisponivelException) and exc.retry_after:
+        return {"Retry-After": str(exc.retry_after)}
+    return None
+
+
+def _obter_request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "desconhecido")
+
+
+def _criar_envelope(codigo: str, mensagem: str, request_id: str) -> dict[str, object]:
+    return {
+        "erro": {
+            "codigo": codigo,
+            "mensagem": mensagem,
+            "id_requisicao": request_id,
+        }
+    }
+
+
+def _mensagem_http(exc: StarletteHTTPException) -> str:
+    detalhe = str(exc.detail)
+    if detalhe == HTTPStatus(exc.status_code).phrase:
+        return _MENSAGENS_PADRAO.get(exc.status_code, detalhe)
+    return detalhe
+
+
+async def _domain_exception_handler(  # NOSONAR - async de proposito
+    request: Request, exc: DomainException
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    status_code = _status_para(exc)
+    # So o codigo estavel vai para o log, nunca a mensagem (pode ter dado do
+    # request).
+    logger.warning(
+        "domain_exception_handled",
+        codigo=exc.codigo,
+        status=status_code,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=_criar_envelope(exc.codigo, exc.mensagem, request_id),
+        headers=_cabecalhos_de_nova_tentativa(exc),
+    )
+
+
+async def _http_exception_handler(  # NOSONAR - async de proposito
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    codigo = _CODIGOS_HTTP.get(exc.status_code, "ERRO_HTTP")
+    logger.warning(
+        "http_exception_handled",
+        codigo=codigo,
+        status=exc.status_code,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_criar_envelope(codigo, _mensagem_http(exc), request_id),
+        headers=exc.headers,
+    )
+
+
+async def _request_validation_handler(  # NOSONAR - async de proposito
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    # O detail default ecoa o `input` cru de cada campo invalido (PII de um
+    # campo malformado voltaria no corpo): cada item carrega so type/loc/msg.
+    request_id = _obter_request_id(request)
+    detalhes = [
+        {"type": erro.get("type"), "loc": erro.get("loc"), "msg": erro.get("msg")}
+        for erro in exc.errors()
+    ]
+    logger.warning(
+        "request_validation_handled",
+        request_id=request_id,
+        erros=[(d["type"], d["loc"]) for d in detalhes],
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detalhes, "id_requisicao": request_id},
+    )
+
+
+async def _valor_invalido_handler(  # NOSONAR - async de proposito
+    request: Request, exc: ValorInvalidoError
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    # So a classe: a mensagem e o traceback podem ecoar o valor recebido.
+    logger.warning("invalid_value_handled", request_id=request_id)
+    return JSONResponse(
+        status_code=422,
+        content=_criar_envelope(
+            "VALOR_INVALIDO", redigir_pii_erro(str(exc)), request_id
+        ),
+    )
+
+
+async def _generic_exception_handler(  # NOSONAR - async de proposito
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Rede de seguranca: o SecurityHeadersMiddleware ja converte o erro das
+    # rotas; aqui so chega o que escapar de um middleware mais externo.
+    return resposta_erro_interno(request, exc)
+
+
+def resposta_erro_interno(request: Request, exc: Exception) -> JSONResponse:
+    """500 no envelope, com o erro no log sem dado do request.
+
+    ``DBAPIError`` loga so classe, SQLSTATE e constraint (o ``DETAIL`` do
+    Postgres traz a linha inteira); os demais levam o traceback, que passa
+    pelo scrub de PII do pipeline de log.
+    """
+    request_id = _obter_request_id(request)
+    if isinstance(exc, DBAPIError):
+        logger.error(
+            "internal_error", request_id=request_id, **descrever_erro_de_banco(exc)
+        )
+    else:
+        logger.error("internal_error", request_id=request_id, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content=_criar_envelope("ERRO_INTERNO", "Erro interno do servidor", request_id),
+    )
+
+
+def registrar_error_handlers(app: FastAPI) -> None:
+    """Mapeia excecoes para o envelope ``{erro: {codigo, mensagem, id_requisicao}}``.
+
+    DomainException vira 403/404/409/422/502/503 pelo mapa; HTTPException
+    (autenticacao, rota inexistente) mantem o status e os headers;
+    ``ValorInvalidoError`` (invariante de value object) vira 422 VALOR_INVALIDO;
+    o resto, inclusive ``ValueError`` de biblioteca, vira 500 com traceback no
+    log. O 422 de schema do FastAPI mantem o formato do p3 (``detail`` +
+    ``id_requisicao``).
+    """
+    app.exception_handler(DomainException)(_domain_exception_handler)
+    app.exception_handler(StarletteHTTPException)(_http_exception_handler)
+    app.exception_handler(RequestValidationError)(_request_validation_handler)
+    app.exception_handler(ValorInvalidoError)(_valor_invalido_handler)
+    app.exception_handler(Exception)(_generic_exception_handler)

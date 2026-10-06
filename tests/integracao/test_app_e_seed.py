@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from src.compartilhado.interfaces.autenticacao import CREDENCIAL_INVALIDA
+from src.estoque.dominio.sku import Sku
+from src.estoque.infraestrutura.repository import ItemEstoqueSQLAlchemyRepository
+from src.estoque.infraestrutura.seed import ITENS_DEMO, main, semear
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from tests.conftest import ServidorJwks
+
+
+def _saldos(session_factory: sessionmaker[Session]) -> dict[str, int]:
+    with session_factory() as session:
+        repo = ItemEstoqueSQLAlchemyRepository(session)
+        return {str(i.sku): i.quantidade_disponivel for i in repo.listar(0, 100)}
+
+
+def test_seed_cria_os_skus_da_demo_e_e_idempotente(
+    session_factory: sessionmaker[Session],
+) -> None:
+    assert semear(session_factory) == [sku for sku, _, _ in ITENS_DEMO]
+    assert _saldos(session_factory) == {
+        "PEC-AMORTECEDOR": 4,
+        "PEC-DISCO-FREIO": 6,
+        "PEC-FILTRO-OLEO": 20,
+        "PEC-OLEO-5W30": 40,
+        "PEC-PASTILHA-FREIO": 10,
+        "PEC-VELA": 0,
+    }
+    assert semear(session_factory) == []
+    assert len(_saldos(session_factory)) == 6
+
+
+def test_seed_nao_mexe_em_saldo_existente(
+    session_factory: sessionmaker[Session],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semear(session_factory)
+    with session_factory() as session:
+        repo = ItemEstoqueSQLAlchemyRepository(session)
+        vela = repo.obter_por_sku(Sku("PEC-VELA"), com_lock=True)
+        assert vela is not None
+        vela.ajustar_quantidade(7)
+        session.commit()
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    main()
+    assert _saldos(session_factory)["PEC-VELA"] == 7
+
+
+def test_seed_sem_database_url_falha_com_mensagem_clara(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        main()
+
+
+def test_saude_metrics_e_swagger(api: TestClient) -> None:
+    assert api.get("/api/v1/saude").json() == {"status": "ok"}
+    assert api.get("/api/v1/saude/pronto").json() == {"status": "ok"}  # banco real
+    assert "http_request_duration_seconds" in api.get("/metrics").text
+    openapi = api.get("/openapi.json").json()
+    assert openapi["info"]["title"] == "PytStop Execution Service"
+    assert {
+        "/api/v1/saude",
+        "/api/v1/saude/pronto",
+        "/api/v1/estoque",
+        "/api/v1/estoque/{sku}",
+        "/api/v1/estoque/{sku}/quantidade",
+        "/api/v1/diagnosticos",
+        "/api/v1/diagnosticos/{ordem_id}/inicio",
+        "/api/v1/diagnosticos/{ordem_id}/conclusao",
+        "/api/v1/fila",
+        "/api/v1/execucoes/{ordem_id}/inicio",
+        "/api/v1/execucoes/{ordem_id}/finalizacao",
+    } <= set(openapi["paths"])
+    assert api.get("/docs").status_code == 200
+
+
+def test_token_do_os_service_validado_pelo_jwks(
+    api: TestClient, emitir_token: Callable[..., str]
+) -> None:
+    valido = {"Authorization": f"Bearer {emitir_token('mecanico')}"}
+    # Alem dos 10 s de leeway.
+    vencido = {
+        "Authorization": "Bearer "
+        + emitir_token("mecanico", exp=datetime.now(UTC) - timedelta(seconds=20))
+    }
+    outro_emissor = {"Authorization": f"Bearer {emitir_token('admin', iss='intruso')}"}
+
+    assert api.get("/api/v1/fila", headers=valido).status_code == 200
+    respostas = [
+        api.get("/api/v1/fila", headers=headers) for headers in (vencido, outro_emissor)
+    ]
+    assert [r.status_code for r in respostas] == [401, 401]
+    assert respostas[0].json()["erro"]["mensagem"] == CREDENCIAL_INVALIDA
+    assert respostas[1].json()["erro"]["mensagem"] == CREDENCIAL_INVALIDA
+
+
+def test_jwks_fora_do_ar_e_503_com_retry_after_e_sem_token_e_401(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    servidor_jwks_proprio: ServidorJwks,
+    emitir_token: Callable[..., str],
+) -> None:
+    from src.main import criar_app
+
+    servidor_jwks_proprio.status = 503
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    with TestClient(criar_app()) as api:
+        com_token = api.get(
+            "/api/v1/fila", headers={"Authorization": f"Bearer {emitir_token('admin')}"}
+        )
+        sem_token = api.get("/api/v1/fila")
+
+    assert com_token.status_code == 503
+    assert com_token.headers["Retry-After"] == "5"
+    assert com_token.json()["erro"]["codigo"] == "SERVICO_INDISPONIVEL"
+    assert sem_token.status_code == 401
+
+
+def test_jwks_pendurado_nao_atrasa_as_demais_rotas(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    servidor_jwks_proprio: ServidorJwks,
+    emitir_token: Callable[..., str],
+) -> None:
+    # Licao do Billing: com o fetch serializado, 2 s por request esgotavam o
+    # threadpool e uma rota publica de 0,03 s levava 41 s.
+    from src.main import criar_app
+
+    servidor_jwks_proprio.atraso = 3
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    autenticado = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    with TestClient(criar_app()) as api, ThreadPoolExecutor(21) as executor:
+        inicio = time.monotonic()
+        protegidas = [
+            executor.submit(api.get, "/api/v1/fila", headers=autenticado)
+            for _ in range(20)
+        ]
+        time.sleep(0.2)  # as protegidas ja esperam o JWKS
+        antes_das_metricas = time.monotonic()
+        metricas = executor.submit(api.get, "/metrics").result(10)
+        duracao_metricas = time.monotonic() - antes_das_metricas
+        respostas = [futuro.result(30) for futuro in protegidas]
+        duracao_total = time.monotonic() - inicio
+
+    assert metricas.status_code == 200
+    assert duracao_metricas < 1
+    assert {r.status_code for r in respostas} == {503}
+    assert duracao_total < 4  # uma busca de 2 s, nao 20 em fila
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+_LISTAGENS = ["/api/v1/estoque", "/api/v1/diagnosticos", "/api/v1/fila"]
+
+
+@pytest.mark.parametrize("rota", _LISTAGENS)
+@pytest.mark.parametrize(
+    ("params", "campo"),
+    [
+        pytest.param({"offset": -1}, "offset", id="offset-negativo"),
+        # Alem do bigint do Postgres o OFFSET virava DataError (500).
+        pytest.param({"offset": 9223372036854775808}, "offset", id="offset-gigante"),
+        pytest.param({"offset": 1_000_001}, "offset", id="offset-acima-do-teto"),
+        pytest.param({"limit": 0}, "limit", id="limit-zero"),
+        pytest.param({"limit": 101}, "limit", id="limit-acima-do-teto"),
+    ],
+)
+def test_paginacao_fora_dos_limites_e_422(
+    api: TestClient,
+    emitir_token: Callable[..., str],
+    rota: str,
+    params: dict[str, int],
+    campo: str,
+) -> None:
+    admin = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    resposta = api.get(rota, params=params, headers=admin)
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"][0]["loc"] == ["query", campo]
+
+
+@pytest.mark.parametrize("rota", _LISTAGENS)
+def test_paginacao_nas_bordas_validas(
+    api: TestClient, emitir_token: Callable[..., str], rota: str
+) -> None:
+    admin = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    resposta = api.get(rota, params={"offset": 1_000_000, "limit": 100}, headers=admin)
+    assert resposta.status_code == 200
+    assert resposta.json()["items"] == []
+
+
+@pytest.mark.parametrize("variavel", ["JWKS_URL", "BILLING_URL"])
+def test_boot_recusa_url_sem_esquema(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, jwks_url: str, variavel: str
+) -> None:
+    # Sem esquema, cada conclusao fazia 3 tentativas com UnsupportedProtocol e
+    # abria o breaker como se o Billing estivesse fora do ar.
+    from src.main import criar_app
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", jwks_url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    monkeypatch.setenv(variavel, "servico:8000")
+    with pytest.raises(RuntimeError, match=variavel), TestClient(criar_app()):
+        pass
+
+
+def test_cliente_do_billing_com_timeout_de_2s(api: TestClient) -> None:
+    assert api.app.state.billing_client.timeout == httpx.Timeout(2.0)
+
+
+@pytest.mark.parametrize("ausente", ["DATABASE_URL", "JWKS_URL", "BILLING_URL"])
+def test_boot_falha_sem_configuracao_obrigatoria(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, jwks_url: str, ausente: str
+) -> None:
+    from src.main import criar_app
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", jwks_url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    monkeypatch.delenv(ausente)
+    with pytest.raises(RuntimeError, match=ausente), TestClient(criar_app()):
+        pass
