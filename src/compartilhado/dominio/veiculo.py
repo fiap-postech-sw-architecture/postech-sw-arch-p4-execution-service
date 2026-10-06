@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 from src.compartilhado.dominio.exceptions import ValorInvalidoError
+from src.compartilhado.dominio.texto import texto_valido
 from src.compartilhado.dominio.value_object import ValueObject
 
 if TYPE_CHECKING:
@@ -18,14 +19,6 @@ TAMANHO_MAXIMO_TEXTO: Final = 100
 # Marcador da eliminacao LGPD, o mesmo do p3 (PlacaAnonimizada): unico por
 # veiculo e sem nada do titular.
 PREFIXO_ANONIMIZADO: Final = "ANONIMIZADO:"
-
-
-def _texto(valor: str, campo: str) -> str:
-    valor = valor.strip()
-    if not valor or len(valor) > TAMANHO_MAXIMO_TEXTO:
-        msg = f"{campo} do veiculo deve ter de 1 a {TAMANHO_MAXIMO_TEXTO} caracteres"
-        raise ValorInvalidoError(msg)
-    return valor
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +46,8 @@ class Veiculo(ValueObject):
 
         Raises:
             ValorInvalidoError: placa fora dos formatos antigo e Mercosul, marca
-                ou modelo vazios ou longos, ano fora de 1887 ate o ano seguinte
-                ao de ``agora`` (ano-modelo).
+                ou modelo vazios, longos ou com caractere de controle, ano fora
+                de 1887 ate o ano seguinte ao de ``agora`` (ano-modelo).
         """
         placa = self.placa.strip().upper().replace("-", "")
         if not (_PLACA_ANTIGA.fullmatch(placa) or _PLACA_MERCOSUL.fullmatch(placa)):
@@ -69,8 +62,12 @@ class Veiculo(ValueObject):
         return replace(
             self,
             placa=placa,
-            marca=_texto(self.marca, "Marca"),
-            modelo=_texto(self.modelo, "Modelo"),
+            marca=texto_valido(
+                self.marca, "Marca do veiculo", maximo=TAMANHO_MAXIMO_TEXTO
+            ),
+            modelo=texto_valido(
+                self.modelo, "Modelo do veiculo", maximo=TAMANHO_MAXIMO_TEXTO
+            ),
         )
 
     @property

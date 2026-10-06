@@ -59,10 +59,3 @@ class ItemEstoqueResponse(BaseModel):
     @classmethod
     def _sku_como_texto(cls, valor: object) -> str:
         return str(valor)
-
-
-class ItemEstoqueListaResponse(BaseModel):
-    items: list[ItemEstoqueResponse]
-    total: int
-    offset: int
-    limit: int

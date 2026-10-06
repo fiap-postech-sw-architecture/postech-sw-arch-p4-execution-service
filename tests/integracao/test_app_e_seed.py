@@ -170,6 +170,44 @@ def test_jwks_pendurado_nao_atrasa_as_demais_rotas(
     assert servidor_jwks_proprio.requisicoes == 1
 
 
+_LISTAGENS = ["/api/v1/estoque", "/api/v1/diagnosticos", "/api/v1/fila"]
+
+
+@pytest.mark.parametrize("rota", _LISTAGENS)
+@pytest.mark.parametrize(
+    ("params", "campo"),
+    [
+        pytest.param({"offset": -1}, "offset", id="offset-negativo"),
+        # Alem do bigint do Postgres o OFFSET virava DataError (500).
+        pytest.param({"offset": 9223372036854775808}, "offset", id="offset-gigante"),
+        pytest.param({"offset": 1_000_001}, "offset", id="offset-acima-do-teto"),
+        pytest.param({"limit": 0}, "limit", id="limit-zero"),
+        pytest.param({"limit": 101}, "limit", id="limit-acima-do-teto"),
+    ],
+)
+def test_paginacao_fora_dos_limites_e_422(
+    api: TestClient,
+    emitir_token: Callable[..., str],
+    rota: str,
+    params: dict[str, int],
+    campo: str,
+) -> None:
+    admin = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    resposta = api.get(rota, params=params, headers=admin)
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"][0]["loc"] == ["query", campo]
+
+
+@pytest.mark.parametrize("rota", _LISTAGENS)
+def test_paginacao_nas_bordas_validas(
+    api: TestClient, emitir_token: Callable[..., str], rota: str
+) -> None:
+    admin = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    resposta = api.get(rota, params={"offset": 1_000_000, "limit": 100}, headers=admin)
+    assert resposta.status_code == 200
+    assert resposta.json()["items"] == []
+
+
 @pytest.mark.parametrize("ausente", ["DATABASE_URL", "JWKS_URL", "BILLING_URL"])
 def test_boot_falha_sem_configuracao_obrigatoria(
     monkeypatch: pytest.MonkeyPatch, database_url: str, jwks_url: str, ausente: str

@@ -77,6 +77,25 @@ class TestDiagnostico:
                 ordem_id=ordem_id, veiculo=invalido, descricao_problema="x", agora=AGORA
             )
 
+    def test_descricao_com_caractere_de_controle_e_recusada(self) -> None:
+        ordem_id, veiculo = uuid4(), _veiculo()
+        with pytest.raises(ValueError, match="controle"):
+            Diagnostico.solicitar(
+                ordem_id=ordem_id,
+                veiculo=veiculo,
+                descricao_problema="freio\x00chiando",
+                agora=AGORA,
+            )
+
+    def test_descricao_multilinha_e_aceita(self) -> None:
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=_veiculo(),
+            descricao_problema="freio chiando\r\nao frear",
+            agora=AGORA,
+        )
+        assert diagnostico.descricao_problema == "freio chiando\r\nao frear"
+
     def test_solicitacao_entra_aguardando_com_ordem_como_identidade(self) -> None:
         diagnostico = _diagnostico()
         assert diagnostico.status is StatusDiagnostico.AGUARDANDO
@@ -144,12 +163,12 @@ class TestDiagnostico:
     def test_conclusao_sem_itens(self) -> None:
         diagnostico = _em_andamento()
         with pytest.raises(ValueError, match="ao menos um"):
-            diagnostico.validar_conclusao(MECANICO, [])
+            diagnostico.validar_conclusao(MECANICO, [], "")
 
     def test_item_repetido(self) -> None:
         diagnostico = _em_andamento()
         with pytest.raises(ValueError, match="unica vez"):
-            diagnostico.validar_conclusao(MECANICO, [ITENS[0], ITENS[0]])
+            diagnostico.validar_conclusao(MECANICO, [ITENS[0], ITENS[0]], "")
 
     def test_observacoes_longas_nao_mudam_nada(self) -> None:
         diagnostico = _em_andamento()

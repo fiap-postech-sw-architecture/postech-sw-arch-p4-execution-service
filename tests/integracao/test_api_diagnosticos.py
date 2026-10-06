@@ -272,6 +272,26 @@ def test_peca_sem_cadastro_no_estoque_e_422_sem_chamar_o_billing(
     assert rota.call_count == 0
 
 
+def test_observacoes_com_nul_e_422_antes_do_billing(
+    api: TestClient,
+    mecanico: dict[str, str],
+    em_andamento: UUID,
+    billing: respx.MockRouter,
+) -> None:
+    # NUL passava pelo schema e pelo dominio e o psycopg2 recusava o UPDATE: 500.
+    rota = billing.post(CAMINHO_VALIDACAO).respond(200, json={"invalidos": []})
+    resposta = api.post(
+        f"{URL}/{em_andamento}/conclusao",
+        json={"itens": ITENS, "observacoes": "pastilha\u0000gasta"},
+        headers=mecanico,
+    )
+    assert resposta.status_code == 422
+    assert resposta.json()["erro"]["codigo"] == "VALOR_INVALIDO"
+    assert rota.call_count == 0
+    lista = api.get(URL, headers=mecanico).json()["items"]
+    assert [d["status"] for d in lista] == ["EM_ANDAMENTO"]
+
+
 def test_erro_de_banco_no_meio_da_conclusao_nao_leva_texto_livre_ao_log(
     api: TestClient,
     mecanico: dict[str, str],

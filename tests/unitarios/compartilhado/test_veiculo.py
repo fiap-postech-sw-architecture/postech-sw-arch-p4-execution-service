@@ -54,9 +54,11 @@ def test_placa_invalida_sem_ecoar_o_valor(placa: str) -> None:
         pytest.param("", id="vazio"),
         pytest.param("  ", id="espacos"),
         pytest.param("x" * 101, id="101-caracteres"),
+        pytest.param("Fi\x00at", id="nul"),
+        pytest.param("Fiat\nUno", id="quebra-de-linha"),
     ],
 )
-def test_marca_e_modelo_obrigatorios(campo: str, valor: str) -> None:
+def test_marca_e_modelo_obrigatorios_e_limpos(campo: str, valor: str) -> None:
     veiculo = _veiculo(**{campo: valor})
     with pytest.raises(ValueError, match="do veiculo"):
         veiculo.validado(AGORA)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID  # noqa: TC003 - path param resolvido em runtime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 # Runtime import: o FastAPI resolve `Annotated[Session, Depends(...)]` em runtime.
 from sqlalchemy.orm import Session
@@ -14,17 +14,13 @@ from src.compartilhado.interfaces.autenticacao import (
     exigir_papel,
 )
 from src.compartilhado.interfaces.dependencies import obter_session
-from src.compartilhado.interfaces.schemas import respostas
+from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
 from src.execucao.interfaces.dependencies import (
     obter_fila,
     obter_finalizar_execucao,
     obter_iniciar_execucao,
 )
-from src.execucao.interfaces.schemas import (
-    ExecucaoResponse,
-    FilaResponse,
-    ItemDaFilaResponse,
-)
+from src.execucao.interfaces.schemas import ExecucaoResponse, ItemDaFilaResponse
 
 router = APIRouter(prefix="/api/v1", tags=["Execucao"], responses=respostas(401, 403))
 
@@ -38,13 +34,11 @@ Mecanico = Annotated[UsuarioAutenticado, Depends(exigir_papel(Papel.MECANICO))]
     dependencies=[Depends(exigir_papel(Papel.MECANICO, Papel.ATENDENTE))],
 )
 def listar_fila(
-    session: SessionDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-) -> FilaResponse:
+    session: SessionDep, offset: Offset = 0, limit: Limite = 20
+) -> Pagina[ItemDaFilaResponse]:
     """Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada."""
     fila = obter_fila(session)
-    return FilaResponse(
+    return Pagina(
         items=[
             ItemDaFilaResponse.model_validate(item)
             for item in fila.listar(offset=offset, limit=limit)

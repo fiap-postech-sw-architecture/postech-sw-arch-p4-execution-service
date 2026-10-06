@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID  # noqa: TC003 - path param resolvido em runtime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 # Runtime imports: o FastAPI resolve as annotations das rotas em runtime.
 from sqlalchemy.orm import Session
@@ -15,18 +15,14 @@ from src.compartilhado.interfaces.autenticacao import (
     exigir_papel,
 )
 from src.compartilhado.interfaces.dependencies import obter_session
-from src.compartilhado.interfaces.schemas import respostas
+from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
 from src.diagnostico.dominio.diagnostico import ItemDiagnostico, StatusDiagnostico
 from src.diagnostico.interfaces.dependencies import (
     obter_concluir_diagnostico,
     obter_iniciar_diagnostico,
     obter_listar_diagnosticos,
 )
-from src.diagnostico.interfaces.schemas import (
-    ConclusaoRequest,
-    DiagnosticoListaResponse,
-    DiagnosticoResponse,
-)
+from src.diagnostico.interfaces.schemas import ConclusaoRequest, DiagnosticoResponse
 
 router = APIRouter(
     prefix="/api/v1/diagnosticos", tags=["Diagnosticos"], responses=respostas(401, 403)
@@ -44,14 +40,14 @@ Mecanico = Annotated[UsuarioAutenticado, Depends(exigir_papel(Papel.MECANICO))]
 def listar_diagnosticos(
     session: SessionDep,
     status: StatusDiagnostico | None = None,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-) -> DiagnosticoListaResponse:
+    offset: Offset = 0,
+    limit: Limite = 20,
+) -> Pagina[DiagnosticoResponse]:
     """Ordem de chegada (mais antigo primeiro); ``?status=AGUARDANDO`` e a fila."""
     diagnosticos, total = obter_listar_diagnosticos(session).executar(
         status, offset=offset, limit=limit
     )
-    return DiagnosticoListaResponse(
+    return Pagina(
         items=[DiagnosticoResponse.model_validate(d) for d in diagnosticos],
         total=total,
         offset=offset,

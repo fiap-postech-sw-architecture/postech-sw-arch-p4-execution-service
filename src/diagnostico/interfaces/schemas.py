@@ -51,10 +51,3 @@ class DiagnosticoResponse(BaseModel):
     iniciado_em: datetime | None
     concluido_em: datetime | None
     descartado_em: datetime | None
-
-
-class DiagnosticoListaResponse(BaseModel):
-    items: list[DiagnosticoResponse]
-    total: int
-    offset: int
-    limit: int

@@ -174,7 +174,7 @@ class ConcluirDiagnostico:
             responsavel = _responsavel(atual, mecanico_id, pelo_admin=pelo_admin)
             if atual.concluido_por(responsavel):
                 return atual
-            atual.validar_conclusao(responsavel, itens)
+            atual.validar_conclusao(responsavel, itens, observacoes)
             self._validar_estoque_local(itens)
         self._validar_no_billing(itens)
         agora = datetime.now(UTC)

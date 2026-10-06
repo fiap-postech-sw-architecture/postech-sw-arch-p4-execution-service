@@ -1,10 +1,22 @@
-"""Envelope de erro (documentacao OpenAPI) e respostas comuns das rotas."""
+"""Envelope de erro (documentacao OpenAPI), paginacao e respostas comuns."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Final
 
+from fastapi import Query
 from pydantic import BaseModel, ConfigDict
+
+# Teto do offset: alem do bigint do Postgres o OFFSET virava DataError (500).
+OFFSET_MAXIMO: Final = 1_000_000
+LIMITE_MAXIMO: Final = 100
+
+Offset = Annotated[
+    int, Query(ge=0, le=OFFSET_MAXIMO, description="Itens a pular (ate 1.000.000)")
+]
+Limite = Annotated[
+    int, Query(ge=1, le=LIMITE_MAXIMO, description="Tamanho da pagina (1 a 100)")
+]
 
 
 class Erro(BaseModel):
@@ -15,6 +27,15 @@ class Erro(BaseModel):
 
 class ErroResponse(BaseModel):
     erro: Erro
+
+
+class Pagina[T](BaseModel):
+    """Pagina de uma listagem; ``total`` conta com o mesmo filtro dos ``items``."""
+
+    items: list[T]
+    total: int
+    offset: int
+    limit: int
 
 
 class VeiculoResponse(BaseModel):

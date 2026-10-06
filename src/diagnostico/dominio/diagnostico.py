@@ -12,6 +12,7 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
 )
 from src.compartilhado.dominio.maquina_de_estados import validar_transicao
+from src.compartilhado.dominio.texto import texto_valido
 from src.compartilhado.dominio.value_object import ValueObject
 
 if TYPE_CHECKING:
@@ -77,12 +78,13 @@ class ItemDiagnostico(ValueObject):
 
 
 def _texto_livre(valor: str, campo: str, *, obrigatorio: bool) -> str:
-    valor = valor.strip()
-    if (obrigatorio and not valor) or len(valor) > TAMANHO_MAXIMO_TEXTO_LIVRE:
-        minimo = 1 if obrigatorio else 0
-        msg = f"{campo} deve ter de {minimo} a {TAMANHO_MAXIMO_TEXTO_LIVRE} caracteres"
-        raise ValorInvalidoError(msg)
-    return valor
+    return texto_valido(
+        valor,
+        campo,
+        maximo=TAMANHO_MAXIMO_TEXTO_LIVRE,
+        obrigatorio=obrigatorio,
+        multilinha=True,
+    )
 
 
 def _validar_itens(itens: Sequence[ItemDiagnostico]) -> None:
@@ -222,9 +224,9 @@ class Diagnostico(AggregateRoot):
         )
 
     def validar_conclusao(
-        self, mecanico_id: UUID, itens: Sequence[ItemDiagnostico]
+        self, mecanico_id: UUID, itens: Sequence[ItemDiagnostico], observacoes: str
     ) -> None:
-        """Checa estado, responsavel e itens sem alterar nada.
+        """Checa estado, responsavel, itens e observacoes sem alterar nada.
 
         Separado de ``concluir`` para o caso de uso validar antes da chamada
         remota ao Billing, sem segurar lock de linha durante a rede.
@@ -239,6 +241,7 @@ class Diagnostico(AggregateRoot):
             msg = "Somente o mecanico que iniciou o diagnostico pode conclui-lo"
             raise OperacaoNaoPermitidaException(msg)
         _validar_itens(itens)
+        _texto_livre(observacoes, "Observacoes", obrigatorio=False)
 
     def concluir(
         self,
@@ -250,7 +253,7 @@ class Diagnostico(AggregateRoot):
         """EM_ANDAMENTO -> CONCLUIDO; repetir pelo mesmo mecanico e no-op (False)."""
         if self.concluido_por(mecanico_id):
             return False
-        self.validar_conclusao(mecanico_id, itens)
+        self.validar_conclusao(mecanico_id, itens, observacoes)
         self._observacoes = _texto_livre(observacoes, "Observacoes", obrigatorio=False)
         self._itens = tuple(itens)
         self._status = StatusDiagnostico.CONCLUIDO

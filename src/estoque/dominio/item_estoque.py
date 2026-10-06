@@ -9,6 +9,7 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.dominio.texto import texto_valido
 
 if TYPE_CHECKING:
     from src.estoque.dominio.sku import Sku
@@ -17,11 +18,7 @@ TAMANHO_MAXIMO_NOME: Final = 255
 
 
 def _nome_valido(nome: str) -> str:
-    nome = nome.strip()
-    if not nome or len(nome) > TAMANHO_MAXIMO_NOME:
-        msg = f"Nome do item deve ter de 1 a {TAMANHO_MAXIMO_NOME} caracteres"
-        raise ValorInvalidoError(msg)
-    return nome
+    return texto_valido(nome, "Nome do item", maximo=TAMANHO_MAXIMO_NOME)
 
 
 def _exigir_positiva(quantidade: int, operacao: str) -> None:

@@ -150,19 +150,54 @@ def test_sku_duplicado(api: TestClient, admin: dict[str, str]) -> None:
     assert resposta.json()["erro"]["codigo"] == "ENTIDADE_DUPLICADA"
 
 
+_VALIDO = {"sku": "PEC-X", "nome": "x", "quantidade_disponivel": 1}
+
+
 @pytest.mark.parametrize(
-    "corpo",
+    ("corpo", "campo"),
     [
-        {"sku": "pec-minusculo", "nome": "x", "quantidade_disponivel": 1},
-        {"sku": "PEC-X", "nome": "", "quantidade_disponivel": 1},
-        {"sku": "PEC-X", "nome": "x", "quantidade_disponivel": -1},
-        {"sku": "PEC-X", "nome": "x", "quantidade_disponivel": 1, "extra": True},
+        pytest.param(_VALIDO | {"sku": "pec-minusculo"}, "sku", id="sku-minusculo"),
+        pytest.param(_VALIDO | {"nome": ""}, "nome", id="nome-vazio"),
+        pytest.param(_VALIDO | {"nome": "n" * 256}, "nome", id="nome-256-caracteres"),
+        pytest.param(
+            _VALIDO | {"quantidade_disponivel": -1},
+            "quantidade_disponivel",
+            id="quantidade-negativa",
+        ),
+        pytest.param(
+            _VALIDO | {"quantidade_disponivel": 1_000_001},
+            "quantidade_disponivel",
+            id="quantidade-acima-do-teto",
+        ),
+        pytest.param(_VALIDO | {"extra": True}, "extra", id="campo-extra"),
     ],
 )
 def test_validacao_de_entrada(
-    api: TestClient, admin: dict[str, str], corpo: dict[str, object]
+    api: TestClient, admin: dict[str, str], corpo: dict[str, object], campo: str
 ) -> None:
-    assert api.post(URL, json=corpo, headers=admin).status_code == 422
+    resposta = api.post(URL, json=corpo, headers=admin)
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"][0]["loc"] == ["body", campo]
+    assert api.get(URL, headers=admin).json()["total"] == 0  # nada criado
+
+
+def test_bordas_validas_de_sku_nome_e_quantidade(
+    api: TestClient, admin: dict[str, str]
+) -> None:
+    corpo = {"sku": "P" * 50, "nome": "n" * 255, "quantidade_disponivel": 1_000_000}
+    assert api.post(URL, json=corpo, headers=admin).status_code == 201
+
+
+@pytest.mark.parametrize("controle", ["\x00", "\x1b"], ids=["nul", "escape"])
+def test_nome_com_caractere_de_controle_e_422_e_nao_500(
+    api: TestClient, admin: dict[str, str], controle: str
+) -> None:
+    # NUL passava pelo schema e pelo dominio e o psycopg2 recusava: 500.
+    corpo = _VALIDO | {"nome": f"Vela{controle}NGK"}
+    resposta = api.post(URL, json=corpo, headers=admin)
+    assert resposta.status_code == 422
+    assert resposta.json()["erro"]["codigo"] == "VALOR_INVALIDO"
+    assert api.get(f"{URL}/PEC-X", headers=admin).status_code == 404
 
 
 def test_sku_inexistente_e_sku_mal_formado_no_path(

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, Path, status
 
 # Runtime import: o FastAPI resolve `Annotated[Session, Depends(...)]` em runtime.
 from sqlalchemy.orm import Session
 
 from src.compartilhado.interfaces.autenticacao import Papel, exigir_papel
 from src.compartilhado.interfaces.dependencies import obter_session
-from src.compartilhado.interfaces.schemas import respostas
+from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
 from src.estoque.dominio.sku import PADRAO_SKU, TAMANHO_MAXIMO_SKU, Sku
 from src.estoque.interfaces.dependencies import (
     obter_ajustar_quantidade,
@@ -23,7 +23,6 @@ from src.estoque.interfaces.schemas import (
     AjustarQuantidadeRequest,
     AtualizarItemEstoqueRequest,
     CriarItemEstoqueRequest,
-    ItemEstoqueListaResponse,
     ItemEstoqueResponse,
 )
 
@@ -63,12 +62,10 @@ def criar_item(
     "", summary="Lista o estoque paginado (ordem de SKU)", dependencies=_LEITURA
 )
 def listar_itens(
-    session: SessionDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-) -> ItemEstoqueListaResponse:
+    session: SessionDep, offset: Offset = 0, limit: Limite = 20
+) -> Pagina[ItemEstoqueResponse]:
     itens, total = obter_listar_itens(session).executar(offset=offset, limit=limit)
-    return ItemEstoqueListaResponse(
+    return Pagina(
         items=[ItemEstoqueResponse.model_validate(item) for item in itens],
         total=total,
         offset=offset,

@@ -33,10 +33,3 @@ class ItemDaFilaResponse(BaseModel):
     veiculo: VeiculoResponse | None = Field(
         description="Retrato do diagnostico, para achar o carro no patio"
     )
-
-
-class FilaResponse(BaseModel):
-    items: list[ItemDaFilaResponse]
-    total: int
-    offset: int
-    limit: int
