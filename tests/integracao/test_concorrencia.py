@@ -1,9 +1,16 @@
 """Concorrencia contra o Postgres real: cada lock pessimista tem um teste.
 
-Padrao: a primeira transacao trava as linhas e segura (``_ItensQueSeguramOLock``);
-a segunda roda ate bloquear no lock (``pg_stat_activity``) ou terminar; so entao
-a primeira comita. Sem o lock, a segunda leria o valor antigo e o saldo final
-sairia errado (ou viraria erro de CHECK no banco em vez do 409 do dominio).
+Padrao: a primeira transacao trava as linhas e segura (``_ItensQueSeguramOLock``,
+``_ExecucoesQueSeguramOLock``, ``_DiagnosticosQueSeguramOLock``); a segunda roda
+ate bloquear no lock (``pg_stat_activity``) ou terminar; so entao a primeira
+comita. Sem o lock, a segunda leria o valor antigo e o resultado final sairia
+errado (saldo trocado, erro de CHECK no banco em vez do 409 do dominio, duas
+decisoes contraditorias para a mesma ordem).
+
+Locks cobertos: itens do estoque (reserva, liberacao, ajuste e desativacao),
+reserva (liberacao, baixa e ``reserva_ativa``, do agendamento e do inicio),
+execucao (inicio x cancelamento, inicio x inicio) e diagnostico (inicio x
+inicio, conclusao x descarte).
 """
 
 from __future__ import annotations
@@ -1027,3 +1034,63 @@ def test_conclusao_e_descarte_simultaneos_terminam_descartados(
         _diagnostico(session_factory, ordem_id).status is StatusDiagnostico.DESCARTADO
     )
     assert [linha["tipo"] for linha in outbox()[antes:]] == eventos
+
+
+def test_agendamento_espera_a_liberacao_e_nao_enfileira_ordem_sem_reserva(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # RN-027: so entra na fila ordem com reserva ATIVA. A liberacao trava a
+    # reserva; o agendamento espera no FOR UPDATE de `reserva_ativa`, rele
+    # LIBERADA e recusa (409). Sem esse lock ele leria a reserva ainda ATIVA e
+    # enfileiraria a ordem que acabou de ser compensada.
+    _criar_item(session_factory, 1)
+    ordem_id = uuid4()
+    _reservar(session_factory, ordem_id, 1)
+    antes = len(outbox())
+
+    def agendar() -> None:
+        with session_factory() as session:
+            _agendar_execucao(session, ordem_id)
+
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: _liberar(
+            session_factory, ordem_id, _segurando(travou, seguir)
+        ),
+        agendar,
+    )
+
+    assert list(erros) == ["disputa"]
+    assert isinstance(erros["disputa"], ViolacaoRegraDeNegocioException)
+    with session_factory() as session:
+        assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
+    assert _saldo(session_factory) == (1, 0)
+    assert [linha["tipo"] for linha in outbox()[antes:]] == ["ReservaLiberada"]
+
+
+def test_inicio_espera_a_liberacao_e_nao_cruza_o_pivot_sem_reserva(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # Sem o lock de `reserva_ativa`, o inicio leria a reserva ainda ATIVA e a
+    # execucao cruzaria o pivot da saga sem ter como finalizar (a baixa so
+    # acharia a reserva LIBERADA).
+    ordem_id = _execucao_na_fila(session_factory)
+    antes = len(outbox())
+
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: _liberar(
+            session_factory, ordem_id, _segurando(travou, seguir)
+        ),
+        lambda: _iniciar_execucao(session_factory, ordem_id, uuid4()),
+    )
+
+    assert list(erros) == ["disputa"]
+    assert isinstance(erros["disputa"], ViolacaoRegraDeNegocioException)
+    assert _execucao(session_factory, ordem_id).status is StatusExecucao.AGUARDANDO
+    assert _saldo(session_factory) == (1, 0)
+    assert [linha["tipo"] for linha in outbox()[antes:]] == ["ReservaLiberada"]

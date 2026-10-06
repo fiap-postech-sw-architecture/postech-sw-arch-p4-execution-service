@@ -116,7 +116,7 @@ Sem o OS Service no ar, rota autenticada responde 401 sem token e 503 com `Retry
 
 ## Testes
 
-`make test` (ou `uv run pytest`) roda os unitários e os de integração: estes sobem um PostgreSQL 16 efêmero via testcontainers, aplicam as migrações do Alembic e cobrem repositórios, outbox (incluindo o `NOTIFY`), API com JWT real (chave RSA gerada no teste e JWKS servido por HTTP local, inclusive pendurado), Billing simulado com `respx` e concorrência real: a disputa pela última unidade de uma peça (uma reserva vence, a outra recebe `ReservaDePecasFalhou`, sem saldo negativo), cada lock pessimista (liberação, baixa, escrita do admin), cópias simultâneas dos comandos da saga e réplicas migrando juntas. O gate de cobertura (ramos incluídos) é de 90% no `.coveragerc`.
+`make test` (ou `uv run pytest`) roda os unitários e os de integração: estes sobem um PostgreSQL 16 efêmero via testcontainers, aplicam as migrações do Alembic e cobrem repositórios, outbox (incluindo o `NOTIFY`), API com JWT real (chave RSA gerada no teste e JWKS servido por HTTP local, inclusive pendurado), Billing simulado com `respx` e concorrência real: a disputa pela última unidade de uma peça (uma reserva vence, a outra recebe `ReservaDePecasFalhou`, sem saldo negativo), cada lock pessimista (liberação, baixa, escrita do admin, início e cancelamento da execução, início e conclusão do diagnóstico e a reserva ativa exigida para agendar e iniciar), cópias simultâneas dos comandos da saga e réplicas migrando juntas. O gate de cobertura (ramos incluídos) é de 90% no `.coveragerc`.
 
 ## Integração contínua
 
