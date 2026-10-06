@@ -68,6 +68,9 @@ if TYPE_CHECKING:
     from src.estoque.dominio.item_estoque import ItemEstoque
 
 VELA = Sku("PEC-VELA")
+# Teto das esperas do teste: so estoura em regressao (num CI lento a transacao
+# pode levar segundos para chegar ao lock).
+_ESPERA_MAXIMA_S = 30
 
 
 class _ItensQueSeguramOLock(ItemEstoqueSQLAlchemyRepository):
@@ -83,7 +86,7 @@ class _ItensQueSeguramOLock(ItemEstoqueSQLAlchemyRepository):
     def obter_com_lock(self, skus: Collection[Sku]) -> dict[Sku, ItemEstoque]:
         itens = super().obter_com_lock(skus)
         self._travou.set()
-        assert self._seguir.wait(10)
+        assert self._seguir.wait(_ESPERA_MAXIMA_S)
         return itens
 
 
@@ -133,26 +136,14 @@ def _saldo(session_factory: sessionmaker[Session]) -> tuple[int, int]:
         return item.quantidade_disponivel, item.quantidade_reservada
 
 
-def _esperar_alguem_bloqueado(engine: Engine, timeout: float = 10) -> None:
-    limite = time.monotonic() + timeout
-    with engine.connect() as conexao:
-        while time.monotonic() < limite:
-            esperando = conexao.execute(
-                text(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE wait_event_type = 'Lock' AND datname = current_database()"
-                )
-            ).scalar_one()
-            if esperando:
-                return
-            time.sleep(0.02)
-    msg = "nenhuma transacao ficou esperando o lock"
-    raise AssertionError(msg)
-
-
 def _esperar_bloqueio_ou_fim(engine: Engine, disputa: threading.Thread) -> None:
-    """A segunda transacao parou no lock ou (sem lock, num mutante) ja terminou."""
-    limite = time.monotonic() + 10
+    """A segunda transacao parou no lock ou (sem lock, num mutante) ja terminou.
+
+    Cada leitura do ``pg_stat_activity`` numa transacao propria: dentro da mesma
+    transacao o Postgres devolve o retrato da primeira leitura, e uma espera que
+    comecasse depois dela nunca apareceria (o teste falhava em CI lento).
+    """
+    limite = time.monotonic() + _ESPERA_MAXIMA_S
     with engine.connect() as conexao:
         while disputa.is_alive() and time.monotonic() < limite:
             esperando = conexao.execute(
@@ -161,6 +152,7 @@ def _esperar_bloqueio_ou_fim(engine: Engine, disputa: threading.Thread) -> None:
                     "WHERE wait_event_type = 'Lock' AND datname = current_database()"
                 )
             ).scalar_one()
+            conexao.rollback()  # o proximo SELECT ve um retrato novo
             if esperando:
                 return
             time.sleep(0.02)
@@ -188,13 +180,13 @@ def _disputar(
 
     primeira = threading.Thread(target=rodar, args=("segura", segura, travou, seguir))
     primeira.start()
-    assert travou.wait(10)
+    assert travou.wait(_ESPERA_MAXIMA_S)
     segunda = threading.Thread(target=rodar, args=("disputa", disputa))
     segunda.start()
     _esperar_bloqueio_ou_fim(engine, segunda)
     seguir.set()
-    primeira.join(30)
-    segunda.join(30)
+    primeira.join(_ESPERA_MAXIMA_S)
+    segunda.join(_ESPERA_MAXIMA_S)
     return erros
 
 
@@ -231,15 +223,19 @@ def _disputar_ultima_unidade(
         args=("a", ordem_a, lambda s: _ItensQueSeguramOLock(s, travou_a, seguir_a)),
     )
     a.start()
-    assert travou_a.wait(10)  # A tem o lock da ultima unidade e ainda nao comitou
+    assert travou_a.wait(
+        _ESPERA_MAXIMA_S
+    )  # A tem o lock da ultima unidade e ainda nao comitou
     b = threading.Thread(
         target=reservar, args=("b", ordem_b, ItemEstoqueSQLAlchemyRepository)
     )
     b.start()
-    _esperar_alguem_bloqueado(engine)  # B esta parado no SELECT ... FOR UPDATE
+    # B parado no SELECT ... FOR UPDATE (ou ja terminado, se o lock sumir num
+    # mutante: entao os asserts de saldo e de erros abaixo apontam o defeito).
+    _esperar_bloqueio_ou_fim(engine, b)
     seguir_a.set()
-    a.join(30)
-    b.join(30)
+    a.join(_ESPERA_MAXIMA_S)
+    b.join(_ESPERA_MAXIMA_S)
     assert erros == []
     return resultados["a"], resultados["b"]
 
@@ -299,7 +295,7 @@ def test_muitas_reservas_simultaneas_nao_vendem_alem_do_estoque(
 
     def reservar() -> None:
         try:
-            largada.wait(10)
+            largada.wait(_ESPERA_MAXIMA_S)
             with session_factory() as session:
                 ReservarPecas(
                     ItemEstoqueSQLAlchemyRepository(session),
@@ -313,7 +309,7 @@ def test_muitas_reservas_simultaneas_nao_vendem_alem_do_estoque(
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(30)
+        thread.join(_ESPERA_MAXIMA_S)
 
     assert erros == []
     assert _saldo(session_factory) == (3, 3)
@@ -490,7 +486,7 @@ def _com_insercao_pendente(
         segunda.start()
         _esperar_bloqueio_ou_fim(engine, segunda)
         primeira.commit()
-        segunda.join(30)
+        segunda.join(_ESPERA_MAXIMA_S)
     return erros
 
 

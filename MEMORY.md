@@ -36,6 +36,7 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Gotchas
 
+- 2026-10-06 - `pg_stat_activity` e um retrato por transacao: o teste que esperava a outra transacao parar no lock lia a view num laco dentro da mesma transacao e, se a primeira leitura viesse antes da espera (CI lento), nunca a via (falha intermitente no CI). Cada leitura do laco fecha a transacao (`rollback`) - PR #2
 - 2026-10-06 - O handler de `Exception` do Starlette roda no `ServerErrorMiddleware`, por fora dos middlewares do app: o 500 saia sem headers de seguranca nem `X-Request-ID`. A conversao do erro nao tratado fica no proprio `SecurityHeadersMiddleware` - PR #2
 - 2026-10-06 - `PyJWKClient.get_signing_key` segura um RLock durante o fetch (requests em fila a 2 s cada esgotavam o threadpool) e so traduz URLError/TimeoutError/HTTPException: reset no meio do corpo sai como OSError cru. O validador usa `get_signing_keys` com lock e breaker proprios - PR #2
 - 2026-10-06 - Alembic nao roda em threads do mesmo processo (o `context` e global): o teste de replicas migrando juntas usa subprocessos - PR #2
