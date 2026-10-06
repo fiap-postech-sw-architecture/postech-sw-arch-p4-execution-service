@@ -88,6 +88,19 @@ def test_meio_aberto_libera_uma_unica_prova(
     assert not breaker.permitir()
 
 
+def test_barrado_consulta_sem_consumir_a_prova(
+    breaker: CircuitBreaker, relogio: _Relogio
+) -> None:
+    assert not breaker.barrado()
+    _falhar(breaker, 5)
+    assert breaker.barrado()
+    relogio.agora += 30
+    assert not breaker.barrado()
+    assert not breaker.barrado()  # consultar de novo nao gasta a prova
+    assert breaker.permitir()
+    assert breaker.barrado()  # a prova saiu: as demais seguem barradas
+
+
 def test_prova_com_sucesso_fecha(breaker: CircuitBreaker, relogio: _Relogio) -> None:
     _falhar(breaker, 5)
     relogio.agora += 30

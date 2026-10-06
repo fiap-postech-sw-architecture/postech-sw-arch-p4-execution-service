@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -121,6 +123,41 @@ def test_jwks_fora_do_ar_e_503_com_retry_after_e_sem_token_e_401(
     assert com_token.headers["Retry-After"] == "5"
     assert com_token.json()["erro"]["codigo"] == "SERVICO_INDISPONIVEL"
     assert sem_token.status_code == 401
+
+
+def test_jwks_pendurado_nao_atrasa_as_demais_rotas(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    servidor_jwks_proprio: ServidorJwks,
+    emitir_token: Callable[..., str],
+) -> None:
+    # Licao do Billing: com o fetch serializado, 2 s por request esgotavam o
+    # threadpool e uma rota publica de 0,03 s levava 41 s.
+    from src.main import criar_app
+
+    servidor_jwks_proprio.atraso = 3
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    autenticado = {"Authorization": f"Bearer {emitir_token('admin')}"}
+    with TestClient(criar_app()) as api, ThreadPoolExecutor(21) as executor:
+        inicio = time.monotonic()
+        protegidas = [
+            executor.submit(api.get, "/api/v1/fila", headers=autenticado)
+            for _ in range(20)
+        ]
+        time.sleep(0.2)  # as protegidas ja esperam o JWKS
+        antes_das_metricas = time.monotonic()
+        metricas = executor.submit(api.get, "/metrics").result(10)
+        duracao_metricas = time.monotonic() - antes_das_metricas
+        respostas = [futuro.result(30) for futuro in protegidas]
+        duracao_total = time.monotonic() - inicio
+
+    assert metricas.status_code == 200
+    assert duracao_metricas < 1
+    assert {r.status_code for r in respostas} == {503}
+    assert duracao_total < 4  # uma busca de 2 s, nao 20 em fila
+    assert servidor_jwks_proprio.requisicoes == 1
 
 
 @pytest.mark.parametrize("ausente", ["DATABASE_URL", "JWKS_URL", "BILLING_URL"])

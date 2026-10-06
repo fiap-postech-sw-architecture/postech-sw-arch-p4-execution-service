@@ -54,6 +54,15 @@ class CircuitBreaker:
     def aberto(self) -> bool:
         return self._aberto_ate is not None
 
+    def barrado(self) -> bool:
+        """Aberto e dentro do prazo: a chamada seria barrada (sem efeito colateral).
+
+        Diferente de ``permitir``, nao libera a prova de meia-abertura; serve para
+        decidir sem custo se vale tentar (ex.: antes de tomar um lock).
+        """
+        with self._lock:
+            return self._aberto_ate is not None and self._relogio() < self._aberto_ate
+
     def segundos_para_nova_tentativa(self) -> int:
         """Segundos (arredondados para cima) ate a proxima prova; 0 se fechado."""
         with self._lock:
