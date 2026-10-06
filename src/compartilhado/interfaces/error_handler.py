@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import structlog
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.compartilhado.dominio.exceptions import (
@@ -20,6 +21,7 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.infraestrutura.database import descrever_erro_de_banco
 from src.compartilhado.infraestrutura.logging import redigir_pii_erro
 
 if TYPE_CHECKING:
@@ -183,7 +185,13 @@ def registrar_error_handlers(app: FastAPI) -> None:
         request: Request, exc: Exception
     ) -> JSONResponse:
         request_id = _obter_request_id(request)
-        logger.exception("internal_error", request_id=request_id)
+        if isinstance(exc, DBAPIError):
+            # Sem traceback nem mensagem: o DETAIL do driver traz a linha inteira.
+            logger.error(
+                "internal_error", request_id=request_id, **descrever_erro_de_banco(exc)
+            )
+        else:
+            logger.exception("internal_error", request_id=request_id)
         return JSONResponse(
             status_code=500,
             content=_criar_envelope(

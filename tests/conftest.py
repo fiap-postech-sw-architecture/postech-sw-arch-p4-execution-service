@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import logging
 import os
 import threading
 import time
@@ -12,8 +14,11 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
+import structlog
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
+
+from src.compartilhado.infraestrutura.logging import configurar_logging
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -140,3 +145,23 @@ def emitir_token(chave_privada: rsa.RSAPrivateKey) -> Callable[..., str]:
         return assinar(chave_privada, claims)
 
     return _emitir
+
+
+@pytest.fixture
+def log_capturado() -> Iterator[io.StringIO]:
+    """Pipeline de log real (scrub incluso) escrevendo num buffer.
+
+    Restaura no teardown o root logger e o structlog de antes: configurar_logging
+    troca o handler do root e nao pode vazar entre testes.
+    """
+    root = logging.getLogger()
+    handlers_anteriores, nivel_anterior = root.handlers[:], root.level
+    config_anterior = structlog.get_config()
+    buffer = io.StringIO()
+    configurar_logging(stream=buffer)
+    try:
+        yield buffer
+    finally:
+        root.handlers = handlers_anteriores
+        root.setLevel(nivel_anterior)
+        structlog.configure(**config_anterior)

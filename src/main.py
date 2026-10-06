@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncGenerator  # noqa: TC003 - lifespan anotado em runtime
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -9,6 +8,7 @@ import httpx
 import structlog
 from fastapi import FastAPI
 
+from src.compartilhado.infraestrutura.ambiente import variavel_obrigatoria
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
@@ -36,23 +36,15 @@ _DESCRICAO = (
 )
 
 
-def _variavel_obrigatoria(nome: str) -> str:
-    valor = os.environ.get(nome, "").strip()
-    if not valor:
-        msg = f"Variavel de ambiente obrigatoria nao definida: {nome}"
-        raise RuntimeError(msg)
-    return valor
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Cria engine, validador de token e cliente do Billing; descarta no shutdown."""
     configurar_logging()
-    engine = criar_engine(_variavel_obrigatoria("DATABASE_URL"))
+    engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     app.state.session_factory = criar_session_factory(engine)
-    app.state.validador_token = ValidadorDeTokenJWKS(_variavel_obrigatoria("JWKS_URL"))
+    app.state.validador_token = ValidadorDeTokenJWKS(variavel_obrigatoria("JWKS_URL"))
     app.state.billing_client = httpx.Client(
-        base_url=_variavel_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
+        base_url=variavel_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
     )
     app.state.billing_breaker = CircuitBreaker("billing")
     _log.info("execution_service_started")

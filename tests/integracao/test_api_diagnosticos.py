@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
@@ -21,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import respx
-    from fastapi.testclient import TestClient
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
 URL = "/api/v1/diagnosticos"
@@ -217,6 +220,55 @@ def test_peca_sem_cadastro_no_estoque_e_422_sem_chamar_o_billing(
     assert resposta.status_code == 422
     assert "PEC-INEXISTENTE" in resposta.json()["erro"]["mensagem"]
     assert rota.call_count == 0
+
+
+def test_erro_de_banco_no_meio_da_conclusao_nao_leva_texto_livre_ao_log(
+    api: TestClient,
+    mecanico: dict[str, str],
+    em_andamento: UUID,
+    billing: respx.MockRouter,
+    engine: Engine,
+    log_capturado: io.StringIO,
+) -> None:
+    # Uma constraint que recusa o UPDATE: o DETAIL do Postgres traz a linha
+    # inteira (placa, descricao, observacoes); o 500 so pode logar o codigo.
+    billing.post(CAMINHO_VALIDACAO).respond(200, json={"invalidos": []})
+    restricao = "ck_teste_observacoes"
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                f"ALTER TABLE diagnosticos ADD CONSTRAINT {restricao} "
+                "CHECK (observacoes NOT LIKE '%marcador-lgpd%')"
+            )
+        )
+    # Mesmo app (lifespan ja rodou), mas devolvendo o 500 em vez de relancar.
+    cliente = TestClient(api.app, raise_server_exceptions=False)
+    try:
+        resposta = cliente.post(
+            f"{URL}/{em_andamento}/conclusao",
+            json={"itens": ITENS, "observacoes": "cliente marcador-lgpd ligou"},
+            headers=mecanico,
+        )
+    finally:
+        with engine.begin() as conexao:
+            conexao.execute(
+                text(f"ALTER TABLE diagnosticos DROP CONSTRAINT {restricao}")
+            )
+
+    assert resposta.status_code == 500
+    assert resposta.json()["erro"]["codigo"] == "ERRO_INTERNO"
+    saida = log_capturado.getvalue()
+    [erro] = [
+        json.loads(linha) for linha in saida.splitlines() if "internal_error" in linha
+    ]
+    assert (erro["erro"], erro["pgcode"], erro["constraint"]) == (
+        "IntegrityError",
+        "23514",
+        restricao,
+    )
+    assert "marcador-lgpd" not in saida
+    assert "BRA2E19" not in saida
+    assert "Freio chiando" not in saida
 
 
 def test_billing_fora_do_ar_e_503_e_depois_circuito_aberto(

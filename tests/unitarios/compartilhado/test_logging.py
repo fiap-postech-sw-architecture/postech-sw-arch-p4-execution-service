@@ -16,7 +16,7 @@ from src.compartilhado.infraestrutura.logging import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    pass
 
 
 class TestLogging:
@@ -234,29 +234,6 @@ class TestScrubChavesSensiveis:
         assert result["count"] == 3
 
 
-@pytest.fixture
-def logging_pipeline() -> Iterator[io.StringIO]:
-    """Configura o pipeline real e captura o stdout do root logger.
-
-    Restaura o estado anterior do structlog/root logger no teardown para
-    nao vazar configuracao entre testes (configurar_logging instala um
-    handler no root).
-    """
-    root = logging.getLogger()
-    handlers_anteriores = root.handlers[:]
-    nivel_anterior = root.level
-    config_anterior = structlog.get_config()
-
-    buffer = io.StringIO()
-    configurar_logging(stream=buffer)
-    try:
-        yield buffer
-    finally:
-        root.handlers = handlers_anteriores
-        root.setLevel(nivel_anterior)
-        structlog.configure(**config_anterior)
-
-
 class TestPipelineMascaraTraceback:
     """O traceback (chave `exception`) deve sair mascarado pelo pipeline real.
 
@@ -266,7 +243,7 @@ class TestPipelineMascaraTraceback:
     """
 
     def test_excecao_com_pii_no_traceback_structlog(
-        self, logging_pipeline: io.StringIO
+        self, log_capturado: io.StringIO
     ) -> None:
         log = structlog.get_logger("test.pipeline")
         try:
@@ -276,7 +253,7 @@ class TestPipelineMascaraTraceback:
         except RuntimeError:
             log.exception("falha no processamento")
 
-        saida = logging_pipeline.getvalue()
+        saida = log_capturado.getvalue()
         assert saida, "pipeline nao emitiu nada"
         # A chave exception precisa existir (format_exc_info rodou)...
         registro = json.loads(saida.strip().splitlines()[-1])
@@ -287,7 +264,7 @@ class TestPipelineMascaraTraceback:
         assert "(11) 99999-0000" not in saida
 
     def test_excecao_com_pii_no_traceback_stdlib(
-        self, logging_pipeline: io.StringIO
+        self, log_capturado: io.StringIO
     ) -> None:
         # Caminho do handler 500 (error_handler.py): logger STDLIB, nao structlog.
         # Deve passar pelo ProcessorFormatter (foreign_pre_chain) e ser scrubado.
@@ -297,7 +274,7 @@ class TestPipelineMascaraTraceback:
         except ValueError:
             stdlogger.exception("Erro interno (request_id=abc)")
 
-        saida = logging_pipeline.getvalue()
+        saida = log_capturado.getvalue()
         assert saida, "pipeline stdlib nao emitiu nada"
         assert "987.654.321-00" not in saida
         assert "+55 11 98888-7777" not in saida
@@ -305,12 +282,12 @@ class TestPipelineMascaraTraceback:
         registro = json.loads(saida.strip().splitlines()[-1])
         assert "exception" in registro
 
-    def test_stdlib_log_simples_e_scrubado(self, logging_pipeline: io.StringIO) -> None:
+    def test_stdlib_log_simples_e_scrubado(self, log_capturado: io.StringIO) -> None:
         # Log stdlib sem excecao (ex.: uvicorn access log) tambem e scrubado.
         logging.getLogger("uvicorn.access").warning(
             "request de joao@example.com cpf 111.222.333-44"
         )
-        saida = logging_pipeline.getvalue()
+        saida = log_capturado.getvalue()
         assert "joao@example.com" not in saida
         assert "111.222.333-44" not in saida
 
