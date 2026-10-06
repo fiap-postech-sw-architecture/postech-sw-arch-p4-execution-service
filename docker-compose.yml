@@ -24,16 +24,7 @@ services:
       BILLING_URL: ${BILLING_URL:-http://billing-service:8000}
       RUN_MIGRATIONS_ON_STARTUP: "true"
       RUN_SEED_ON_STARTUP: "true"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/saude', timeout=2).status==200 else 1)"
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 20s
+    # Healthcheck: o HEALTHCHECK do Dockerfile (um lugar so); `--wait` espera ele.
 
   postgres:
     image: postgres:16
