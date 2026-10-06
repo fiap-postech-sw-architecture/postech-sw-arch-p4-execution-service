@@ -4,7 +4,7 @@ Serviço de execução e produção da oficina: fila de diagnóstico, fila de ex
 
 Parte da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT): o PytStop, sistema de gestão de oficina mecânica das fases anteriores, refatorado em microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes.
 
-Este repositório traz o domínio, os casos de uso, a API REST e a outbox transacional do serviço. O relay da outbox para o RabbitMQ e o consumidor dos comandos da saga ficam no repositório a partir da onda de mensageria; os casos de uso que eles chamam já estão aqui e são exercitados pelos testes.
+Este repositório traz o domínio, os casos de uso, a API REST e a outbox transacional do serviço. O relay da outbox para o RabbitMQ e o consumidor dos comandos da saga chegam no PR de mensageria; os casos de uso que eles chamam já estão aqui e são exercitados pelos testes.
 
 Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança).
 
@@ -58,7 +58,7 @@ Swagger em `/docs`. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "i
 | `PATCH /api/v1/estoque/{sku}/quantidade` | admin | Ajuste do saldo físico (nunca abaixo do reservado) |
 | `GET /api/v1/saude` | — | Liveness: processo de pé, sem tocar dependências (HEALTHCHECK da imagem) |
 | `GET /api/v1/saude/pronto` | — | Readiness: 200 só com o banco respondendo `SELECT 1` em até 2 s, senão 503 |
-| `GET /metrics` | — | Métricas Prometheus (`http_request_duration_seconds`, `pytstop_circuit_breaker_aberto`); fica fora da borda |
+| `GET /metrics` | — | Métricas Prometheus: `http_request_duration_seconds{method,rota,status}`, `pytstop_circuit_breaker_aberto{dependencia}` (1 aberto, 0,5 em meia-abertura, 0 fechado; `billing` e `jwks`) e `pytstop_jwks_falhas_total`; fica fora da borda |
 
 Exemplos (com `TOKEN` emitido pelo OS Service; os códigos são os do seed do Billing):
 

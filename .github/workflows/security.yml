@@ -29,6 +29,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v7
         with:
+          # Explicito aqui: o uvx do pip-audit nao le o .python-version.
           python-version: "3.14"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
