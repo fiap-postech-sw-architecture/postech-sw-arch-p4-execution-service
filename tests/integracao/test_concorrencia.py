@@ -66,11 +66,18 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session, sessionmaker
 
     from src.estoque.dominio.item_estoque import ItemEstoque
+    from src.execucao.dominio.execucao import Execucao
 
 VELA = Sku("PEC-VELA")
 # Teto das esperas do teste: so estoura em regressao (num CI lento a transacao
 # pode levar segundos para chegar ao lock).
 _ESPERA_MAXIMA_S = 30
+
+
+def _pausar(travou: threading.Event, seguir: threading.Event) -> None:
+    """A transacao ja travou a linha: avisa o teste e espera ele mandar seguir."""
+    travou.set()
+    assert seguir.wait(_ESPERA_MAXIMA_S)
 
 
 class _ItensQueSeguramOLock(ItemEstoqueSQLAlchemyRepository):
@@ -85,9 +92,25 @@ class _ItensQueSeguramOLock(ItemEstoqueSQLAlchemyRepository):
 
     def obter_com_lock(self, skus: Collection[Sku]) -> dict[Sku, ItemEstoque]:
         itens = super().obter_com_lock(skus)
-        self._travou.set()
-        assert self._seguir.wait(_ESPERA_MAXIMA_S)
+        _pausar(self._travou, self._seguir)
         return itens
+
+
+class _ExecucoesQueSeguramOLock(ExecucaoSQLAlchemyRepository):
+    """Trava a execucao (``FOR UPDATE``) e so devolve quando o teste mandar."""
+
+    def __init__(
+        self, session: Session, travou: threading.Event, seguir: threading.Event
+    ) -> None:
+        super().__init__(session)
+        self._travou = travou
+        self._seguir = seguir
+
+    def obter(self, ordem_id: UUID, *, com_lock: bool = False) -> Execucao | None:
+        execucao = super().obter(ordem_id, com_lock=com_lock)
+        if com_lock:
+            _pausar(self._travou, self._seguir)
+        return execucao
 
 
 def _uow(session: Session) -> SQLAlchemyUnitOfWork:
@@ -680,3 +703,133 @@ def test_copia_simultanea_que_perde_a_corrida_le_a_vencedora(
                 r for r in registros if r["event"] == _LOG_DA_COMPENSACAO[resposta]
             ]
             assert compensacao["tombstone"] is False  # leu a linha da vencedora
+
+
+def _execucoes_que_seguram(
+    travou: threading.Event, seguir: threading.Event
+) -> Callable[[Session], ExecucaoSQLAlchemyRepository]:
+    return lambda session: _ExecucoesQueSeguramOLock(session, travou, seguir)
+
+
+def _execucao_na_fila(session_factory: sessionmaker[Session]) -> UUID:
+    """Execucao AGUARDANDO de uma ordem com a reserva de pecas ATIVA (RN-027)."""
+    _criar_item(session_factory, 1)
+    ordem_id = uuid4()
+    _reservar(session_factory, ordem_id, 1)
+    with session_factory() as session:
+        _agendar_execucao(session, ordem_id)
+    return ordem_id
+
+
+def _iniciar_execucao(
+    session_factory: sessionmaker[Session],
+    ordem_id: UUID,
+    mecanico_id: UUID,
+    execucoes: Callable[[Session], ExecucaoSQLAlchemyRepository] = (
+        ExecucaoSQLAlchemyRepository
+    ),
+) -> None:
+    with session_factory() as session:
+        IniciarExecucao(
+            execucoes(session), EstoqueSQLAlchemyAdapter(session), _uow(session)
+        ).executar(ordem_id, mecanico_id)
+
+
+def _cancelar(
+    session_factory: sessionmaker[Session],
+    ordem_id: UUID,
+    execucoes: Callable[[Session], ExecucaoSQLAlchemyRepository] = (
+        ExecucaoSQLAlchemyRepository
+    ),
+) -> None:
+    with session_factory() as session:
+        CancelarExecucao(execucoes(session), _uow(session)).executar(ordem_id)
+
+
+def _execucao(session_factory: sessionmaker[Session], ordem_id: UUID) -> Execucao:
+    with session_factory() as session:
+        execucao = ExecucaoSQLAlchemyRepository(session).obter(ordem_id)
+    assert execucao is not None
+    return execucao
+
+
+@pytest.mark.parametrize(
+    ("segura", "status"),
+    [
+        pytest.param("inicio", StatusExecucao.EM_EXECUCAO, id="inicio-primeiro"),
+        pytest.param(
+            "cancelamento", StatusExecucao.CANCELADA, id="cancelamento-primeiro"
+        ),
+    ],
+)
+def test_inicio_e_cancelamento_simultaneos_deixam_so_o_que_chegou_primeiro(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+    segura: str,
+    status: StatusExecucao,
+) -> None:
+    # Pivot da saga: quem trava a execucao primeiro decide e o outro, depois de
+    # esperar, rele o estado e recebe 409. Sem o FOR UPDATE os dois leriam
+    # AGUARDANDO e os dois comitariam: a execucao sairia iniciada com um
+    # ExecucaoCancelada na outbox, ou cancelada com mecanico.
+    ordem_id, mecanico = _execucao_na_fila(session_factory), uuid4()
+    antes = len(outbox())
+
+    def inicio(execucoes: Callable[[Session], ExecucaoSQLAlchemyRepository]) -> None:
+        _iniciar_execucao(session_factory, ordem_id, mecanico, execucoes)
+
+    def cancelamento(
+        execucoes: Callable[[Session], ExecucaoSQLAlchemyRepository],
+    ) -> None:
+        _cancelar(session_factory, ordem_id, execucoes)
+
+    primeira, segunda = (
+        (inicio, cancelamento) if segura == "inicio" else (cancelamento, inicio)
+    )
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: primeira(_execucoes_que_seguram(travou, seguir)),
+        lambda: segunda(ExecucaoSQLAlchemyRepository),
+    )
+
+    assert list(erros) == ["disputa"]
+    assert isinstance(erros["disputa"], TransicaoStatusInvalidaException)
+    execucao = _execucao(session_factory, ordem_id)
+    assert execucao.status is status
+    iniciada = status is StatusExecucao.EM_EXECUCAO
+    assert execucao.mecanico_id == (mecanico if iniciada else None)
+    assert [linha["tipo"] for linha in outbox()[antes:]] == [
+        "ExecucaoIniciada" if iniciada else "ExecucaoCancelada"
+    ]
+
+
+def test_inicios_simultaneos_de_dois_mecanicos_deixam_so_o_primeiro(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # O segundo, depois de esperar o lock, rele EM_EXECUCAO do primeiro e recebe
+    # 409. Sem o FOR UPDATE os dois iniciariam: dois ExecucaoIniciada com
+    # mecanicos diferentes, e o ultimo a gravar ficaria como responsavel.
+    ordem_id = _execucao_na_fila(session_factory)
+    primeiro, segundo = uuid4(), uuid4()
+    antes = len(outbox())
+
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: _iniciar_execucao(
+            session_factory,
+            ordem_id,
+            primeiro,
+            _execucoes_que_seguram(travou, seguir),
+        ),
+        lambda: _iniciar_execucao(session_factory, ordem_id, segundo),
+    )
+
+    assert list(erros) == ["disputa"]
+    assert isinstance(erros["disputa"], TransicaoStatusInvalidaException)
+    assert _execucao(session_factory, ordem_id).mecanico_id == primeiro
+    assert [
+        (linha["tipo"], linha["dados"]["mecanico_id"]) for linha in outbox()[antes:]
+    ] == [("ExecucaoIniciada", str(primeiro))]
