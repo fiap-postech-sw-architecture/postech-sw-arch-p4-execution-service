@@ -76,8 +76,9 @@ class TestQuantidades:
         "quantidade", [0, -1, 1001], ids=["zero", "negativa", "1001"]
     )
     def test_linha_fora_da_faixa(self, quantidade: int) -> None:
+        sku = Sku("PEC-X")
         with pytest.raises(ValueError, match="positiva e no maximo 1000"):
-            ItemReserva(Sku("PEC-X"), quantidade)
+            ItemReserva(sku, quantidade)
 
     def test_saldo_no_teto_e_acima(self) -> None:
         item = ItemEstoque.criar(
@@ -96,8 +97,9 @@ class TestQuantidades:
         ],
     )
     def test_faltante_incoerente(self, solicitado: int, disponivel: int) -> None:
+        sku = Sku("PEC-X")
         with pytest.raises(ValueError, match=r"(?i)quantidade|faltante"):
-            Faltante(sku=Sku("PEC-X"), solicitado=solicitado, disponivel=disponivel)
+            Faltante(sku=sku, solicitado=solicitado, disponivel=disponivel)
 
 
 class TestItemEstoque:

@@ -24,7 +24,9 @@ def obter_session(request: Request) -> Generator[Session]:
         session.close()
 
 
-async def correlacionar_pela_ordem(request: Request) -> None:
+async def correlacionar_pela_ordem(  # NOSONAR - async de proposito (S7503)
+    request: Request,
+) -> None:
     """``correlation_id`` = ``ordem_id`` da rota em toda linha de log do request.
 
     Chave de busca da saga no Loki (ADR-043). ``async`` de proposito: roda no

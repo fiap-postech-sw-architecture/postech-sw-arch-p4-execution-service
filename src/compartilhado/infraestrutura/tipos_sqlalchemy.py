@@ -86,5 +86,5 @@ def retrato_do_veiculo() -> JsonDeDominio[Veiculo]:
 
 def check_de_enum(coluna: str, enum: type[StrEnum], nome: str) -> CheckConstraint:
     """CHECK com os valores do enum: o banco recusa o que o dominio nao conhece."""
-    valores = ", ".join(f"'{membro.value}'" for membro in enum)
+    valores = ", ".join(f"'{membro.value}'" for membro in enum.__members__.values())
     return CheckConstraint(f"{coluna} IN ({valores})", name=nome)

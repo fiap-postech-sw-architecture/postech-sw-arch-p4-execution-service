@@ -76,9 +76,10 @@ def test_migracao_desiste_do_lock_de_tabela_em_vez_de_enfileirar(
     monkeypatch.setenv("DB_LOCK_TIMEOUT_MS", "200")
     with engine.connect() as leitura_longa:
         leitura_longa.execute(text("SELECT count(*) FROM outbox"))
+        config = config_alembic(database_url)
         inicio = time.monotonic()
         with pytest.raises(OperationalError) as erro:
-            command.downgrade(config_alembic(database_url), "base")
+            command.downgrade(config, "base")
         assert time.monotonic() - inicio < 5
     assert getattr(erro.value.orig, "pgcode", None) == "55P03"
     assert set(inspect(engine).get_table_names()) >= _TABELAS  # DDL desfeito
@@ -154,5 +155,6 @@ def test_check_do_banco_recusa_valor_fora_do_enum(
 ) -> None:
     # Defesa em profundidade: so os valores do enum do dominio (prioridade do
     # contrato AgendarExecucao: normal ou alta) entram na coluna.
-    with pytest.raises(IntegrityError, match=restricao), engine.begin() as conexao:
-        conexao.execute(text(_INSERCOES[tabela]), valores)
+    insercao = text(_INSERCOES[tabela])
+    with engine.connect() as conexao, pytest.raises(IntegrityError, match=restricao):
+        conexao.execute(insercao, valores)

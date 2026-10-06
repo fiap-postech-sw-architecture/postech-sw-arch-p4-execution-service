@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from src.compartilhado.dominio.exceptions import ValorInvalidoError
@@ -59,8 +59,8 @@ class Veiculo(ValueObject):
             minimo = ANO_PRIMEIRO_CARRO + 1
             msg = f"Ano do veiculo deve estar entre {minimo} e {ano_maximo}"
             raise ValorInvalidoError(msg)
-        return replace(
-            self,
+        return Veiculo(
+            veiculo_id=self.veiculo_id,
             placa=placa,
             marca=texto_valido(
                 self.marca, "Marca do veiculo", maximo=TAMANHO_MAXIMO_TEXTO
@@ -68,6 +68,7 @@ class Veiculo(ValueObject):
             modelo=texto_valido(
                 self.modelo, "Modelo do veiculo", maximo=TAMANHO_MAXIMO_TEXTO
             ),
+            ano=self.ano,
         )
 
     @property
@@ -76,7 +77,13 @@ class Veiculo(ValueObject):
 
     def anonimizar(self) -> Veiculo:
         """O mesmo retrato com a placa trocada pelo marcador da LGPD."""
-        return replace(self, placa=f"{PREFIXO_ANONIMIZADO}{self.veiculo_id}")
+        return Veiculo(
+            veiculo_id=self.veiculo_id,
+            placa=f"{PREFIXO_ANONIMIZADO}{self.veiculo_id}",
+            marca=self.marca,
+            modelo=self.modelo,
+            ano=self.ano,
+        )
 
     def __repr__(self) -> str:
         # Placa e PII: o repr default a vazaria em traceback e log.

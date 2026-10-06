@@ -208,8 +208,9 @@ def test_jwks_sem_chave_de_assinatura_utilizavel_e_indisponibilidade(
 ) -> None:
     servidor_jwks_proprio.corpo = corpo
     validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    token = emitir_token("admin")
     with pytest.raises(JwksIndisponivelError) as erro:
-        validador.validar(emitir_token("admin"))
+        validador.validar(token)
     assert erro.value.retry_after == MEMORIA_DA_FALHA_SEGUNDOS
 
 
@@ -229,15 +230,17 @@ def test_jwks_so_com_chave_que_nao_assina_e_indisponibilidade(
     jwk = {k: v for k, v in {**jwk_publico, **jwk_extra}.items() if v is not None}
     servidor_jwks_proprio.jwks = {"keys": [jwk]}
     validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+    token = emitir_token("admin")
     with pytest.raises(JwksIndisponivelError):
-        validador.validar(emitir_token("admin"))
+        validador.validar(token)
 
 
 def test_jwks_fora_do_ar_conta_a_falha(emitir_token: Callable[..., str]) -> None:
     url = f"http://127.0.0.1:{_porta_livre()}/.well-known/jwks.json"
     validador, antes = ValidadorDeTokenJWKS(url), _falhas()
+    token = emitir_token("admin")
     with pytest.raises(JwksIndisponivelError):
-        validador.validar(emitir_token("admin"))
+        validador.validar(token)
     assert _falhas() == antes + 1
 
 
@@ -252,8 +255,9 @@ def test_conexao_derrubada_no_meio_do_corpo_e_indisponibilidade(
         raise ConnectionResetError
 
     monkeypatch.setattr(PyJWKClient, "get_signing_keys", derrubar)
+    token = emitir_token("admin")
     with pytest.raises(JwksIndisponivelError):
-        validador.validar(emitir_token("admin"))
+        validador.validar(token)
 
 
 def test_jwks_lento_desiste_em_2s(
@@ -262,8 +266,9 @@ def test_jwks_lento_desiste_em_2s(
     servidor_jwks_proprio.atraso = 3
     validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
     inicio = time.monotonic()
+    token = emitir_token("admin")
     with pytest.raises(JwksIndisponivelError):
-        validador.validar(emitir_token("admin"))
+        validador.validar(token)
     assert 1.5 < time.monotonic() - inicio < 2.9
 
 
