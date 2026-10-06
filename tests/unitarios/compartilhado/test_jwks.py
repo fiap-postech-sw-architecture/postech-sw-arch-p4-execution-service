@@ -382,3 +382,32 @@ def test_jwks_pendurado_no_boot_nao_enfileira_as_validacoes(
     assert all(isinstance(erro, JwksIndisponivelError) for _, erro in resultados)
     assert time.monotonic() - inicio < 3.5
     assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_no_boot_quem_espera_a_busca_de_outro_usa_o_resultado_dela(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # Sem copia nenhuma, os demais esperam a busca em curso e, quando ela da
+    # certo, validam com o JWK Set que ela trouxe, sem buscar de novo.
+    servidor_jwks_proprio.atraso = 0.3
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+
+    resultados = _validar_em_paralelo(validador, emitir_token("admin"), 10)
+
+    assert all(erro is None for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_no_boot_quem_espera_uma_busca_que_falhou_nao_busca_de_novo(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # A falha da busca em curso fica memorizada: quem esperava por ela responde
+    # 503 na hora, sem repetir a busca ao emissor fora do ar.
+    servidor_jwks_proprio.atraso = 0.3
+    servidor_jwks_proprio.status = 500
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url)
+
+    resultados = _validar_em_paralelo(validador, emitir_token("admin"), 10)
+
+    assert all(isinstance(erro, JwksIndisponivelError) for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 1
