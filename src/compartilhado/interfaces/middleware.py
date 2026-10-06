@@ -70,6 +70,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             method=request.method,
             path=request.url.path,
             status=response.status_code,
-            duracao_ms=round((time.perf_counter() - inicio) * 1000, 1),
+            duration_ms=round((time.perf_counter() - inicio) * 1000, 1),
         )
         return response

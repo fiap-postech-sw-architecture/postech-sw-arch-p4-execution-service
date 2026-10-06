@@ -111,11 +111,11 @@ class ValidadorDeItensBilling:
             )
         except _ERROS_TRANSITORIOS as exc:
             self._breaker.registrar_falha()
-            _log.warning("billing_call_failed", erro=type(exc).__name__)
+            _log.warning("billing_call_failed", error=type(exc).__name__)
             return None
         except httpx.HTTPError as exc:
             self._breaker.registrar_falha()
-            _log.warning("billing_call_failed", erro=type(exc).__name__)
+            _log.warning("billing_call_failed", error=type(exc).__name__)
             raise DependenciaIndisponivelException(_SEM_RESPOSTA) from exc
         if resposta.status_code >= _HTTP_ERRO_SERVIDOR:
             self._breaker.registrar_falha()

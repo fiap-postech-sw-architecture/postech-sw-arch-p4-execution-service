@@ -58,8 +58,10 @@ class UsuarioAutenticado:
 
 def _nao_autenticado(motivo: str) -> HTTPException:
     # Mesma resposta para toda falha de credencial: quem testa tokens nao
-    # descobre o que esta errado. O motivo fica so no log (sem o token).
-    _log.info("authentication_failed", motivo=motivo)
+    # descobre o que esta errado. O motivo fica so no log (sem o token), na
+    # chave `reason` (como no OS Service): `motivo` e mascarada pelo scrub, por
+    # ser o texto livre das compensacoes.
+    _log.info("authentication_failed", reason=motivo)
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=CREDENCIAL_INVALIDA,

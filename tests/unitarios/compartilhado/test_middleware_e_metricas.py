@@ -73,7 +73,7 @@ class TestSecurityHeaders:
             200,
         )
         assert acesso["request_id"] == "req-acesso"
-        assert acesso["duracao_ms"] >= 0
+        assert acesso["duration_ms"] >= 0
 
     def test_swagger_fica_sem_csp(self) -> None:
         assert "Content-Security-Policy" not in _app().get("/docs").headers

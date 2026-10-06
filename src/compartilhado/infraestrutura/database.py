@@ -78,7 +78,7 @@ def descrever_erro_de_banco(exc: DBAPIError) -> dict[str, str | None]:
     """
     diagnostico = getattr(exc.orig, "diag", None)
     return {
-        "erro": type(exc).__name__,
+        "error": type(exc).__name__,
         "pgcode": getattr(exc.orig, "pgcode", None),
         "constraint": getattr(diagnostico, "constraint_name", None),
     }

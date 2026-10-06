@@ -61,6 +61,6 @@ async def pronto(request: Request) -> JSONResponse:
             timeout=_TIMEOUT_PRONTO_S,
         )
     except Exception as exc:  # noqa: BLE001 - qualquer falha = nao pronto
-        _log.warning("readiness_failed", erro=type(exc).__name__)
+        _log.warning("readiness_failed", error=type(exc).__name__)
         return JSONResponse(status_code=503, content={"status": "indisponivel"})
     return JSONResponse(content={"status": "ok"})

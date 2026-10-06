@@ -177,7 +177,7 @@ class ValidadorDeTokenJWKS:
             self._falhou_em = self._relogio()
             self._breaker.registrar_falha()
             _FALHAS_JWKS.inc()
-            _log.warning("jwks_refresh_failed", erro=type(exc).__name__)
+            _log.warning("jwks_refresh_failed", error=type(exc).__name__)
             return self._copia_velha(self._falhou_em)
         self._breaker.registrar_sucesso()
         self._copia, self._falhou_em = _Copia(chaves, self._relogio()), None

@@ -379,7 +379,7 @@ def test_erro_de_banco_no_meio_da_conclusao_nao_leva_texto_livre_ao_log(
     [erro] = [
         json.loads(linha) for linha in saida.splitlines() if "internal_error" in linha
     ]
-    assert (erro["erro"], erro["pgcode"], erro["constraint"]) == (
+    assert (erro["error"], erro["pgcode"], erro["constraint"]) == (
         "IntegrityError",
         "23514",
         restricao,

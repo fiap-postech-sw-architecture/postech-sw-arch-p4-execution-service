@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -153,3 +155,53 @@ def test_rbac_admin_sempre_passa(papel: str, caminho: str, status: int) -> None:
     assert resposta.status_code == status
     if status == 403:
         assert resposta.json()["erro"]["codigo"] == "ACESSO_NEGADO"
+
+
+@pytest.mark.parametrize(
+    ("validador", "cabecalhos", "motivo"),
+    [
+        pytest.param(_ValidadorStub(_claims()), {}, "token_ausente", id="ausente"),
+        pytest.param(
+            _ValidadorStub(erro=TokenExpiradoError("exp")),
+            {"Authorization": "Bearer tok.en.x"},
+            "token_expirado",
+            id="expirado",
+        ),
+        pytest.param(
+            _ValidadorStub(erro=TokenInvalidoError("sig")),
+            {"Authorization": "Bearer tok.en.x"},
+            "token_invalido",
+            id="invalido",
+        ),
+        pytest.param(
+            _ValidadorStub(_claims(type="refresh")),
+            {"Authorization": "Bearer tok.en.x"},
+            "tipo_nao_access",
+            id="refresh",
+        ),
+        pytest.param(
+            _ValidadorStub(_claims(sub="joao")),
+            {"Authorization": "Bearer tok.en.x"},
+            "sub_invalido",
+            id="sub",
+        ),
+        pytest.param(
+            _ValidadorStub(_claims(papel="cliente")),
+            {"Authorization": "Bearer tok.en.x"},
+            "papel_invalido",
+            id="papel",
+        ),
+    ],
+)
+def test_motivo_do_401_vai_so_para_o_log_e_sem_o_token(
+    log_capturado: io.StringIO,
+    validador: _ValidadorStub,
+    cabecalhos: dict[str, str],
+    motivo: str,
+) -> None:
+    # A resposta e a mesma para todos; quem opera acha o motivo no log.
+    _nao_autenticado(_cliente(validador).get("/eu", headers=cabecalhos))
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    [falha] = [r for r in registros if r["event"] == "authentication_failed"]
+    assert falha["reason"] == motivo
+    assert "tok.en.x" not in log_capturado.getvalue()
