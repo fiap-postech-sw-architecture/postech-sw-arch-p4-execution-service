@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.compartilhado.aplicacao.integration_event import IntegrationEvent
@@ -28,7 +28,7 @@ class DiagnosticoIniciadoEvent(IntegrationEvent):
 @dataclass(frozen=True, kw_only=True)
 class DiagnosticoConcluidoEvent(IntegrationEvent):
     itens: tuple[ItemDados, ...]
-    observacoes: str
+    observacoes: str = field(repr=False)  # texto livre: fora de traceback e log
     concluido_em: datetime
 
 

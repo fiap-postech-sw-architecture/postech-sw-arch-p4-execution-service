@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
@@ -108,11 +108,12 @@ class Diagnostico(AggregateRoot):
     """
 
     _veiculo: Veiculo | None
-    _descricao_problema: str | None
+    # Texto livre fora do repr (traceback e log): pode trazer nome ou placa.
+    _descricao_problema: str | None = field(repr=False)
     _status: StatusDiagnostico = StatusDiagnostico.AGUARDANDO
     _mecanico_id: UUID | None = None
     _itens: tuple[ItemDiagnostico, ...] = ()
-    _observacoes: str = ""
+    _observacoes: str = field(default="", repr=False)
     _solicitado_em: datetime
     _iniciado_em: datetime | None = None
     _concluido_em: datetime | None = None

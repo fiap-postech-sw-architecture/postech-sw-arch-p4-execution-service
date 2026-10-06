@@ -272,6 +272,53 @@ def test_peca_sem_cadastro_no_estoque_e_422_sem_chamar_o_billing(
     assert rota.call_count == 0
 
 
+# Nome e placa no texto livre: nenhum dos dois pode chegar ao log.
+_MARCADOR = "marcador-lgpd Joao da Silva ABC1D23"
+
+
+@pytest.mark.parametrize(
+    ("iniciar", "billing_responde", "observacoes", "status"),
+    [
+        pytest.param(True, 200, _MARCADOR, 422, id="422-codigo-sem-preco"),
+        pytest.param(True, 200, _MARCADOR + "x" * 2000, 422, id="422-schema"),
+        pytest.param(False, 200, _MARCADOR, 409, id="409-nao-iniciado"),
+        pytest.param(True, 503, _MARCADOR, 503, id="503-billing-fora"),
+    ],
+)
+def test_texto_livre_nunca_chega_ao_log(
+    api: TestClient,
+    mecanico: dict[str, str],
+    session_factory: sessionmaker[Session],
+    billing: respx.MockRouter,
+    log_capturado: io.StringIO,
+    iniciar: bool,
+    billing_responde: int,
+    observacoes: str,
+    status: int,
+) -> None:
+    semear(session_factory)
+    ordem_id = _solicitar(session_factory, descricao=f"descricao {_MARCADOR}")
+    if iniciar:
+        api.post(f"{URL}/{ordem_id}/inicio", headers=mecanico)
+    billing.post(CAMINHO_VALIDACAO).respond(
+        billing_responde, json={"invalidos": ["SRV-TROCA-PASTILHA"]}
+    )
+
+    resposta = api.post(
+        f"{URL}/{ordem_id}/conclusao",
+        json={"itens": ITENS, "observacoes": observacoes},
+        headers=mecanico,
+    )
+
+    assert resposta.status_code == status
+    assert "marcador-lgpd" not in resposta.text
+    log = log_capturado.getvalue()
+    assert log  # o pipeline real registrou o request
+    assert "marcador-lgpd" not in log
+    assert "Joao da Silva" not in log
+    assert "ABC1D23" not in log
+
+
 def test_observacoes_com_nul_e_422_antes_do_billing(
     api: TestClient,
     mecanico: dict[str, str],

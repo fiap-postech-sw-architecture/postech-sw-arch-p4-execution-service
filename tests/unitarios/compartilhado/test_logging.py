@@ -16,7 +16,7 @@ from src.compartilhado.infraestrutura.logging import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Mapping
 
 
 class TestLogging:
@@ -49,8 +49,20 @@ class TestLogging:
         result = scrub_pii(None, "info", event_dict)
         assert result["count"] == 42
 
-    def test_configurar_logging(self) -> None:
-        configurar_logging()
+    def test_configurar_logging_instala_um_handler_json(
+        self, log_capturado: io.StringIO
+    ) -> None:
+        # log_capturado roda configurar_logging(stream=...) e restaura no fim; o
+        # pytest acrescenta os proprios handlers de captura ao root.
+        proprios = [
+            handler
+            for handler in logging.getLogger().handlers
+            if isinstance(handler.formatter, structlog.stdlib.ProcessorFormatter)
+        ]
+        assert len(proprios) == 1
+        structlog.get_logger("test.configurar").info("evento_qualquer", chave=1)
+        registro = json.loads(log_capturado.getvalue().splitlines()[-1])
+        assert (registro["event"], registro["chave"]) == ("evento_qualquer", 1)
 
     def test_adicionar_versao_imagem_injeta_git_sha_e_date(self) -> None:
         # Defaults vem do env do processo (PYTSTOP_GIT_SHA/DATE); em
@@ -85,9 +97,8 @@ class TestLogging:
             }
         }
         result = scrub_pii(None, "info", event_dict)
-        cliente = result["payload"]["cliente"]  # type: ignore[index]
-        assert "123.456.789-00" not in str(cliente["cpf"])
-        assert "joao@example.com" not in str(cliente["email"])
+        assert "123.456.789-00" not in str(result["payload"])
+        assert "joao@example.com" not in str(result["payload"])
 
     def test_scrub_recursivo_em_lista(self) -> None:
         event_dict: dict[str, object] = {
@@ -122,14 +133,15 @@ class TestLogging:
         assert "123.456.789-00" not in str(result["docs"])
 
     def test_scrub_respeita_profundidade_maxima(self) -> None:
-        # Deeply nested: 8 levels deep. _MAX_SCRUB_DEPTH=6 means level 7+ is skipped.
-        deep: dict[str, object] = {"cpf": "123.456.789-00"}
+        # Ate o nivel 5 o valor e mascarado; dali em diante passa como esta
+        # (teto contra estrutura ciclica ou patologica, sem estourar a pilha).
+        raso: dict[str, object] = {"next": {"doc": "CPF 123.456.789-00"}}
+        fundo: dict[str, object] = {"doc": "CPF 123.456.789-00"}
         for _ in range(8):
-            deep = {"next": deep}
-        event_dict: dict[str, object] = {"root": deep}
-        # Must not raise / hang; output may still contain the PII at the deepest level.
-        result = scrub_pii(None, "info", event_dict)
-        assert "root" in result
+            fundo = {"next": fundo}
+        result = scrub_pii(None, "info", {"raso": raso, "fundo": fundo})
+        assert "123.456.789-00" not in str(result["raso"])
+        assert "123.456.789-00" in str(result["fundo"])
 
 
 class TestScrubTelefone:
@@ -205,6 +217,11 @@ class TestScrubChavesSensiveis:
             "celular",
             "phone",
             "contato",
+            # Placa e o texto livre do servico (pode trazer nome ou placa).
+            "placa",
+            "descricao_problema",
+            "observacoes",
+            "motivo",
         ],
     )
     def test_chave_sensivel_mascara_valor(self, chave: str) -> None:
@@ -223,9 +240,9 @@ class TestScrubChavesSensiveis:
             "payload": {"user": "joao", "password": "hunter2"}
         }
         result = scrub_pii(None, "info", event_dict)
-        inner = result["payload"]
-        assert inner["user"] == "joao"  # type: ignore[index]
-        assert "hunter2" not in str(inner["password"])  # type: ignore[index]
+        inner: Mapping[str, object] = result["payload"]
+        assert inner["user"] == "joao"
+        assert inner["password"] == "***"
 
     def test_chave_nao_sensivel_preservada(self) -> None:
         event_dict: dict[str, object] = {"username": "joao", "count": 3}
@@ -319,7 +336,8 @@ class TestPipelineMascaraTraceback:
             saida = buffer.getvalue()
             # Saiu pelo scrubber do root (e nao pelo handler cru do uvicorn).
             assert "123.456.789-00" not in saida
-            assert handler_cru.stream.getvalue() == ""  # type: ignore[attr-defined]
+            assert isinstance(handler_cru.stream, io.StringIO)
+            assert handler_cru.stream.getvalue() == ""
         finally:
             root.handlers = handlers_anteriores
             root.setLevel(nivel_anterior)
@@ -328,7 +346,42 @@ class TestPipelineMascaraTraceback:
             structlog.configure(**config_anterior)
 
 
+class TestScrubPlaca:
+    """Placa solta em texto (antiga ou Mercosul) e mascarada por regex de valor."""
+
+    @pytest.mark.parametrize(
+        "placa",
+        [
+            pytest.param("ABC1D23", id="mercosul"),
+            pytest.param("ABC1234", id="antiga"),
+            pytest.param("ABC-1234", id="antiga-com-hifen"),
+            pytest.param("abc1d23", id="minusculas"),
+        ],
+    )
+    def test_placa_em_texto_mascarada(self, placa: str) -> None:
+        result = scrub_pii(None, "info", {"event": f"veiculo {placa} no patio"})
+        assert placa not in str(result["event"])
+        assert f"{placa[:2]}*****" in str(result["event"])
+
+    @pytest.mark.parametrize(
+        "nao_placa",
+        [
+            pytest.param("sku PEC-OLEO-5W30", id="sku"),
+            pytest.param("servico SRV-FREIOS", id="codigo"),
+            pytest.param("git a1b2c3d4e5f6", id="sha"),
+            pytest.param("ordem 3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55", id="uuid"),
+            pytest.param("fila AGUARDANDO 2026", id="texto-com-ano"),
+        ],
+    )
+    def test_nao_placa_preservado(self, nao_placa: str) -> None:
+        result = scrub_pii(None, "info", {"event": nao_placa})
+        assert result["event"] == nao_placa
+
+
 class TestRedigirPiiErro:
+    def test_mascara_placa_na_mensagem_devolvida_ao_cliente(self) -> None:
+        assert "ABC1D23" not in redigir_pii_erro("veiculo ABC1D23 nao encontrado")
+
     def test_mascara_pii_na_mensagem_devolvida_ao_cliente(self) -> None:
         resultado = redigir_pii_erro("falhou para joao@example.com, CPF 123.456.789-00")
         assert "joao@example.com" not in resultado

@@ -68,10 +68,16 @@ _TELEFONE_PATTERN = re.compile(
     r"(?!\d)"  # nao seguido de digito
 )
 
+# Placa antiga (ABC1234, ABC-1234) e Mercosul (ABC1D23) solta em texto: o
+# retrato do veiculo e PII (LGPD). Palavra inteira de 7 caracteres, entao uuid,
+# sha e SKU com letras depois do hifen nao casam.
+_PLACA_PATTERN = re.compile(r"\b[A-Z]{3}-?\d[A-Z0-9]\d{2}\b", re.IGNORECASE)
+
 # Denylist de chaves: quando o NOME do campo indica segredo ou PII, o valor
 # inteiro e mascarado -- independente de casar regex. Cobre credenciais sem
-# forma fixa (tokens, segredos) e PII cujo valor pode nao ter estrutura
-# detectavel (telefone sem formatacao, contato em texto livre) -- issue #99 do p3.
+# forma fixa (tokens, segredos), PII cujo valor pode nao ter estrutura
+# detectavel (telefone sem formatacao, contato) e o texto livre do servico
+# (descricao do problema, observacoes e motivo podem trazer nome ou placa).
 _CHAVES_SENSIVEIS = frozenset(
     {
         "password",
@@ -87,6 +93,10 @@ _CHAVES_SENSIVEIS = frozenset(
         "celular",
         "phone",
         "contato",
+        "placa",
+        "descricao_problema",
+        "observacoes",
+        "motivo",
     }
 )
 
@@ -120,11 +130,17 @@ def _mask_email(match: re.Match[str]) -> str:
     return f"{masked_local}@{domain}"
 
 
+def _mask_placa(match: re.Match[str]) -> str:
+    # Mesmo formato do repr do Veiculo: as 2 primeiras letras e o resto oculto.
+    return f"{match.group()[:2]}*****"
+
+
 def _mask_string(value: str) -> str:
     value = _CPF_PATTERN.sub(_mask_cpf, value)
     value = _CNPJ_PATTERN.sub(_mask_cnpj, value)
     value = _EMAIL_PATTERN.sub(_mask_email, value)
-    return _TELEFONE_PATTERN.sub(_MASCARA, value)
+    value = _TELEFONE_PATTERN.sub(_MASCARA, value)
+    return _PLACA_PATTERN.sub(_mask_placa, value)
 
 
 def _chave_sensivel(key: Any) -> bool:  # noqa: ANN401  # chaves podem nao ser str
@@ -161,13 +177,14 @@ def scrub_pii(
 ) -> MutableMapping[str, Any]:
     """Structlog processor que mascara PII e segredos em todo o event_dict.
 
-    Mascara CPF, CNPJ, email e telefone BR formatado por regex de VALOR; e mascara
-    o valor inteiro quando o NOME do campo esta na denylist `_CHAVES_SENSIVEIS`
-    (password/token/secret/...). Percorre recursivamente strings, dicts, listas e
-    tuplas ate `_MAX_SCRUB_DEPTH` para pegar PII em payloads estruturados. Aplicado
-    automaticamente pelo pipeline de logging (inclusive na chave `exception` do
-    traceback, que `format_exc_info` monta ANTES deste processor) para impedir
-    vazamento de PII em logs -- structlog e stdlib (LGPD).
+    Mascara CPF, CNPJ, email, telefone BR formatado e placa por regex de VALOR; e
+    mascara o valor inteiro quando o NOME do campo esta na denylist
+    `_CHAVES_SENSIVEIS` (password/token/placa/observacoes/...). Percorre
+    recursivamente strings, dicts, listas e tuplas ate `_MAX_SCRUB_DEPTH` para
+    pegar PII em payloads estruturados. Aplicado automaticamente pelo pipeline
+    de logging (inclusive na chave `exception` do traceback, que
+    `format_exc_info` monta ANTES deste processor) para impedir vazamento de PII
+    em logs -- structlog e stdlib (LGPD).
     """
     for key, value in event_dict.items():
         event_dict[key] = _MASCARA if _chave_sensivel(key) else _scrub_value(value, 0)
@@ -178,7 +195,7 @@ _MAX_ERRO_LEN = 200
 
 
 def redigir_pii_erro(erro: str) -> str:
-    """Remove PII (CPF, CNPJ, e-mail, telefone) de strings de erro.
+    """Remove PII (CPF, CNPJ, e-mail, telefone, placa) de strings de erro.
 
     Complementa o scrubber de log (``scrub_pii``): aquele atua no pipeline do
     structlog; esta funcao atua em strings devolvidas ao cliente (mensagem de

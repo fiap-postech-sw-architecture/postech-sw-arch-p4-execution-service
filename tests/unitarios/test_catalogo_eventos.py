@@ -7,11 +7,14 @@ quebra antes de o OS Service quebrar.
 from __future__ import annotations
 
 from dataclasses import fields
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import src.diagnostico.aplicacao.events
 import src.estoque.aplicacao.events
 import src.execucao.aplicacao.events  # noqa: F401 - registra as subclasses
 from src.compartilhado.aplicacao.integration_event import IntegrationEvent
+from src.diagnostico.aplicacao.events import DiagnosticoConcluidoEvent
 
 CATALOGO = {
     "DiagnosticoIniciado": {"ordem_id", "mecanico_id", "iniciado_em"},
@@ -55,3 +58,13 @@ def test_listas_aninhadas_seguem_o_brief() -> None:
         "disponivel",
     ]
     assert [f.name for f in fields(PecaConsumida)] == ["sku", "quantidade"]
+
+
+def test_repr_do_evento_nao_leva_as_observacoes() -> None:
+    evento = DiagnosticoConcluidoEvent(
+        ordem_id=uuid4(),
+        itens=(),
+        observacoes="ligar para Joao",
+        concluido_em=datetime.now(UTC),
+    )
+    assert "Joao" not in repr(evento)

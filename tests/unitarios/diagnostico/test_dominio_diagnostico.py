@@ -214,3 +214,19 @@ class TestDiagnostico:
         assert diagnostico.descartado_em == AGORA
         with pytest.raises(TransicaoStatusInvalidaException, match="estado final"):
             diagnostico.iniciar(MECANICO, AGORA)
+
+    def test_repr_nao_leva_texto_livre_nem_placa(self) -> None:
+        # O repr aparece em traceback e log: descricao e observacoes podem
+        # trazer nome ou placa do cliente.
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=_veiculo(placa="ABC1D23"),
+            descricao_problema="cliente Joao reclamou",
+            agora=AGORA,
+        )
+        diagnostico.iniciar(MECANICO, AGORA)
+        diagnostico.concluir(MECANICO, ITENS, "falar com Maria", AGORA)
+        texto = repr(diagnostico)
+        assert "Joao" not in texto
+        assert "Maria" not in texto
+        assert "ABC1D23" not in texto
