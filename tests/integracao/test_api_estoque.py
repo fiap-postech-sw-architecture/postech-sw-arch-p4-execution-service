@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from src.estoque.infraestrutura.repository import (
 )
 
 if TYPE_CHECKING:
+    import io
     from collections.abc import Callable
 
     from fastapi.testclient import TestClient
@@ -48,6 +50,30 @@ def _reservar(
             ReservaSQLAlchemyRepository(session),
             SQLAlchemyUnitOfWork(lambda: session),
         ).executar(uuid4(), [ItemReserva(Sku(sku), quantidade)])
+
+
+def test_escrita_do_admin_deixa_log_de_auditoria(
+    api: TestClient,
+    autenticar: Callable[..., dict[str, str]],
+    log_capturado: io.StringIO,
+) -> None:
+    admin_id = uuid4()
+    admin = autenticar("admin", admin_id)
+    _cadastrar(api, admin, "PEC-VELA", 1)
+    api.patch(
+        f"{URL}/PEC-VELA/quantidade", json={"quantidade_disponivel": 3}, headers=admin
+    )
+    api.delete(f"{URL}/PEC-VELA", headers=admin)
+
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    auditoria = [
+        (r["acao"], r["ator_id"], r["alvo"]) for r in registros if r["event"] == "audit"
+    ]
+    assert auditoria == [
+        ("cadastrar_peca", str(admin_id), "PEC-VELA"),
+        ("ajustar_saldo", str(admin_id), "PEC-VELA"),
+        ("desativar_peca", str(admin_id), "PEC-VELA"),
+    ]
 
 
 def test_crud_completo_pelo_admin(api: TestClient, admin: dict[str, str]) -> None:

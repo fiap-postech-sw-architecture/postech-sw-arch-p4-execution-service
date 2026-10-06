@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
+from src.compartilhado.aplicacao.responsavel import (
+    registrar_auditoria,
+    responsavel_efetivo,
+)
 from src.diagnostico.aplicacao.events import (
     DiagnosticoConcluidoEvent,
     DiagnosticoDescartadoEvent,
@@ -173,7 +177,9 @@ class ConcluirDiagnostico:
         # Billing responde (ate 3 tentativas de 2 s).
         with self._uow:
             atual = _obter(self._repo, ordem_id)
-            responsavel = _responsavel(atual, mecanico_id, pelo_admin=pelo_admin)
+            responsavel = responsavel_efetivo(
+                atual.mecanico_id, mecanico_id, pelo_admin=pelo_admin
+            )
             if atual.concluido_por(responsavel):
                 return atual
             atual.validar_conclusao(responsavel, itens, observacoes)
@@ -182,7 +188,9 @@ class ConcluirDiagnostico:
         agora = datetime.now(UTC)
         with self._uow:
             diagnostico = _obter(self._repo, ordem_id, com_lock=True)
-            responsavel = _responsavel(diagnostico, mecanico_id, pelo_admin=pelo_admin)
+            responsavel = responsavel_efetivo(
+                diagnostico.mecanico_id, mecanico_id, pelo_admin=pelo_admin
+            )
             if diagnostico.concluir(responsavel, itens, observacoes, agora):
                 self._repo.salvar(diagnostico)
                 self._uow.registrar_evento(
@@ -202,6 +210,13 @@ class ConcluirDiagnostico:
                     )
                 )
                 self._uow.commit()
+                if pelo_admin:
+                    registrar_auditoria(
+                        "concluir_diagnostico",
+                        ator_id=mecanico_id,
+                        alvo=str(ordem_id),
+                        mecanico_id=str(responsavel),
+                    )
         return diagnostico
 
     def _validar_estoque_local(self, itens: Sequence[ItemDiagnostico]) -> None:
@@ -225,15 +240,6 @@ class ConcluirDiagnostico:
                 f"{', '.join(invalidos)}. Corrija o codigo ou cadastre o preco."
             )
             raise ItensInvalidosException(msg)
-
-
-def _responsavel(
-    diagnostico: Diagnostico, mecanico_id: UUID, *, pelo_admin: bool
-) -> UUID:
-    """Quem conclui: o proprio mecanico ou, para o admin, quem iniciou."""
-    if pelo_admin and diagnostico.mecanico_id is not None:
-        return diagnostico.mecanico_id
-    return mecanico_id
 
 
 class DescartarDiagnostico:

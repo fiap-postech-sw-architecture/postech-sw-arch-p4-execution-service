@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
+import src.compartilhado.aplicacao.responsavel as responsavel
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
@@ -354,13 +357,21 @@ class TestFinalizar:
         assert o.estoque.baixas == 0
         assert o.itens.itens[VELA].quantidade_reservada == 4
 
-    def test_admin_finaliza_em_nome_do_responsavel(self) -> None:
+    def test_admin_finaliza_em_nome_do_responsavel_com_auditoria(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(responsavel, "_log", structlog.get_logger("teste"))
         o = _em_execucao()
-        o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
-        o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
+        with capture_logs() as logs:
+            o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
+            o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
         assert o.execucao.status is StatusExecucao.FINALIZADA
         assert o.execucao.mecanico_id == MECANICO
         assert [e.tipo for e in o.uow.eventos] == ["ExecucaoFinalizada"]
+        auditoria = [log for log in logs if log["event"] == "audit"]
+        assert [
+            (log["acao"], log["ator_id"], log["mecanico_id"]) for log in auditoria
+        ] == [("finalizar_execucao", str(ADMIN), str(MECANICO))]
 
     def test_admin_nao_finaliza_o_que_nao_comecou(self) -> None:
         o = _oficina()

@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
+from src.compartilhado.aplicacao.responsavel import (
+    registrar_auditoria,
+    responsavel_efetivo,
+)
 from src.compartilhado.dominio.exceptions import ViolacaoRegraDeNegocioException
 from src.execucao.aplicacao.events import (
     ExecucaoAgendadaEvent,
@@ -205,10 +209,8 @@ class FinalizarExecucao:
         agora = datetime.now(UTC)
         with self._uow:
             execucao = _obter(self._repo, ordem_id, com_lock=True)
-            responsavel = (
-                execucao.mecanico_id
-                if pelo_admin and execucao.mecanico_id is not None
-                else mecanico_id
+            responsavel = responsavel_efetivo(
+                execucao.mecanico_id, mecanico_id, pelo_admin=pelo_admin
             )
             if execucao.finalizada_por(responsavel):
                 return execucao
@@ -229,4 +231,11 @@ class FinalizarExecucao:
                 )
             )
             self._uow.commit()
+        if pelo_admin:
+            registrar_auditoria(
+                "finalizar_execucao",
+                ator_id=mecanico_id,
+                alvo=str(ordem_id),
+                mecanico_id=str(responsavel),
+            )
         return execucao

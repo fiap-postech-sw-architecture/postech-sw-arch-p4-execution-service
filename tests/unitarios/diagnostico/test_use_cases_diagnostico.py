@@ -4,7 +4,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
+import src.compartilhado.aplicacao.responsavel as responsavel
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
@@ -282,14 +285,23 @@ class TestConcluir:
         assert uc.executar(diagnostico.ordem_id, MECANICO, [SERVICO], "") is concluido
         assert (uow.eventos, uow.commits) == ([], 0)
 
-    def test_admin_conclui_em_nome_do_responsavel(self) -> None:
+    def test_admin_conclui_em_nome_do_responsavel_com_auditoria(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(responsavel, "_log", structlog.get_logger("teste"))
         diagnostico = _em_andamento()
         uc, uow, _, _ = self._uc(diagnostico)
-        uc.executar(diagnostico.ordem_id, uuid4(), [SERVICO], "", pelo_admin=True)
-        uc.executar(diagnostico.ordem_id, uuid4(), [SERVICO], "", pelo_admin=True)
+        admin = uuid4()
+        with capture_logs() as logs:
+            uc.executar(diagnostico.ordem_id, admin, [SERVICO], "", pelo_admin=True)
+            uc.executar(diagnostico.ordem_id, admin, [SERVICO], "", pelo_admin=True)
         assert diagnostico.status is StatusDiagnostico.CONCLUIDO
         assert diagnostico.mecanico_id == MECANICO
         assert [e.tipo for e in uow.eventos] == ["DiagnosticoConcluido"]
+        auditoria = [log for log in logs if log["event"] == "audit"]
+        assert [
+            (log["acao"], log["ator_id"], log["mecanico_id"]) for log in auditoria
+        ] == [("concluir_diagnostico", str(admin), str(MECANICO))]
 
     def test_ordem_desconhecida(self) -> None:
         uc = ConcluirDiagnostico(
