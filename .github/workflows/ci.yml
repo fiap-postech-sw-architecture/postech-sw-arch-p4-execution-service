@@ -99,7 +99,7 @@ jobs:
             coverage.xml
             htmlcov/
             reports/
-          retention-days: 30
+          retention-days: 90
 
   # SonarQube Community efemero dentro do runner: sobe o servidor, aplica o
   # quality gate versionado em .sonar/quality-gate.json, analisa com o
@@ -134,7 +134,7 @@ jobs:
         with:
           name: sonarqube
           path: reports/sonarqube.json
-          retention-days: 30
+          retention-days: 90
 
   build:
     runs-on: ubuntu-latest
