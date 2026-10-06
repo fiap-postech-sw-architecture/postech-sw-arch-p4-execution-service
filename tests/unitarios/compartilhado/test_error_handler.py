@@ -123,7 +123,8 @@ def test_http_exception_mantem_status_e_headers_no_envelope() -> None:
 def test_rota_inexistente_responde_em_portugues() -> None:
     resposta = _app_com_excecao(RuntimeError()).get("/nao-existe")
     assert resposta.status_code == 404
-    assert resposta.json()["erro"]["codigo"] == "RECURSO_NAO_ENCONTRADO"
+    # Mesmo codigo do 404 de dominio.
+    assert resposta.json()["erro"]["codigo"] == "ENTIDADE_NAO_ENCONTRADA"
     assert resposta.json()["erro"]["mensagem"] == "Recurso nao encontrado"
 
 

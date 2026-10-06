@@ -7,6 +7,8 @@ from uuid import uuid4
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from src.compartilhado.interfaces.error_handler import resposta_erro_interno
+
 if TYPE_CHECKING:
     from starlette.middleware.base import RequestResponseEndpoint
     from starlette.requests import Request
@@ -27,7 +29,12 @@ def _caminho_de_docs(path: str) -> bool:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Propaga o X-Request-ID (logs e envelope de erro) e anexa headers de seguranca."""
+    """Propaga o X-Request-ID (logs e envelope de erro) e anexa headers de seguranca.
+
+    Inclusive no 500 de erro nao tratado: o handler de ``Exception`` do app roda
+    no ``ServerErrorMiddleware``, por fora deste, e o 500 sairia sem os headers;
+    por isso a excecao vira aqui o 500 do envelope (``resposta_erro_interno``).
+    """
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -39,7 +46,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001 - vira o 500 do envelope
+            response = resposta_erro_interno(request, exc)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Strict-Transport-Security"] = (

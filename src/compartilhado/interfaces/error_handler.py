@@ -48,7 +48,8 @@ _STATUS_DEFAULT = 409
 _CODIGOS_HTTP: dict[int, str] = {
     401: "NAO_AUTENTICADO",
     403: "ACESSO_NEGADO",
-    404: "RECURSO_NAO_ENCONTRADO",
+    # Mesmo codigo do 404 de dominio: o cliente trata "nao encontrado" de um jeito so.
+    404: "ENTIDADE_NAO_ENCONTRADA",
     405: "METODO_NAO_PERMITIDO",
     503: "SERVICO_INDISPONIVEL",
 }
@@ -96,6 +97,105 @@ def _mensagem_http(exc: StarletteHTTPException) -> str:
     return detalhe
 
 
+async def _domain_exception_handler(
+    request: Request, exc: DomainException
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    status_code = _status_para(exc)
+    # So o codigo estavel vai para o log, nunca a mensagem (pode ter dado do
+    # request).
+    logger.warning(
+        "domain_exception_handled",
+        codigo=exc.codigo,
+        status=status_code,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=_criar_envelope(exc.codigo, exc.mensagem, request_id),
+        headers=_cabecalhos_de_nova_tentativa(exc),
+    )
+
+
+async def _http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    codigo = _CODIGOS_HTTP.get(exc.status_code, "ERRO_HTTP")
+    logger.warning(
+        "http_exception_handled",
+        codigo=codigo,
+        status=exc.status_code,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_criar_envelope(codigo, _mensagem_http(exc), request_id),
+        headers=exc.headers,
+    )
+
+
+async def _request_validation_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    # O detail default ecoa o `input` cru de cada campo invalido (PII de um
+    # campo malformado voltaria no corpo): cada item carrega so type/loc/msg.
+    request_id = _obter_request_id(request)
+    detalhes = [
+        {"type": erro.get("type"), "loc": erro.get("loc"), "msg": erro.get("msg")}
+        for erro in exc.errors()
+    ]
+    logger.warning(
+        "request_validation_handled",
+        request_id=request_id,
+        erros=[(d["type"], d["loc"]) for d in detalhes],
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detalhes, "id_requisicao": request_id},
+    )
+
+
+async def _valor_invalido_handler(
+    request: Request, exc: ValorInvalidoError
+) -> JSONResponse:
+    request_id = _obter_request_id(request)
+    # So a classe: a mensagem e o traceback podem ecoar o valor recebido.
+    logger.warning("invalid_value_handled", request_id=request_id)
+    return JSONResponse(
+        status_code=422,
+        content=_criar_envelope(
+            "VALOR_INVALIDO", redigir_pii_erro(str(exc)), request_id
+        ),
+    )
+
+
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Rede de seguranca: o SecurityHeadersMiddleware ja converte o erro das
+    # rotas; aqui so chega o que escapar de um middleware mais externo.
+    return resposta_erro_interno(request, exc)
+
+
+def resposta_erro_interno(request: Request, exc: Exception) -> JSONResponse:
+    """500 no envelope, com o erro no log sem dado do request.
+
+    ``DBAPIError`` loga so classe, SQLSTATE e constraint (o ``DETAIL`` do
+    Postgres traz a linha inteira); os demais levam o traceback, que passa
+    pelo scrub de PII do pipeline de log.
+    """
+    request_id = _obter_request_id(request)
+    if isinstance(exc, DBAPIError):
+        logger.error(
+            "internal_error", request_id=request_id, **descrever_erro_de_banco(exc)
+        )
+    else:
+        logger.error("internal_error", request_id=request_id, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content=_criar_envelope("ERRO_INTERNO", "Erro interno do servidor", request_id),
+    )
+
+
 def registrar_error_handlers(app: FastAPI) -> None:
     """Mapeia excecoes para o envelope ``{erro: {codigo, mensagem, id_requisicao}}``.
 
@@ -106,95 +206,8 @@ def registrar_error_handlers(app: FastAPI) -> None:
     log. O 422 de schema do FastAPI mantem o formato do p3 (``detail`` +
     ``id_requisicao``).
     """
-
-    @app.exception_handler(DomainException)
-    async def _domain_exception_handler(
-        request: Request, exc: DomainException
-    ) -> JSONResponse:
-        request_id = _obter_request_id(request)
-        status_code = _status_para(exc)
-        # So o codigo estavel vai para o log, nunca a mensagem (pode ter dado
-        # do request).
-        logger.warning(
-            "domain_exception_handled",
-            codigo=exc.codigo,
-            status=status_code,
-            request_id=request_id,
-        )
-        return JSONResponse(
-            status_code=status_code,
-            content=_criar_envelope(exc.codigo, exc.mensagem, request_id),
-            headers=_cabecalhos_de_nova_tentativa(exc),
-        )
-
-    @app.exception_handler(StarletteHTTPException)
-    async def _http_exception_handler(
-        request: Request, exc: StarletteHTTPException
-    ) -> JSONResponse:
-        request_id = _obter_request_id(request)
-        codigo = _CODIGOS_HTTP.get(exc.status_code, "ERRO_HTTP")
-        logger.warning(
-            "http_exception_handled",
-            codigo=codigo,
-            status=exc.status_code,
-            request_id=request_id,
-        )
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_criar_envelope(codigo, _mensagem_http(exc), request_id),
-            headers=exc.headers,
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def _request_validation_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        # O detail default ecoa o `input` cru de cada campo invalido (PII de um
-        # campo malformado voltaria no corpo): cada item carrega so type/loc/msg.
-        request_id = _obter_request_id(request)
-        detalhes = [
-            {"type": erro.get("type"), "loc": erro.get("loc"), "msg": erro.get("msg")}
-            for erro in exc.errors()
-        ]
-        logger.warning(
-            "request_validation_handled",
-            request_id=request_id,
-            erros=[(d["type"], d["loc"]) for d in detalhes],
-        )
-        return JSONResponse(
-            status_code=422,
-            content={"detail": detalhes, "id_requisicao": request_id},
-        )
-
-    @app.exception_handler(ValorInvalidoError)
-    async def _valor_invalido_handler(
-        request: Request, exc: ValorInvalidoError
-    ) -> JSONResponse:
-        request_id = _obter_request_id(request)
-        logger.warning("invalid_value_handled", request_id=request_id, exc_info=exc)
-        # str(exc) pode ecoar o valor recebido: redige PII antes de devolver.
-        return JSONResponse(
-            status_code=422,
-            content=_criar_envelope(
-                "VALOR_INVALIDO", redigir_pii_erro(str(exc)), request_id
-            ),
-        )
-
-    @app.exception_handler(Exception)
-    async def _generic_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
-        request_id = _obter_request_id(request)
-        if isinstance(exc, DBAPIError):
-            # Sem traceback nem mensagem: o DETAIL do driver traz a linha inteira.
-            logger.error(
-                "internal_error", request_id=request_id, **descrever_erro_de_banco(exc)
-            )
-        else:
-            logger.exception("internal_error", request_id=request_id)
-        return JSONResponse(
-            status_code=500,
-            content=_criar_envelope(
-                "ERRO_INTERNO", "Erro interno do servidor", request_id
-            ),
-        )
+    app.exception_handler(DomainException)(_domain_exception_handler)
+    app.exception_handler(StarletteHTTPException)(_http_exception_handler)
+    app.exception_handler(RequestValidationError)(_request_validation_handler)
+    app.exception_handler(ValorInvalidoError)(_valor_invalido_handler)
+    app.exception_handler(Exception)(_generic_exception_handler)

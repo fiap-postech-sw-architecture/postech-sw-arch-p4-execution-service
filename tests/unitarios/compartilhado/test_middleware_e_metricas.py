@@ -42,6 +42,20 @@ class TestSecurityHeaders:
         assert resposta.headers["Content-Security-Policy"] == "default-src 'none'"
         assert "max-age=31536000" in resposta.headers["Strict-Transport-Security"]
 
+    def test_erro_nao_tratado_sai_com_headers_e_request_id(self) -> None:
+        # O handler de Exception roda por fora do middleware: sem a conversao
+        # no proprio middleware, o 500 saia sem estes headers.
+        resposta = _app().get("/explode", headers={"X-Request-ID": "req-500"})
+        assert resposta.status_code == 500
+        assert resposta.json()["erro"] == {
+            "codigo": "ERRO_INTERNO",
+            "mensagem": "Erro interno do servidor",
+            "id_requisicao": "req-500",
+        }
+        assert resposta.headers["X-Request-ID"] == "req-500"
+        assert resposta.headers["X-Content-Type-Options"] == "nosniff"
+        assert resposta.headers["Content-Security-Policy"] == "default-src 'none'"
+
     def test_swagger_fica_sem_csp(self) -> None:
         assert "Content-Security-Policy" not in _app().get("/docs").headers
 
