@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from src.compartilhado.interfaces.autenticacao import CREDENCIAL_INVALIDA
 from src.estoque.dominio.sku import Sku
 from src.estoque.infraestrutura.repository import ItemEstoqueSQLAlchemyRepository
 from src.estoque.infraestrutura.seed import ITENS_DEMO, main, semear
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlalchemy.orm import Session, sessionmaker
+
+    from tests.conftest import ServidorJwks
 
 
 def _saldos(session_factory: sessionmaker[Session]) -> dict[str, int]:
@@ -80,17 +83,44 @@ def test_token_do_os_service_validado_pelo_jwks(
     api: TestClient, emitir_token: Callable[..., str]
 ) -> None:
     valido = {"Authorization": f"Bearer {emitir_token('mecanico')}"}
+    # Alem dos 10 s de leeway.
     vencido = {
         "Authorization": "Bearer "
-        + emitir_token("mecanico", exp=datetime.now(UTC) - timedelta(seconds=1))
+        + emitir_token("mecanico", exp=datetime.now(UTC) - timedelta(seconds=20))
     }
     outro_emissor = {"Authorization": f"Bearer {emitir_token('admin', iss='intruso')}"}
 
     assert api.get("/api/v1/fila", headers=valido).status_code == 200
-    assert api.get("/api/v1/fila", headers=vencido).json()["erro"]["mensagem"] == (
-        "Token expirado"
-    )
-    assert api.get("/api/v1/fila", headers=outro_emissor).status_code == 401
+    respostas = [
+        api.get("/api/v1/fila", headers=headers) for headers in (vencido, outro_emissor)
+    ]
+    assert [r.status_code for r in respostas] == [401, 401]
+    assert respostas[0].json()["erro"]["mensagem"] == CREDENCIAL_INVALIDA
+    assert respostas[1].json()["erro"]["mensagem"] == CREDENCIAL_INVALIDA
+
+
+def test_jwks_fora_do_ar_e_503_com_retry_after_e_sem_token_e_401(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    servidor_jwks_proprio: ServidorJwks,
+    emitir_token: Callable[..., str],
+) -> None:
+    from src.main import criar_app
+
+    servidor_jwks_proprio.status = 503
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    with TestClient(criar_app()) as api:
+        com_token = api.get(
+            "/api/v1/fila", headers={"Authorization": f"Bearer {emitir_token('admin')}"}
+        )
+        sem_token = api.get("/api/v1/fila")
+
+    assert com_token.status_code == 503
+    assert com_token.headers["Retry-After"] == "5"
+    assert com_token.json()["erro"]["codigo"] == "SERVICO_INDISPONIVEL"
+    assert sem_token.status_code == 401
 
 
 @pytest.mark.parametrize("ausente", ["DATABASE_URL", "JWKS_URL", "BILLING_URL"])

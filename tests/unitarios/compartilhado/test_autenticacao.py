@@ -13,6 +13,7 @@ from src.compartilhado.infraestrutura.jwks import (
     TokenInvalidoError,
 )
 from src.compartilhado.interfaces.autenticacao import (
+    CREDENCIAL_INVALIDA,
     Papel,
     UsuarioAutenticado,
     exigir_papel,
@@ -63,7 +64,14 @@ def _cliente(validador: _ValidadorStub) -> TestClient:
 
 
 def _claims(**extras: Any) -> dict[str, Any]:
-    return {"sub": str(uuid4()), "papel": "mecanico", **extras}
+    return {"sub": str(uuid4()), "papel": "mecanico", "type": "access", **extras}
+
+
+def _nao_autenticado(resposta: Any) -> None:
+    assert resposta.status_code == 401
+    assert resposta.headers["WWW-Authenticate"] == "Bearer"
+    assert resposta.json()["erro"]["codigo"] == "NAO_AUTENTICADO"
+    assert resposta.json()["erro"]["mensagem"] == CREDENCIAL_INVALIDA
 
 
 def _get(cliente: TestClient, caminho: str = "/eu") -> Any:
@@ -84,66 +92,64 @@ def test_usuario_autenticado_carrega_id_papel_e_header() -> None:
 
 
 def test_sem_token_responde_401_com_desafio_bearer() -> None:
-    resposta = _cliente(_ValidadorStub(_claims())).get("/eu")
-    assert resposta.status_code == 401
-    assert resposta.headers["WWW-Authenticate"] == "Bearer"
-    assert resposta.json()["erro"]["codigo"] == "NAO_AUTENTICADO"
-    assert resposta.json()["erro"]["mensagem"] == "Token de autenticacao nao fornecido"
+    _nao_autenticado(_cliente(_ValidadorStub(_claims())).get("/eu"))
+
+
+def test_esquema_que_nao_e_bearer_e_401() -> None:
+    cliente = _cliente(_ValidadorStub(_claims()))
+    _nao_autenticado(cliente.get("/eu", headers={"Authorization": "Basic YTpi"}))
 
 
 @pytest.mark.parametrize(
-    ("erro", "status", "mensagem"),
+    "erro",
     [
-        (TokenExpiradoError("exp"), 401, "Token expirado"),
-        (TokenInvalidoError("sig"), 401, "Token invalido"),
-        (JwksIndisponivelError("down"), 503, None),
+        pytest.param(TokenExpiradoError("exp"), id="expirado"),
+        pytest.param(TokenInvalidoError("sig"), id="invalido"),
     ],
 )
-def test_falha_na_validacao(erro: Exception, status: int, mensagem: str | None) -> None:
+def test_falha_de_credencial_e_401_com_a_mesma_mensagem(erro: Exception) -> None:
+    _nao_autenticado(_get(_cliente(_ValidadorStub(erro=erro))))
+
+
+def test_jwks_indisponivel_e_503_com_retry_after() -> None:
+    erro = JwksIndisponivelError("down", retry_after=4)
     resposta = _get(_cliente(_ValidadorStub(erro=erro)))
-    assert resposta.status_code == status
-    if mensagem is not None:
-        assert resposta.json()["erro"]["mensagem"] == mensagem
-    else:
-        assert "JWKS do OS Service" in resposta.json()["erro"]["mensagem"]
-        assert resposta.json()["erro"]["codigo"] == "SERVICO_INDISPONIVEL"
+    assert resposta.status_code == 503
+    assert resposta.headers["Retry-After"] == "4"
+    assert resposta.json()["erro"]["codigo"] == "SERVICO_INDISPONIVEL"
+    assert "JWKS do OS Service" in resposta.json()["erro"]["mensagem"]
 
 
-def test_refresh_token_nao_autentica_requisicao() -> None:
-    resposta = _get(_cliente(_ValidadorStub(_claims(type="refresh"))))
-    assert resposta.status_code == 401
-    assert resposta.json()["erro"]["mensagem"] == "Token nao e do tipo access"
-
-
-def test_token_sem_type_e_tratado_como_access() -> None:
-    claims = _claims()
-    assert "type" not in claims
-    assert _get(_cliente(_ValidadorStub(claims))).status_code == 200
-
-
-def test_sub_que_nao_e_uuid() -> None:
-    resposta = _get(_cliente(_ValidadorStub(_claims(sub="joao"))))
-    assert resposta.status_code == 401
-
-
-@pytest.mark.parametrize("papel", ["cliente", None, 7])
-def test_papel_desconhecido_e_403(papel: object) -> None:
-    resposta = _get(_cliente(_ValidadorStub(_claims(papel=papel))))
-    assert resposta.status_code == 403
-    assert resposta.json()["erro"]["codigo"] == "ACESSO_NEGADO"
+@pytest.mark.parametrize(
+    "claims",
+    [
+        pytest.param(_claims(type="refresh"), id="refresh-token"),
+        pytest.param(
+            {k: v for k, v in _claims().items() if k != "type"}, id="sem-type"
+        ),
+        pytest.param(_claims(sub="joao"), id="sub-que-nao-e-uuid"),
+        pytest.param(_claims(papel=None), id="papel-ausente"),
+        pytest.param(_claims(papel="cliente"), id="papel-desconhecido"),
+        pytest.param(_claims(papel=7), id="papel-que-nao-e-texto"),
+    ],
+)
+def test_claims_invalidas_sao_falha_de_credencial(claims: dict[str, Any]) -> None:
+    _nao_autenticado(_get(_cliente(_ValidadorStub(claims))))
 
 
 @pytest.mark.parametrize(
     ("papel", "caminho", "status"),
     [
-        ("mecanico", "/oficina", 200),
-        ("atendente", "/oficina", 403),
-        ("admin", "/oficina", 200),
-        ("admin", "/so-admin", 200),
-        ("mecanico", "/so-admin", 403),
-        ("atendente", "/so-admin", 403),
+        pytest.param("mecanico", "/oficina", 200, id="mecanico-na-oficina"),
+        pytest.param("atendente", "/oficina", 403, id="atendente-na-oficina"),
+        pytest.param("admin", "/oficina", 200, id="admin-na-oficina"),
+        pytest.param("admin", "/so-admin", 200, id="admin-no-admin"),
+        pytest.param("mecanico", "/so-admin", 403, id="mecanico-no-admin"),
+        pytest.param("atendente", "/so-admin", 403, id="atendente-no-admin"),
     ],
 )
 def test_rbac_admin_sempre_passa(papel: str, caminho: str, status: int) -> None:
     resposta = _get(_cliente(_ValidadorStub(_claims(papel=papel))), caminho)
     assert resposta.status_code == status
+    if status == 403:
+        assert resposta.json()["erro"]["codigo"] == "ACESSO_NEGADO"

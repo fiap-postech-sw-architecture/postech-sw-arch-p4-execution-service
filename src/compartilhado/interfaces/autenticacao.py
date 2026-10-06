@@ -1,14 +1,15 @@
-"""Autenticacao (JWT RS256 do OS Service) e RBAC das rotas.
+"""Autenticacao (JWT RS256 do OS Service) e RBAC das rotas (ADR-039).
 
-Papeis (brief secao 7): ``admin`` pode tudo; ``mecanico`` opera diagnostico e
-execucao e le fila/estoque; ``atendente`` le fila/estoque.
+Papeis: ``admin`` pode tudo; ``mecanico`` opera diagnostico e execucao e le
+fila/estoque; ``atendente`` le fila/estoque. Toda falha de credencial responde
+o mesmo 401 (o motivo vai so para o log); 403 e so papel valido sem permissao.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Final
 from uuid import UUID
 
 import structlog
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 _bearer = HTTPBearer(auto_error=False)
+CREDENCIAL_INVALIDA: Final = "Credencial ausente, invalida ou expirada"
 _JWKS_INDISPONIVEL = (
     "Validacao de token indisponivel: o JWKS do OS Service nao respondeu. "
     "Tente novamente em instantes."
@@ -46,14 +48,17 @@ class Papel(StrEnum):
 class UsuarioAutenticado:
     id: UUID
     papel: Papel
-    # Header recebido, repassado ao Billing na validacao de itens (brief secao 5).
+    # Header recebido, repassado ao Billing na validacao de itens (RFC-004 sec. 6).
     authorization: str = field(repr=False)
 
 
-def _nao_autenticado(mensagem: str) -> HTTPException:
+def _nao_autenticado(motivo: str) -> HTTPException:
+    # Mesma resposta para toda falha de credencial: quem testa tokens nao
+    # descobre o que esta errado. O motivo fica so no log (sem o token).
+    _log.info("authentication_failed", motivo=motivo)
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=mensagem,
+        detail=CREDENCIAL_INVALIDA,
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -63,14 +68,15 @@ def _validar(request: Request, token: str) -> dict[str, object]:
     try:
         return validador.validar(token)
     except TokenExpiradoError:
-        raise _nao_autenticado("Token expirado") from None
+        raise _nao_autenticado("token_expirado") from None
     except TokenInvalidoError:
-        raise _nao_autenticado("Token invalido") from None
-    except JwksIndisponivelError:
-        _log.warning("jwks_unavailable")
+        raise _nao_autenticado("token_invalido") from None
+    except JwksIndisponivelError as exc:
+        _log.warning("jwks_unavailable", retry_after=exc.retry_after)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_JWKS_INDISPONIVEL,
+            headers={"Retry-After": str(exc.retry_after)},
         ) from None
 
 
@@ -78,23 +84,26 @@ def obter_usuario_autenticado(
     request: Request,
     credenciais: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> UsuarioAutenticado:
+    """Usuario do bearer token emitido pelo OS Service.
+
+    401 uniforme para credencial ausente, invalida ou expirada, ``type``
+    diferente de ``access`` (refresh token nao autentica requisicao), ``sub``
+    que nao e UUID e ``papel`` ausente ou desconhecido. 503 com ``Retry-After``
+    quando o JWKS nao responde e nao ha chave em cache.
+    """
     if credenciais is None:
-        raise _nao_autenticado("Token de autenticacao nao fornecido")
+        raise _nao_autenticado("token_ausente")
     claims = _validar(request, credenciais.credentials)
-    # Defesa em profundidade: um refresh token (type=refresh, padrao do p3) nao
-    # autentica requisicao. Token sem `type` e tratado como access.
-    if claims.get("type", "access") != "access":
-        raise _nao_autenticado("Token nao e do tipo access")
+    if claims.get("type") != "access":
+        raise _nao_autenticado("tipo_nao_access")
     try:
         usuario_id = UUID(str(claims["sub"]))
     except ValueError:
-        raise _nao_autenticado("Token sem identificador de usuario valido") from None
+        raise _nao_autenticado("sub_invalido") from None
     try:
         papel = Papel(str(claims.get("papel")))
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Papel nao autorizado"
-        ) from None
+        raise _nao_autenticado("papel_invalido") from None
     return UsuarioAutenticado(
         id=usuario_id,
         papel=papel,
@@ -103,7 +112,7 @@ def obter_usuario_autenticado(
 
 
 def exigir_papel(*papeis: Papel) -> Callable[..., UsuarioAutenticado]:
-    """Dependency de RBAC; ``admin`` sempre passa."""
+    """Dependency de RBAC: 403 para papel valido fora da lista; ``admin`` passa."""
     permitidos = frozenset({Papel.ADMIN, *papeis})
 
     def verificar(

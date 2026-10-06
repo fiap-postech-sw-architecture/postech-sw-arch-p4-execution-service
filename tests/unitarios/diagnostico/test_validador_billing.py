@@ -123,8 +123,9 @@ def test_circuito_abre_e_corta_a_rede(
     assert rota.call_count == 5
     assert breaker.aberto
 
-    with pytest.raises(DependenciaIndisponivelException, match="em 30 s"):
+    with pytest.raises(DependenciaIndisponivelException, match="em 30 s") as erro:
         _chamar(validador)
+    assert erro.value.retry_after == 30
     assert rota.call_count == 5
 
     # Vencido o prazo, a prova passa e, com sucesso, fecha o circuito.

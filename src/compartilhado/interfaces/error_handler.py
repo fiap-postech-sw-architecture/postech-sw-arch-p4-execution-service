@@ -67,6 +67,12 @@ def _status_para(exc: DomainException) -> int:
     return _STATUS_DEFAULT
 
 
+def _cabecalhos_de_nova_tentativa(exc: DomainException) -> dict[str, str] | None:
+    if isinstance(exc, DependenciaIndisponivelException) and exc.retry_after:
+        return {"Retry-After": str(exc.retry_after)}
+    return None
+
+
 def _obter_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "desconhecido")
 
@@ -116,6 +122,7 @@ def registrar_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status_code,
             content=_criar_envelope(exc.codigo, exc.mensagem, request_id),
+            headers=_cabecalhos_de_nova_tentativa(exc),
         )
 
     @app.exception_handler(StarletteHTTPException)

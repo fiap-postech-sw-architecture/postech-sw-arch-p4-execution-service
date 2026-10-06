@@ -57,7 +57,12 @@ class DadosInvalidosException(DomainException):
 
 
 class DependenciaIndisponivelException(DomainException):
-    """Servico externo necessario ao caso de uso nao respondeu a tempo."""
+    """Servico externo necessario ao caso de uso nao respondeu a tempo.
 
-    def __init__(self, mensagem: str) -> None:
+    ``retry_after``: segundos ate valer a pena tentar de novo (ex.: o circuito
+    aberto), quando conhecidos; a API os devolve no header ``Retry-After``.
+    """
+
+    def __init__(self, mensagem: str, *, retry_after: int | None = None) -> None:
         super().__init__(codigo="DEPENDENCIA_INDISPONIVEL", mensagem=mensagem)
+        self.retry_after = retry_after

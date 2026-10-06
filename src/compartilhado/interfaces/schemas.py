@@ -20,7 +20,7 @@ class ErroResponse(BaseModel):
 def respostas(*status_codes: int) -> dict[int | str, dict[str, Any]]:
     """Entradas ``responses`` do OpenAPI com o envelope de erro do servico."""
     descricoes = {
-        401: "Token ausente, invalido ou expirado",
+        401: "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
         403: "Papel sem permissao ou usuario nao responsavel pelo objeto",
         404: "Recurso nao encontrado",
         409: "Estado atual nao permite a operacao",
@@ -28,7 +28,10 @@ def respostas(*status_codes: int) -> dict[int | str, dict[str, Any]]:
             "Dados recusados por regra de negocio (envelope `erro`) ou corpo "
             "invalido no schema (`detail` + `id_requisicao`, formato do p3)"
         ),
-        503: "Dependencia indisponivel (JWKS do OS Service ou Billing)",
+        503: (
+            "Dependencia indisponivel (JWKS do OS Service ou Billing); o header "
+            "`Retry-After` traz os segundos ate a proxima tentativa"
+        ),
     }
     return {
         codigo: {"model": ErroResponse, "description": descricoes[codigo]}

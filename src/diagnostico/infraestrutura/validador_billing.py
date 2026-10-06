@@ -71,12 +71,12 @@ class ValidadorDeItensBilling:
     def _tentar(self, corpo: dict[str, list[str]]) -> httpx.Response | None:
         """Uma chamada; ``None`` = falha transitoria (conta no breaker)."""
         if not self._breaker.permitir():
-            segundos = self._breaker.segundos_para_nova_tentativa()
+            segundos = max(1, self._breaker.segundos_para_nova_tentativa())
             msg = (
                 "Validacao de precos suspensa: o Billing falhou repetidamente "
                 f"(circuito aberto). Tente novamente em {segundos} s."
             )
-            raise DependenciaIndisponivelException(msg)
+            raise DependenciaIndisponivelException(msg, retry_after=segundos)
         try:
             resposta = self._cliente.post(
                 CAMINHO_VALIDACAO,

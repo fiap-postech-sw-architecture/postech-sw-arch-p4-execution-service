@@ -239,6 +239,8 @@ def test_billing_fora_do_ar_e_503_e_depois_circuito_aberto(
     assert primeira.json()["erro"]["codigo"] == "DEPENDENCIA_INDISPONIVEL"
     assert "circuito aberto" in segunda.json()["erro"]["mensagem"]
     assert "Tente novamente em" in terceira.json()["erro"]["mensagem"]
+    assert "Retry-After" not in primeira.headers  # sem circuito aberto: sem prazo
+    assert 1 <= int(terceira.headers["Retry-After"]) <= 30
     assert rota.call_count == 5  # 3 + 2 ate abrir; a terceira nem tocou a rede
     assert [linha["tipo"] for linha in outbox()] == ["DiagnosticoIniciado"]
 

@@ -80,6 +80,19 @@ def test_excecao_de_dominio_vira_envelope(
     }
 
 
+@pytest.mark.parametrize(
+    ("retry_after", "header"),
+    [pytest.param(30, "30", id="com-segundos"), pytest.param(None, None, id="sem")],
+)
+def test_dependencia_indisponivel_leva_retry_after_quando_conhecido(
+    retry_after: int | None, header: str | None
+) -> None:
+    exc = DependenciaIndisponivelException("x", retry_after=retry_after)
+    resposta = _app_com_excecao(exc).get("/test")
+    assert resposta.status_code == 503
+    assert resposta.headers.get("Retry-After") == header
+
+
 def test_request_id_do_middleware_vai_para_o_envelope() -> None:
     app = FastAPI()
     registrar_error_handlers(app)

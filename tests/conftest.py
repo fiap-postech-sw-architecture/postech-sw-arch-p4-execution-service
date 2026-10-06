@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,18 +33,28 @@ EMISSOR = "pytstop-os-service"
 AUDIENCIA = "pytstop"
 
 
-class _ServidorJwks(ThreadingHTTPServer):
+class ServidorJwks(ThreadingHTTPServer):
+    """JWKS do "OS Service"; ``status``, ``atraso`` e ``corpo`` simulam falhas."""
+
     jwks: dict[str, Any]
     requisicoes: int
+    status: int = 200
+    atraso: float = 0.0
+    corpo: bytes | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server_port}/.well-known/jwks.json"
 
 
 class _JwksHandler(BaseHTTPRequestHandler):
-    server: _ServidorJwks
+    server: ServidorJwks
 
     def do_GET(self) -> None:
         self.server.requisicoes += 1
-        corpo = json.dumps(self.server.jwks).encode()
-        self.send_response(200)
+        time.sleep(self.server.atraso)
+        corpo = self.server.corpo or json.dumps(self.server.jwks).encode()
+        self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
@@ -51,6 +62,19 @@ class _JwksHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args: object) -> None:
         pass
+
+
+def _subir_servidor_jwks(jwk_publico: dict[str, Any]) -> ServidorJwks:
+    servidor = ServidorJwks(("127.0.0.1", 0), _JwksHandler)
+    servidor.jwks = {"keys": [jwk_publico]}
+    servidor.requisicoes = 0
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    return servidor
+
+
+def _derrubar(servidor: ServidorJwks) -> None:
+    servidor.shutdown()
+    servidor.server_close()
 
 
 @pytest.fixture(scope="session")
@@ -65,21 +89,24 @@ def jwk_publico(chave_privada: rsa.RSAPrivateKey) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="session")
-def servidor_jwks(jwk_publico: dict[str, Any]) -> Iterator[_ServidorJwks]:
+def servidor_jwks(jwk_publico: dict[str, Any]) -> Iterator[ServidorJwks]:
     """JWKS do "OS Service" servido por HTTP real (o PyJWKClient usa urllib)."""
-    servidor = _ServidorJwks(("127.0.0.1", 0), _JwksHandler)
-    servidor.jwks = {"keys": [jwk_publico]}
-    servidor.requisicoes = 0
-    thread = threading.Thread(target=servidor.serve_forever, daemon=True)
-    thread.start()
+    servidor = _subir_servidor_jwks(jwk_publico)
     yield servidor
-    servidor.shutdown()
-    servidor.server_close()
+    _derrubar(servidor)
+
+
+@pytest.fixture
+def servidor_jwks_proprio(jwk_publico: dict[str, Any]) -> Iterator[ServidorJwks]:
+    """JWKS so deste teste, para simular falha sem afetar os outros."""
+    servidor = _subir_servidor_jwks(jwk_publico)
+    yield servidor
+    _derrubar(servidor)
 
 
 @pytest.fixture(scope="session")
-def jwks_url(servidor_jwks: _ServidorJwks) -> str:
-    return f"http://127.0.0.1:{servidor_jwks.server_port}/.well-known/jwks.json"
+def jwks_url(servidor_jwks: ServidorJwks) -> str:
+    return servidor_jwks.url
 
 
 def assinar(
