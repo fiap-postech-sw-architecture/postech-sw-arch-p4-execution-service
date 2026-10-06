@@ -149,9 +149,10 @@ class ValidadorDeTokenJWKS:
         agora = self._relogio()
         if self._breaker.barrado() or self._falha_recente(agora):
             return self._copia_velha(agora)
-        # Com copia em cache ninguem espera a busca de outro request; sem
-        # nenhuma (boot), espera no maximo o timeout de uma busca.
-        if self._copia is not None:
+        # Com copia ainda utilizavel ninguem espera a busca de outro request;
+        # sem ela (boot ou copia de mais de 1 h), espera no maximo uma busca.
+        copia = self._copia
+        if copia is not None and agora - copia.obtida_em < VELHO_MAXIMO_SEGUNDOS:
             conseguiu = self._busca.acquire(blocking=False)
         else:
             conseguiu = self._busca.acquire(timeout=_TIMEOUT_JWKS_SEGUNDOS)

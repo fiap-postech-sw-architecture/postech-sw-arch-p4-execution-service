@@ -411,3 +411,21 @@ def test_no_boot_quem_espera_uma_busca_que_falhou_nao_busca_de_novo(
 
     assert all(isinstance(erro, JwksIndisponivelError) for _, erro in resultados)
     assert servidor_jwks_proprio.requisicoes == 1
+
+
+def test_copia_de_mais_de_1h_espera_a_busca_em_curso_como_no_boot(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    # Depois de mais de 1 h sem trafego a copia nao serve mais: quem chega
+    # durante a renovacao espera por ela, em vez de responder 503 na hora.
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+    relogio.agora += VELHO_MAXIMO_SEGUNDOS + 1
+    servidor_jwks_proprio.atraso = 0.3
+
+    resultados = _validar_em_paralelo(validador, token, 10)
+
+    assert all(erro is None for _, erro in resultados)
+    assert servidor_jwks_proprio.requisicoes == 2
