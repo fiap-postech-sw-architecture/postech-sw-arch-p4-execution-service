@@ -142,7 +142,9 @@ jobs:
           retention-days: 90
 
   # Imagem de runtime e smoke do compose do servico: sobe api e banco pelo
-  # entrypoint real (migracao, seed, usuario 1001) e confere a readiness.
+  # entrypoint real (migracao, seed) e confere a readiness, o 401 sem token, o
+  # usuario 1001:1001 da imagem, a ausencia do header `server` e do access log
+  # do uvicorn.
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -19,4 +19,6 @@ fi
 # explicitamente (o uvicorn confiaria no XFF de peers loopback por padrao).
 # --no-access-log: o access log estruturado (com request_id) sai do
 # SecurityHeadersMiddleware; o do uvicorn e uma linha de texto sem campos.
-exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers --no-access-log
+# --no-server-header: a resposta nao anuncia o servidor (`server: uvicorn`).
+exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers \
+  --no-access-log --no-server-header

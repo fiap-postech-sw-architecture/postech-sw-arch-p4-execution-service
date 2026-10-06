@@ -42,16 +42,18 @@ test:
 check: lock-check lint lint-arch typecheck security test
 	@echo "Todos os gates passaram"
 
-# Smoke da imagem pelo entrypoint real (migracao, seed, usuario 1001), o job
-# build do CI: sobe a stack, confere a readiness (banco), que rota autenticada
-# sem token responde 401 e que o uvicorn nao escreve access log (so o
-# `http_request` estruturado do middleware), e derruba tudo com os volumes,
-# inclusive em falha (depois de mostrar os logs). Projeto e portas proprios
-# para nao derrubar a stack do compose-up.
+# Smoke da imagem pelo entrypoint real (migracao, seed), o job build do CI: sobe
+# a stack, confere a readiness (banco), que rota autenticada sem token responde
+# 401, que a imagem roda como 1001:1001, que a resposta nao traz o header
+# `server` e que o uvicorn nao escreve access log (so o `http_request`
+# estruturado do middleware), e derruba tudo com os volumes, inclusive em falha
+# (depois de mostrar os logs). Projeto e portas proprios para nao derrubar a
+# stack do compose-up.
+API_IMAGE ?= pytstop-execution-service:dev
 SMOKE_PORT ?= 18003
 SMOKE_DB_PORT ?= 15433
 SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
-SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) $(COMPOSE) -p pytstop-execucao-smoke
+SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
 
 smoke:
 	@status=0; \
@@ -59,12 +61,17 @@ smoke:
 	&& curl -fsS --max-time 5 $(SMOKE_URL)/api/v1/saude/pronto && echo \
 	&& codigo="$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 $(SMOKE_URL)/api/v1/estoque)" \
 	&& test "$$codigo" = 401 \
+	&& { test "$$(docker image inspect -f '{{.Config.User}}' $(API_IMAGE))" = 1001:1001 \
+		|| { echo "smoke: a imagem nao roda como 1001:1001" >&2; false; }; } \
+	&& cabecalhos="$$(curl -fsS --max-time 5 -D - -o /dev/null $(SMOKE_URL)/api/v1/saude)" \
+	&& { ! printf '%s\n' "$$cabecalhos" | grep -qi '^server:' \
+		|| { echo "smoke: a resposta traz o header server" >&2; false; }; } \
 	&& logs="$$($(SMOKE_COMPOSE) logs --no-color api)" \
 	&& { printf '%s\n' "$$logs" | grep -q '"event": "http_request"' \
 		|| { echo "smoke: o access log estruturado (http_request) nao saiu" >&2; false; }; } \
 	&& { ! printf '%s\n' "$$logs" | grep -q 'uvicorn.access' \
 		|| { echo "smoke: o uvicorn escreveu access log (--no-access-log nao vale)" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token e so o access log estruturado" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server e so o access log estruturado" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
