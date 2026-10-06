@@ -1,7 +1,8 @@
 # Dev do servico isolado: API + PostgreSQL 16 proprio (banco `execucao`).
 # A stack completa (OS, Billing, RabbitMQ, observabilidade) fica no repo platform.
-# Sem o OS Service no ar, rotas autenticadas respondem 503 (JWKS indisponivel);
-# aponte JWKS_URL/BILLING_URL para servicos acessiveis quando quiser exercita-las.
+# Sem o OS Service no ar, rota autenticada com token responde 503 (JWKS
+# indisponivel) e sem token 401; aponte JWKS_URL/BILLING_URL para servicos
+# acessiveis quando quiser exercita-las. Portas so em 127.0.0.1.
 services:
   api:
     build:
@@ -12,7 +13,7 @@ services:
     image: ${API_IMAGE:-pytstop-execution-service:dev}
     restart: unless-stopped
     ports:
-      - "${API_PORT:-8003}:8000"
+      - "127.0.0.1:${API_PORT:-8003}:8000"
     depends_on:
       postgres:
         condition: service_healthy

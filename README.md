@@ -87,10 +87,13 @@ O boot falha com mensagem clara se faltar uma variável obrigatória.
 ## Como rodar
 
 ```bash
-make up      # API em http://localhost:8003 + PostgreSQL (127.0.0.1:5433), migrações e seed no boot
-make check   # ruff, ruff format, import-linter, mypy strict, bandit e testes com gate de cobertura (90%)
-make down    # derruba e apaga o volume
+make compose-up    # API em http://127.0.0.1:8003 + PostgreSQL (127.0.0.1:5433), migrações e seed no boot
+make compose-logs  # acompanha o log da API
+make check         # uv.lock em dia, ruff, ruff format, import-linter, mypy strict, bandit e testes com gate de cobertura (90%)
+make compose-down  # derruba e apaga o volume
 ```
+
+Fora do compose, `.env.example` traz as variáveis com os valores de demonstração (`cp .env.example .env`, depois `set -a; . ./.env; set +a; make run`).
 
 Sem o OS Service no ar, as rotas autenticadas respondem 503 (JWKS indisponível): aponte `JWKS_URL` e `BILLING_URL` para serviços acessíveis ou use a stack completa do repositório `platform`.
 
