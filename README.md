@@ -118,10 +118,10 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 | Workflow | Jobs | O que garante |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | ruff + import-linter, mypy strict, bandit, testes com gate de 90% (relatório por pacote no summary e `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`) e imagem que sobe e importa a aplicação |
+| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 90% (relatório por pacote no summary e `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, usuário 1001, readiness 200 e 401 sem token) |
 | `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos na árvore e CVE HIGH/CRITICAL com correção na imagem; roda também toda segunda-feira |
 
-`make check` roda localmente os mesmos gates de código do job `CI`.
+`make check` roda localmente os mesmos gates de código do job `CI`, e `make smoke` o do job `build`.
 
 ## Repositórios da fase 4
 

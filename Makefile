@@ -8,7 +8,7 @@ GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
 .PHONY: install lock-check lint format typecheck security lint-arch test check \
-	compose-up compose-down compose-logs migrate seed run
+	smoke compose-up compose-down compose-logs migrate seed run
 
 install:
 	uv sync --frozen
@@ -41,6 +41,28 @@ test:
 
 check: lock-check lint lint-arch typecheck security test
 	@echo "Todos os gates passaram"
+
+# Smoke da imagem pelo entrypoint real (migracao, seed, usuario 1001), o job
+# build do CI: sobe a stack, confere a readiness (banco) e que rota autenticada
+# sem token responde 401, e derruba tudo com os volumes, inclusive em falha
+# (depois de mostrar os logs). Projeto e portas proprios para nao derrubar a
+# stack do compose-up.
+SMOKE_PORT ?= 18003
+SMOKE_DB_PORT ?= 15433
+SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
+SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) $(COMPOSE) -p pytstop-execucao-smoke
+
+smoke:
+	@status=0; \
+	$(SMOKE_COMPOSE) up -d --build --wait \
+	&& curl -fsS --max-time 5 $(SMOKE_URL)/api/v1/saude/pronto && echo \
+	&& codigo="$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 $(SMOKE_URL)/api/v1/estoque)" \
+	&& test "$$codigo" = 401 \
+	&& echo "smoke ok: readiness 200 e rota autenticada sem token 401" \
+	|| status=$$?; \
+	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
+	$(SMOKE_COMPOSE) down -v; \
+	exit $$status
 
 # Stack local: API + PostgreSQL 16 proprio, migracoes e seed do estoque no boot.
 compose-up:
