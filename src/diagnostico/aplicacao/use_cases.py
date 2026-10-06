@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import structlog
+
+from src.diagnostico.aplicacao.events import (
+    DiagnosticoConcluidoEvent,
+    DiagnosticoDescartadoEvent,
+    DiagnosticoIniciadoEvent,
+    ItemDados,
+)
+from src.diagnostico.dominio.diagnostico import Diagnostico, TipoItem
+from src.diagnostico.dominio.exceptions import (
+    DiagnosticoNaoEncontradoException,
+    ItensInvalidosException,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from uuid import UUID
+
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.diagnostico.aplicacao.ports import CatalogoDePecas, ValidadorDeItens
+    from src.diagnostico.dominio.diagnostico import (
+        ItemDiagnostico,
+        StatusDiagnostico,
+    )
+    from src.diagnostico.dominio.repository import DiagnosticoRepository
+    from src.diagnostico.dominio.veiculo import Veiculo
+
+_log = structlog.get_logger(__name__)
+
+
+def _obter(
+    repo: DiagnosticoRepository, ordem_id: UUID, *, com_lock: bool = False
+) -> Diagnostico:
+    diagnostico = repo.obter(ordem_id, com_lock=com_lock)
+    if diagnostico is None:
+        raise DiagnosticoNaoEncontradoException(ordem_id)
+    return diagnostico
+
+
+class RegistrarSolicitacaoDeDiagnostico:
+    """Comando ``SolicitarDiagnostico`` (T2): poe a ordem na fila do mecanico.
+
+    Idempotente por ordem: reenvio do orquestrador devolve o diagnostico
+    existente sem mudar nada. Nao ha resposta no catalogo; o fato seguinte e
+    ``DiagnosticoIniciado``, quando o mecanico comeca.
+    """
+
+    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
+        self._repo = repo
+        self._uow = uow
+
+    def executar(
+        self, ordem_id: UUID, veiculo: Veiculo, descricao_problema: str
+    ) -> Diagnostico:
+        novo = Diagnostico.solicitar(
+            ordem_id=ordem_id,
+            veiculo=veiculo,
+            descricao_problema=descricao_problema,
+            agora=datetime.now(UTC),
+        )
+        with self._uow:
+            existente = self._repo.obter(ordem_id)
+            if existente is not None:
+                return existente
+            self._repo.salvar(novo)
+            self._uow.commit()
+        return novo
+
+
+class ListarDiagnosticos:
+    def __init__(self, repo: DiagnosticoRepository) -> None:
+        self._repo = repo
+
+    def executar(
+        self, status: StatusDiagnostico | None, offset: int, limit: int
+    ) -> tuple[list[Diagnostico], int]:
+        """Pagina por ordem de chegada e o total com o mesmo filtro."""
+        return (
+            self._repo.listar(status, offset=offset, limit=limit),
+            self._repo.contar(status),
+        )
+
+
+class IniciarDiagnostico:
+    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
+        self._repo = repo
+        self._uow = uow
+
+    def executar(self, ordem_id: UUID, mecanico_id: UUID) -> Diagnostico:
+        """Mecanico assume o diagnostico; emite ``DiagnosticoIniciado``.
+
+        Repetir pelo mesmo mecanico devolve o estado atual sem novo evento.
+        """
+        agora = datetime.now(UTC)
+        with self._uow:
+            diagnostico = _obter(self._repo, ordem_id, com_lock=True)
+            if diagnostico.iniciar(mecanico_id, agora):
+                self._repo.salvar(diagnostico)
+                self._uow.registrar_evento(
+                    DiagnosticoIniciadoEvent(
+                        ordem_id=ordem_id,
+                        ocorrido_em=agora,
+                        mecanico_id=mecanico_id,
+                        iniciado_em=agora,
+                    )
+                )
+                self._uow.commit()
+        return diagnostico
+
+
+class ConcluirDiagnostico:
+    """Mecanico registra servicos e pecas; emite ``DiagnosticoConcluido``.
+
+    Tres etapas: (1) leitura curta que confere estado/responsavel/itens no
+    agregado e as pecas no estoque local; (2) chamada ao Billing (timeout,
+    retry e circuit breaker) sem transacao aberta, com a conexao ja devolvida
+    ao pool; (3) escrita curta que le a linha de novo, sob lock, e conclui.
+    So o mecanico que iniciou conclui; o admin (pode tudo) conclui em nome
+    dele, sem trocar o responsavel.
+    """
+
+    def __init__(
+        self,
+        repo: DiagnosticoRepository,
+        catalogo: CatalogoDePecas,
+        validador: ValidadorDeItens,
+        uow: UnitOfWork,
+    ) -> None:
+        self._repo = repo
+        self._catalogo = catalogo
+        self._validador = validador
+        self._uow = uow
+
+    def executar(
+        self,
+        ordem_id: UUID,
+        mecanico_id: UUID,
+        itens: Sequence[ItemDiagnostico],
+        observacoes: str,
+        *,
+        pelo_admin: bool = False,
+    ) -> Diagnostico:
+        """Repetir pelo mesmo mecanico devolve o diagnostico ja concluido, sem evento.
+
+        Raises:
+            ItensInvalidosException: peca sem cadastro ativo ou codigo sem preco.
+            DependenciaIndisponivelException: Billing fora do ar (503).
+        """
+        # A saida do bloco fecha a sessao: nenhuma conexao fica presa enquanto o
+        # Billing responde (ate 3 tentativas de 2 s).
+        with self._uow:
+            atual = _obter(self._repo, ordem_id)
+            responsavel = _responsavel(atual, mecanico_id, pelo_admin=pelo_admin)
+            if atual.concluido_por(responsavel):
+                return atual
+            atual.validar_conclusao(responsavel, itens)
+            self._validar_estoque_local(itens)
+        self._validar_no_billing(itens)
+        agora = datetime.now(UTC)
+        with self._uow:
+            diagnostico = _obter(self._repo, ordem_id, com_lock=True)
+            responsavel = _responsavel(diagnostico, mecanico_id, pelo_admin=pelo_admin)
+            if diagnostico.concluir(responsavel, itens, observacoes, agora):
+                self._repo.salvar(diagnostico)
+                self._uow.registrar_evento(
+                    DiagnosticoConcluidoEvent(
+                        ordem_id=ordem_id,
+                        ocorrido_em=agora,
+                        itens=tuple(
+                            ItemDados(
+                                tipo=item.tipo.value,
+                                codigo=item.codigo,
+                                quantidade=item.quantidade,
+                            )
+                            for item in diagnostico.itens
+                        ),
+                        observacoes=diagnostico.observacoes,
+                        concluido_em=agora,
+                    )
+                )
+                self._uow.commit()
+        return diagnostico
+
+    def _validar_estoque_local(self, itens: Sequence[ItemDiagnostico]) -> None:
+        # Antes do Billing: barato e evita a chamada remota quando ja ha erro.
+        pecas = [item.codigo for item in itens if item.tipo is TipoItem.PECA]
+        sem_estoque = self._catalogo.skus_indisponiveis(pecas) if pecas else []
+        if sem_estoque:
+            msg = (
+                "Pecas sem cadastro ativo no estoque: "
+                f"{', '.join(sem_estoque)}. Cadastre-as (admin) ou corrija o codigo."
+            )
+            raise ItensInvalidosException(msg)
+
+    def _validar_no_billing(self, itens: Sequence[ItemDiagnostico]) -> None:
+        pecas = [item.codigo for item in itens if item.tipo is TipoItem.PECA]
+        servicos = [item.codigo for item in itens if item.tipo is TipoItem.SERVICO]
+        invalidos = self._validador.codigos_invalidos(servicos=servicos, pecas=pecas)
+        if invalidos:
+            msg = (
+                "Codigos sem preco na tabela do Billing: "
+                f"{', '.join(invalidos)}. Corrija o codigo ou cadastre o preco."
+            )
+            raise ItensInvalidosException(msg)
+
+
+def _responsavel(
+    diagnostico: Diagnostico, mecanico_id: UUID, *, pelo_admin: bool
+) -> UUID:
+    """Quem conclui: o proprio mecanico ou, para o admin, quem iniciou."""
+    if pelo_admin and diagnostico.mecanico_id is not None:
+        return diagnostico.mecanico_id
+    return mecanico_id
+
+
+class DescartarDiagnostico:
+    """Comando de compensacao ``DescartarDiagnostico``, idempotente por ordem.
+
+    Qualquer estado nao final vira DESCARTADO e a resposta
+    ``DiagnosticoDescartado`` e emitida; repetido, so reemite a resposta. O
+    ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
+    """
+
+    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
+        self._repo = repo
+        self._uow = uow
+
+    def executar(self, ordem_id: UUID) -> None:
+        agora = datetime.now(UTC)
+        with self._uow:
+            diagnostico = _obter(self._repo, ordem_id, com_lock=True)
+            diagnostico.descartar(agora)
+            self._repo.salvar(diagnostico)
+            self._uow.registrar_evento(
+                DiagnosticoDescartadoEvent(ordem_id=ordem_id, ocorrido_em=agora)
+            )
+            self._uow.commit()
+        _log.info("diagnosis_discarded", ordem_id=str(ordem_id))

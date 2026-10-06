@@ -1,0 +1,24 @@
+# So o necessario para rodar entra na imagem (o COPY . . leva o resto).
+.git
+.github/
+.claude/
+.cursor/
+docs/
+tests/
+*.md
+Makefile
+docker-compose.yml
+.gitleaks.toml
+
+**/__pycache__
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv
+.env*
+.DS_Store

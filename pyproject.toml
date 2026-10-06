@@ -1,0 +1,170 @@
+[project]
+name = "pytstop-execution-service"
+version = "0.1.0"
+description = "PytStop fase 4: Execution Service (diagnostico, fila de execucao e estoque de pecas)"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.51.0",
+    "sqlalchemy>=2.0.52,<2.1",
+    "psycopg2-binary>=2.9.12",
+    "alembic>=1.19.1",
+    "pydantic>=2.13.4,<3",
+    "structlog>=26.1.0",
+    "httpx>=0.28.1",
+    # 2.13.x tem 27 advisories (bypass de HMAC vazio, forja de token); [crypto]
+    # traz o cryptography exigido pelo RS256.
+    "pyjwt[crypto]>=2.15.1",
+    "cryptography>=50.0.1",  # PYSEC-2026-3552 / CVE-2026-69247 antes da 50.0.1
+    "anyio>=4.15.1",  # advisory de out/2026 nas versoes anteriores
+    "prometheus-client>=0.26.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-timeout>=2.4.0",
+    "testcontainers[postgres]>=4.15.0",
+    "respx>=0.22.0",
+    "ruff>=0.16.5",
+    "mypy>=2.3.1",
+    "bandit>=1.9.4",
+    "import-linter>=2.14",
+]
+
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+# Runtime e 3.14, mas o target fica em py313 de proposito (heranca do p3): com
+# py314 o `ruff format` remove os parenteses de `except (A, B):` (PEP 758),
+# sintaxe que o SonarQube e revisores automaticos ainda acusam como erro.
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "TC", "RUF", "S",
+    "PT", "ANN", "BLE001", "FBT001", "C901", "PLR2004", "PLR0912", "PLR0913",
+    "PLR0915", "PLW0603", "PYI034", "LOG014",
+]
+
+[tool.ruff.lint.flake8-type-checking]
+# Campos de modelos Pydantic sao avaliados em runtime (TC001 falso-positivo).
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101", "S105", "S106", "S311", "TC", "ANN", "PLR2004", "PLR0913",
+    "PLR0915", "C901", "FBT001", "BLE001",
+]
+"**/exceptions.py" = ["N818"]
+
+# Contratos de camada (DDD + onion), verificados por `uv run lint-imports`.
+# `infraestrutura` fica fora do contrato de camadas porque importa aplicacao e
+# dominio legitimamente (adapters implementam ports); o sentido proibido
+# (dominio/aplicacao -> infraestrutura) e coberto pelo contrato forbidden.
+[tool.importlinter]
+root_packages = ["src"]
+
+[[tool.importlinter.contracts]]
+name = "Camadas por contexto (interfaces -> aplicacao -> dominio)"
+type = "layers"
+layers = ["interfaces", "aplicacao", "dominio"]
+containers = [
+    "src.compartilhado",
+    "src.estoque",
+    "src.diagnostico",
+    "src.execucao",
+]
+
+[[tool.importlinter.contracts]]
+name = "Dominio e aplicacao nao importam infraestrutura"
+type = "forbidden"
+source_modules = [
+    "src.compartilhado.dominio",
+    "src.compartilhado.aplicacao",
+    "src.estoque.dominio",
+    "src.estoque.aplicacao",
+    "src.diagnostico.dominio",
+    "src.diagnostico.aplicacao",
+    "src.execucao.dominio",
+    "src.execucao.aplicacao",
+]
+forbidden_modules = [
+    "src.compartilhado.infraestrutura",
+    "src.estoque.infraestrutura",
+    "src.diagnostico.infraestrutura",
+    "src.execucao.infraestrutura",
+]
+
+[[tool.importlinter.contracts]]
+name = "compartilhado nao conhece contexto algum"
+type = "forbidden"
+source_modules = ["src.compartilhado"]
+forbidden_modules = ["src.estoque", "src.diagnostico", "src.execucao"]
+
+# Independencia entre contextos: o nucleo (dominio + aplicacao) de um contexto
+# nao importa o nucleo de outro; a conversa passa por ports na aplicacao e
+# adapters na infraestrutura. Um contrato forbidden por contexto (um
+# `independence` unico proibiria tambem aplicacao -> dominio do proprio contexto).
+[[tool.importlinter.contracts]]
+name = "estoque nao acopla no nucleo de outros contextos"
+type = "forbidden"
+source_modules = ["src.estoque.dominio", "src.estoque.aplicacao"]
+forbidden_modules = [
+    "src.diagnostico.dominio",
+    "src.diagnostico.aplicacao",
+    "src.execucao.dominio",
+    "src.execucao.aplicacao",
+]
+
+[[tool.importlinter.contracts]]
+name = "diagnostico nao acopla no nucleo de outros contextos"
+type = "forbidden"
+source_modules = ["src.diagnostico.dominio", "src.diagnostico.aplicacao"]
+forbidden_modules = [
+    "src.estoque.dominio",
+    "src.estoque.aplicacao",
+    "src.execucao.dominio",
+    "src.execucao.aplicacao",
+]
+
+[[tool.importlinter.contracts]]
+name = "execucao nao acopla no nucleo de outros contextos"
+type = "forbidden"
+source_modules = ["src.execucao.dominio", "src.execucao.aplicacao"]
+forbidden_modules = [
+    "src.estoque.dominio",
+    "src.estoque.aplicacao",
+    "src.diagnostico.dominio",
+    "src.diagnostico.aplicacao",
+]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+markers = [
+    "integracao: testes que sobem PostgreSQL real via testcontainers",
+]
+addopts = "--strict-markers --cov --cov-report=term-missing:skip-covered"
+testpaths = ["tests"]
+# Teto por teste: uma regressao de lock no teste de concorrencia vira falha
+# visivel em vez de pendurar a suite.
+timeout = 120
+
+[tool.bandit]
+targets = ["src"]

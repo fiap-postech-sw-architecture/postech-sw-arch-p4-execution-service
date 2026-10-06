@@ -1,10 +1,109 @@
 # PytStop fase 4: Execution Service
 
-Serviço de execução e produção: fila de diagnóstico e de execução, apontamentos dos mecânicos e estoque de peças (reserva, baixa e liberação). Banco próprio: PostgreSQL.
+Serviço de execução e produção da oficina: fila de diagnóstico, fila de execução, apontamentos do mecânico e estoque físico de peças (reserva, liberação e baixa). Banco próprio: PostgreSQL 16 (`execucao`). Participa da saga de atendimento orquestrada pelo OS Service.
 
 Parte da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT): o PytStop, sistema de gestão de oficina mecânica das fases anteriores, refatorado em microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes.
 
-**Status:** em construção. Este README será substituído pela documentação completa do serviço (arquitetura, fluxos, exemplos de API, testes e cobertura, pipelines).
+**Status:** domínio, casos de uso, API REST e outbox transacional prontos. A mensageria (relay da outbox para o RabbitMQ e consumidor de comandos) entra no próximo PR; até lá os casos de uso dos comandos da saga são exercitados pelos testes. Esta página ainda ganha a documentação completa (fluxos detalhados, Postman, pipelines, evidências de cobertura).
+
+## Arquitetura
+
+DDD + arquitetura em camadas (`dominio` ← `aplicacao` ← `infraestrutura`/`interfaces`), com contratos verificados pelo `import-linter`. Três contextos, sem import entre os núcleos (a conversa passa por ports):
+
+| Contexto | Agregados | Responsabilidade |
+|---|---|---|
+| `estoque` | `ItemEstoque` (SKU como VO), `Reserva` | Saldo físico por SKU; reserva tudo-ou-nada por ordem, liberação e baixa |
+| `diagnostico` | `Diagnostico` (identidade = `ordem_id`) | Fila do mecânico; itens (serviços e peças) validados no Billing e no estoque local |
+| `execucao` | `Execucao` (identidade = `ordem_id`) | Fila de execução por prioridade; início (pivot da saga) e finalização com baixa do estoque |
+
+- **Saldo de peça:** `quantidade_disponivel` é o físico (inclui o reservado); `quantidade_reservada` está comprometida com reservas ativas; `quantidade_livre` é o que ainda pode ser reservado. O invariante `0 <= reservada <= disponivel` vale no agregado e num `CHECK` do banco.
+- **Reserva concorrente:** o repositório trava as linhas com `SELECT ... FOR UPDATE` em ordem de SKU (sem deadlock entre reservas) e relê o valor comitado; com qualquer peça em falta nada é separado, a recusa fica registrada (status `RECUSADA`) e a resposta lista `{sku, solicitado, disponivel}`.
+- **Outbox transacional (padrão do p3):** cada caso de uso grava o evento do catálogo da saga na tabela `outbox`, na mesma transação do estado, já no formato do envelope (`mensagem_id`, `tipo`, `correlation_id = ordem_id`, `ocorrido_em`, `dados`), e emite `NOTIFY outbox_novo` no commit.
+- **Única chamada síncrona entre serviços:** conclusão do diagnóstico → Billing `POST /api/v1/precos/validacao`, com timeout de 2 s, 2 retries com jitter em erro transitório e circuit breaker (5 falhas abrem por 30 s; depois, uma chamada de prova). O token do mecânico é repassado no `Authorization`. Com o circuito aberto, a API responde 503 com o tempo para tentar de novo.
+- **Autenticação:** JWT RS256 emitido pelo OS Service, validado pela chave pública do JWKS (`JWKS_URL`, cache de 10 min, timeout de 2 s), conferindo assinatura, `iss=pytstop-os-service`, `aud=pytstop` e `exp`. Nenhum segredo compartilhado entre serviços.
+
+Proveniência: `src/compartilhado` e o contexto `estoque` partem do snapshot do p3 em `08dcffe` (base de entidades, UoW, outbox, logging com mascaramento de PII, handlers de erro, padrões de teste, Dockerfile), enxugados ao que este serviço usa.
+
+## Participação na saga
+
+| Comando (OS → Execução) | Caso de uso | Resposta (evento) | Repetição do comando |
+|---|---|---|---|
+| `SolicitarDiagnostico` | `RegistrarSolicitacaoDeDiagnostico` | — (o próximo fato é `DiagnosticoIniciado`) | devolve o diagnóstico existente |
+| `DescartarDiagnostico` | `DescartarDiagnostico` | `DiagnosticoDescartado` | reemite a resposta |
+| `ReservarPecas` | `ReservarPecas` | `PecasReservadas` ou `ReservaDePecasFalhou{faltantes}` | reemite a mesma resposta, sem decidir de novo (a recusa fica registrada) |
+| `LiberarReserva` | `LiberarReserva` | `ReservaLiberada` (409 se a reserva já foi consumida) | reemite a resposta, sem devolver de novo |
+| `AgendarExecucao` | `AgendarExecucao` | `ExecucaoAgendada{posicao_na_fila}` | reemite com a posição atual |
+| `CancelarExecucao` | `CancelarExecucao` | `ExecucaoCancelada` (409 depois de iniciada) | reemite a resposta |
+
+Ações do mecânico pela API: `DiagnosticoIniciado`, `DiagnosticoConcluido`, `ExecucaoIniciada` (pivot: daqui em diante a OS não cancela, por isso o início exige a reserva de peças ativa) e `ExecucaoFinalizada{pecas_consumidas}` (baixa do estoque na mesma transação). Só o mecânico que iniciou conclui o diagnóstico ou finaliza a execução; o admin pode fazê-lo em nome dele. Repetir a ação devolve o estado atual sem novo evento. O `motivo` dos comandos de compensação não é registrado aqui: o histórico da saga fica no OS Service.
+
+## API
+
+Swagger em `/docs`. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
+
+| Método e rota | Papéis | O que faz |
+|---|---|---|
+| `GET /api/v1/diagnosticos?status=` | mecânico, admin | Fila de diagnósticos por ordem de chegada |
+| `POST /api/v1/diagnosticos/{ordem_id}/inicio` | mecânico, admin | Assume o diagnóstico |
+| `POST /api/v1/diagnosticos/{ordem_id}/conclusao` | mecânico, admin | Registra `itens` (`servico`/`peca`, `codigo`, `quantidade`) e `observacoes` |
+| `GET /api/v1/fila` | mecânico, atendente, admin | Fila de execução com a posição de cada ordem |
+| `POST /api/v1/execucoes/{ordem_id}/inicio` | mecânico, admin | Inicia o reparo |
+| `POST /api/v1/execucoes/{ordem_id}/finalizacao` | mecânico, admin | Finaliza e baixa as peças reservadas |
+| `GET /api/v1/estoque`, `GET /api/v1/estoque/{sku}` | mecânico, atendente, admin | Consulta o estoque |
+| `POST /api/v1/estoque`, `PUT /api/v1/estoque/{sku}`, `DELETE /api/v1/estoque/{sku}` | admin | Cadastro, nome/situação e desativação |
+| `PATCH /api/v1/estoque/{sku}/quantidade` | admin | Ajuste do saldo físico (nunca abaixo do reservado) |
+| `GET /api/v1/saude`, `GET /metrics` | — | Liveness/readiness e métricas Prometheus (`http_request_duration_seconds`, `pytstop_circuit_breaker_aberto`) |
+
+Exemplos (com `TOKEN` emitido pelo OS Service):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8003/api/v1/diagnosticos?status=AGUARDANDO"
+
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"itens": [{"tipo": "servico", "codigo": "SRV-TROCA-PASTILHA", "quantidade": 1},
+                 {"tipo": "peca", "codigo": "PEC-PASTILHA-FREIO", "quantidade": 1}],
+       "observacoes": "pastilhas no limite"}' \
+  http://localhost:8003/api/v1/diagnosticos/$ORDEM_ID/conclusao
+
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"quantidade_disponivel": 12}' http://localhost:8003/api/v1/estoque/PEC-VELA/quantidade
+```
+
+## Configuração
+
+| Variável | Obrigatória | Uso |
+|---|---|---|
+| `DATABASE_URL` | sim | PostgreSQL do serviço |
+| `JWKS_URL` | sim | JWKS do OS Service (`/.well-known/jwks.json`) |
+| `BILLING_URL` | sim | Base do Billing para a validação de preços |
+| `RUN_MIGRATIONS_ON_STARTUP`, `RUN_SEED_ON_STARTUP` | não | Ligados no compose; no Kubernetes a migração roda em Job |
+
+O boot falha com mensagem clara se faltar uma variável obrigatória.
+
+## Como rodar
+
+```bash
+make up      # API em http://localhost:8003 + PostgreSQL (127.0.0.1:5433), migrações e seed no boot
+make check   # ruff, ruff format, import-linter, mypy strict, bandit e testes com gate de cobertura (90%)
+make down    # derruba e apaga o volume
+```
+
+Sem o OS Service no ar, as rotas autenticadas respondem 503 (JWKS indisponível): aponte `JWKS_URL` e `BILLING_URL` para serviços acessíveis ou use a stack completa do repositório `platform`.
+
+**Seed de demonstração** (roda no boot do compose; avulso: `DATABASE_URL=... make seed`, idempotente: só cria o que falta e nunca altera saldo existente). Os SKUs são os mesmos da tabela de preços do Billing:
+
+| SKU | Nome | Saldo |
+|---|---|---|
+| `PEC-OLEO-5W30` | Oleo 5W30 (litro) | 40 |
+| `PEC-FILTRO-OLEO` | Filtro de oleo | 20 |
+| `PEC-PASTILHA-FREIO` | Jogo de pastilhas de freio | 10 |
+| `PEC-DISCO-FREIO` | Disco de freio | 6 |
+| `PEC-AMORTECEDOR` | Amortecedor dianteiro | 4 |
+| `PEC-VELA` | Vela de ignicao | 0 (cenário de falta de peça da demo da saga) |
+
+## Testes
+
+`make test` (ou `uv run pytest`) roda os unitários e os de integração: estes sobem um PostgreSQL 16 efêmero via testcontainers, aplicam as migrações do Alembic e cobrem repositórios, outbox (incluindo o `NOTIFY`), API com JWT real (chave RSA gerada no teste e JWKS servido por HTTP local), Billing simulado com `respx` e a disputa concorrente pela última unidade de uma peça (uma reserva vence, a outra recebe `ReservaDePecasFalhou`, sem saldo negativo). O gate de cobertura (ramos incluídos) é de 90% no `.coveragerc`.
 
 ## Repositórios da fase 4
 

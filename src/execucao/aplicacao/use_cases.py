@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import structlog
+
+from src.compartilhado.dominio.exceptions import ViolacaoRegraDeNegocioException
+from src.execucao.aplicacao.events import (
+    ExecucaoAgendadaEvent,
+    ExecucaoCanceladaEvent,
+    ExecucaoFinalizadaEvent,
+    ExecucaoIniciadaEvent,
+)
+from src.execucao.dominio.exceptions import ExecucaoNaoEncontradaException
+from src.execucao.dominio.execucao import Execucao, StatusExecucao
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.execucao.aplicacao.ports import EstoquePort, FilaDeExecucao
+    from src.execucao.dominio.repository import ExecucaoRepository
+
+_log = structlog.get_logger(__name__)
+
+
+def _obter(
+    repo: ExecucaoRepository, ordem_id: UUID, *, com_lock: bool = False
+) -> Execucao:
+    execucao = repo.obter(ordem_id, com_lock=com_lock)
+    if execucao is None:
+        raise ExecucaoNaoEncontradaException(ordem_id)
+    return execucao
+
+
+def _sem_reserva() -> ViolacaoRegraDeNegocioException:
+    msg = (
+        "A ordem nao tem reserva de pecas ativa: sem ela nao ha baixa de estoque "
+        "e a execucao nao pode seguir"
+    )
+    return ViolacaoRegraDeNegocioException(msg)
+
+
+class AgendarExecucao:
+    """Comando ``AgendarExecucao`` (T7): poe a ordem na fila de execucao.
+
+    Responde ``ExecucaoAgendada{posicao_na_fila}``. Idempotente por ordem: com a
+    execucao ainda AGUARDANDO, o reenvio so reemite a resposta com a posicao
+    atual (a prioridade original fica); ja iniciada, finalizada ou cancelada, o
+    comando atrasado e ignorado sem resposta.
+    """
+
+    def __init__(
+        self, repo: ExecucaoRepository, fila: FilaDeExecucao, uow: UnitOfWork
+    ) -> None:
+        self._repo = repo
+        self._fila = fila
+        self._uow = uow
+
+    def executar(self, ordem_id: UUID, prioridade: int) -> Execucao:
+        agora = datetime.now(UTC)
+        nova = Execucao.agendar(ordem_id=ordem_id, prioridade=prioridade, agora=agora)
+        with self._uow:
+            execucao = self._repo.obter(ordem_id)
+            if execucao is None:
+                execucao = nova
+                self._repo.salvar(execucao)
+            elif execucao.status is not StatusExecucao.AGUARDANDO:
+                _log.info(
+                    "duplicate_schedule_command_ignored",
+                    ordem_id=str(ordem_id),
+                    status=execucao.status,
+                )
+                return execucao
+            self._uow.registrar_evento(
+                ExecucaoAgendadaEvent(
+                    ordem_id=ordem_id,
+                    ocorrido_em=agora,
+                    posicao_na_fila=self._fila.posicao(execucao),
+                )
+            )
+            self._uow.commit()
+        return execucao
+
+
+class CancelarExecucao:
+    """Comando de compensacao ``CancelarExecucao``, idempotente por ordem.
+
+    Tira a ordem da fila e responde ``ExecucaoCancelada``; repetido, so reemite
+    a resposta. Depois de iniciada (pivot da saga) nao cancela: 409. O
+    ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
+    """
+
+    def __init__(self, repo: ExecucaoRepository, uow: UnitOfWork) -> None:
+        self._repo = repo
+        self._uow = uow
+
+    def executar(self, ordem_id: UUID) -> None:
+        agora = datetime.now(UTC)
+        with self._uow:
+            execucao = _obter(self._repo, ordem_id, com_lock=True)
+            execucao.cancelar(agora)
+            self._repo.salvar(execucao)
+            self._uow.registrar_evento(
+                ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)
+            )
+            self._uow.commit()
+        _log.info("execution_cancelled", ordem_id=str(ordem_id))
+
+
+class IniciarExecucao:
+    def __init__(
+        self, repo: ExecucaoRepository, estoque: EstoquePort, uow: UnitOfWork
+    ) -> None:
+        self._repo = repo
+        self._estoque = estoque
+        self._uow = uow
+
+    def executar(self, ordem_id: UUID, mecanico_id: UUID) -> Execucao:
+        """Mecanico tira a ordem da fila; emite ``ExecucaoIniciada`` (pivot).
+
+        Exige a reserva de pecas ativa: depois do pivot a OS nao cancela, e uma
+        execucao sem reserva nunca conseguiria finalizar (baixa impossivel).
+        Repetir pelo mesmo mecanico devolve o estado atual sem novo evento.
+        """
+        agora = datetime.now(UTC)
+        with self._uow:
+            execucao = _obter(self._repo, ordem_id, com_lock=True)
+            if execucao.iniciar(mecanico_id, agora):
+                if not self._estoque.tem_reserva_ativa(ordem_id):
+                    raise _sem_reserva()
+                self._repo.salvar(execucao)
+                self._uow.registrar_evento(
+                    ExecucaoIniciadaEvent(
+                        ordem_id=ordem_id,
+                        ocorrido_em=agora,
+                        mecanico_id=mecanico_id,
+                        iniciada_em=agora,
+                    )
+                )
+                self._uow.commit()
+        return execucao
+
+
+class FinalizarExecucao:
+    """Mecanico encerra o reparo; consome a reserva e emite ``ExecucaoFinalizada``.
+
+    Finalizacao e baixa de estoque saem na mesma transacao local (mesmo banco):
+    ou as duas acontecem, ou nenhuma. So o mecanico que iniciou finaliza; o
+    admin (pode tudo) finaliza em nome dele, sem trocar o responsavel.
+    """
+
+    def __init__(
+        self, repo: ExecucaoRepository, estoque: EstoquePort, uow: UnitOfWork
+    ) -> None:
+        self._repo = repo
+        self._estoque = estoque
+        self._uow = uow
+
+    def executar(
+        self, ordem_id: UUID, mecanico_id: UUID, *, pelo_admin: bool = False
+    ) -> Execucao:
+        """Repetir pelo mesmo mecanico devolve o estado atual sem nova baixa."""
+        agora = datetime.now(UTC)
+        with self._uow:
+            execucao = _obter(self._repo, ordem_id, com_lock=True)
+            responsavel = (
+                execucao.mecanico_id
+                if pelo_admin and execucao.mecanico_id is not None
+                else mecanico_id
+            )
+            if not execucao.finalizar(responsavel, agora):
+                return execucao
+            pecas = self._estoque.consumir_reserva(ordem_id, agora)
+            if pecas is None:
+                raise _sem_reserva()
+            self._repo.salvar(execucao)
+            self._uow.registrar_evento(
+                ExecucaoFinalizadaEvent(
+                    ordem_id=ordem_id,
+                    ocorrido_em=agora,
+                    finalizada_em=agora,
+                    pecas_consumidas=tuple(pecas),
+                )
+            )
+            self._uow.commit()
+        return execucao
