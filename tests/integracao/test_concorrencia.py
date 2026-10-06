@@ -34,6 +34,7 @@ from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
     ReservaSQLAlchemyRepository,
 )
+from src.estoque.infraestrutura.seed import ITENS_DEMO, semear
 from src.execucao.aplicacao.use_cases import (
     AgendarExecucao,
     FinalizarExecucao,
@@ -452,3 +453,55 @@ def test_escrita_do_admin_espera_a_reserva_e_ve_o_reservado(
         item = ItemEstoqueSQLAlchemyRepository(session).obter_por_sku(VELA)
     assert item is not None
     assert item.ativo
+
+
+def _com_insercao_pendente(
+    engine: Engine,
+    insercao: str,
+    parametros: dict[str, object],
+    disputa: Callable[[], object],
+) -> dict[str, BaseException]:
+    """Outra transacao ja inseriu a mesma chave e nao comitou.
+
+    ``disputa`` le (nao ve a linha), insere e bloqueia no indice unico; so entao
+    a primeira comita, e a disputa recebe a violacao de unicidade.
+    """
+    erros: dict[str, BaseException] = {}
+
+    def rodar() -> None:
+        try:
+            disputa()
+        except BaseException as exc:  # o teste confere o tipo
+            erros["disputa"] = exc
+
+    with engine.connect() as primeira:
+        primeira.execute(text(insercao), parametros)
+        segunda = threading.Thread(target=rodar)
+        segunda.start()
+        _esperar_bloqueio_ou_fim(engine, segunda)
+        primeira.commit()
+        segunda.join(30)
+    return erros
+
+
+def test_seed_de_duas_replicas_ao_mesmo_tempo_nao_derruba_o_boot(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    criados: list[str] = []
+    erros = _com_insercao_pendente(
+        engine,
+        "INSERT INTO itens_estoque (id, sku, nome, quantidade_disponivel, "
+        "quantidade_reservada, ativo) VALUES "
+        "(gen_random_uuid(), 'PEC-OLEO-5W30', 'Oleo', 99, 0, true)",
+        {},
+        lambda: criados.extend(semear(session_factory)),
+    )
+
+    assert erros == {}
+    assert criados == [sku for sku, _, _ in ITENS_DEMO if sku != "PEC-OLEO-5W30"]
+    with session_factory() as session:
+        oleo = ItemEstoqueSQLAlchemyRepository(session).obter_por_sku(
+            Sku("PEC-OLEO-5W30")
+        )
+    assert oleo is not None
+    assert oleo.quantidade_disponivel == 99  # o da outra replica, intocado

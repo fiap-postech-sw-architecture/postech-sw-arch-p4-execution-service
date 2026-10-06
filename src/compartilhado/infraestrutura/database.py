@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final
 
 from sqlalchemy import MetaData, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import registry, sessionmaker
 
+from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
 from src.compartilhado.infraestrutura.ambiente import inteiro_opcional
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlalchemy import Engine
     from sqlalchemy.exc import DBAPIError
     from sqlalchemy.orm import Session
@@ -16,6 +21,8 @@ metadata = MetaData()
 # Registry unico dos mapeamentos imperativos: cada ``mapping.py`` de contexto
 # mapeia o proprio agregado no import do modulo.
 mapper_registry = registry(metadata=metadata)
+
+_VIOLACAO_DE_UNICIDADE: Final = "23505"  # SQLSTATE unique_violation
 
 # Limites do servidor, em ms (variavel de ambiente, padrao). O lock pessimista
 # da reserva continua bloqueante, mas nao espera para sempre.
@@ -75,3 +82,20 @@ def descrever_erro_de_banco(exc: DBAPIError) -> dict[str, str | None]:
         "pgcode": getattr(exc.orig, "pgcode", None),
         "constraint": getattr(diagnostico, "constraint_name", None),
     }
+
+
+@contextmanager
+def duplicata_vira_excecao_de_dominio(mensagem: str) -> Iterator[None]:
+    """``IntegrityError`` de UNIQUE no bloco vira ``EntidadeDuplicadaException``.
+
+    Fecha a corrida do verifica-depois-insere entre duas transacoes: na API a
+    perdedora responde 409; num comando da saga o caso de uso rele a linha da
+    vencedora e segue a regra de repeticao. Outras violacoes (CHECK, NOT NULL)
+    sobem como estao.
+    """
+    try:
+        yield
+    except IntegrityError as exc:
+        if getattr(exc.orig, "pgcode", None) != _VIOLACAO_DE_UNICIDADE:
+            raise
+        raise EntidadeDuplicadaException(mensagem) from exc

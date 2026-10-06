@@ -10,12 +10,12 @@ de peca (``ReservaDePecasFalhou``) da demo da saga.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Final
 
 import structlog
 
 from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
+from src.compartilhado.infraestrutura.ambiente import variavel_obrigatoria
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
@@ -50,6 +50,8 @@ def _criar(session: Session, sku: str, nome: str, quantidade: int) -> bool:
     try:
         criar.executar(sku=Sku(sku), nome=nome, quantidade_disponivel=quantidade)
     except EntidadeDuplicadaException:
+        # Ja cadastrado, inclusive por outra replica semeando ao mesmo tempo
+        # (a UNIQUE do sku decide a corrida).
         return False
     return True
 
@@ -66,7 +68,7 @@ def semear(session_factory: Callable[[], Session]) -> list[str]:
 
 def main() -> None:
     configurar_logging()
-    engine = criar_engine(os.environ["DATABASE_URL"])
+    engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     try:
         criados = semear(criar_session_factory(engine))
     finally:

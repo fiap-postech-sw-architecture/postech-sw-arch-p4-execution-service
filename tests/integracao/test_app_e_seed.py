@@ -61,6 +61,14 @@ def test_seed_nao_mexe_em_saldo_existente(
     assert _saldos(session_factory)["PEC-VELA"] == 7
 
 
+def test_seed_sem_database_url_falha_com_mensagem_clara(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        main()
+
+
 def test_saude_metrics_e_swagger(api: TestClient) -> None:
     assert api.get("/api/v1/saude").json() == {"status": "ok"}
     assert api.get("/api/v1/saude/pronto").json() == {"status": "ok"}  # banco real

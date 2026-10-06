@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
+from src.compartilhado.infraestrutura.database import (
+    duplicata_vira_excecao_de_dominio,
+)
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Reserva
 from src.estoque.infraestrutura.mapping import itens_estoque_table, reservas_table
@@ -46,7 +49,10 @@ class ItemEstoqueSQLAlchemyRepository:
 
     def salvar(self, item: ItemEstoque) -> None:
         self._session.add(item)
-        self._session.flush()
+        with duplicata_vira_excecao_de_dominio(
+            f"Ja existe item de estoque com SKU {item.sku}"
+        ):
+            self._session.flush()
 
     def listar(self, offset: int, limit: int) -> list[ItemEstoque]:
         stmt = (
