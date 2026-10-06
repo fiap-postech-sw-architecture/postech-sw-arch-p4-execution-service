@@ -5,27 +5,16 @@ from typing import Any
 from sqlalchemy import Column, DateTime, Enum, Index, Table, Text, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
-from src.compartilhado.infraestrutura.tipos_sqlalchemy import JsonDeDominio
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
+    JsonDeDominio,
+    retrato_do_veiculo,
+)
 from src.diagnostico.dominio.diagnostico import (
     Diagnostico,
     ItemDiagnostico,
     StatusDiagnostico,
     TipoItem,
 )
-from src.diagnostico.dominio.veiculo import Veiculo
-
-
-def _veiculo_para_json(veiculo: Veiculo) -> dict[str, Any]:
-    return {
-        "placa": veiculo.placa,
-        "marca": veiculo.marca,
-        "modelo": veiculo.modelo,
-        "ano": veiculo.ano,
-    }
-
-
-def _veiculo_de_json(dados: dict[str, Any]) -> Veiculo:
-    return Veiculo(**dados)
 
 
 def _itens_para_json(itens: tuple[ItemDiagnostico, ...]) -> list[dict[str, Any]]:
@@ -54,9 +43,7 @@ diagnosticos_table = Table(
         "status", Enum(StatusDiagnostico, native_enum=False, length=20), nullable=False
     ),
     # Anulaveis so na lapide (descarte que chegou antes da solicitacao).
-    Column(
-        "veiculo", JsonDeDominio(_veiculo_para_json, _veiculo_de_json), nullable=True
-    ),
+    Column("veiculo", retrato_do_veiculo(), nullable=True),
     Column("descricao_problema", Text, nullable=True),
     Column("mecanico_id", Uuid, nullable=True),
     Column("itens", JsonDeDominio(_itens_para_json, _itens_de_json), nullable=False),

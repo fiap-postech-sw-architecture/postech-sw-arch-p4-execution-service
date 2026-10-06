@@ -16,7 +16,9 @@ MECANICO, OUTRO = uuid4(), uuid4()
 
 
 def _agendada(prioridade: int = 0) -> Execucao:
-    return Execucao.agendar(ordem_id=uuid4(), prioridade=prioridade, agora=AGORA)
+    return Execucao.agendar(
+        ordem_id=uuid4(), prioridade=prioridade, veiculo=None, agora=AGORA
+    )
 
 
 def _iniciada() -> Execucao:

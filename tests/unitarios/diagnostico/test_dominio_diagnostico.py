@@ -9,13 +9,13 @@ from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
 )
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.diagnostico.dominio.diagnostico import (
     Diagnostico,
     ItemDiagnostico,
     StatusDiagnostico,
     TipoItem,
 )
-from src.diagnostico.dominio.veiculo import Veiculo
 
 AGORA = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 MECANICO, OUTRO = uuid4(), uuid4()
@@ -25,15 +25,10 @@ ITENS = [
 ]
 
 
-def _veiculo(**extras: object) -> Veiculo:
-    dados: dict[str, object] = {
-        "placa": "ABC1D23",
-        "marca": "Fiat",
-        "modelo": "Uno",
-        "ano": 2015,
-    }
-    dados.update(extras)
-    return Veiculo(**dados)  # type: ignore[arg-type]
+def _veiculo(placa: str = "ABC1D23") -> Veiculo:
+    return Veiculo(
+        veiculo_id=uuid4(), placa=placa, marca="Fiat", modelo="Uno", ano=2015
+    )
 
 
 def _diagnostico() -> Diagnostico:
@@ -49,49 +44,6 @@ def _em_andamento() -> Diagnostico:
     diagnostico = _diagnostico()
     diagnostico.iniciar(MECANICO, AGORA)
     return diagnostico
-
-
-class TestVeiculo:
-    @pytest.mark.parametrize(
-        ("placa", "normalizada"),
-        [("abc-1234", "ABC1234"), ("ABC1D23", "ABC1D23"), (" abc1d23 ", "ABC1D23")],
-    )
-    def test_placa_antiga_e_mercosul_normalizadas(
-        self, placa: str, normalizada: str
-    ) -> None:
-        assert _veiculo(placa=placa).placa == normalizada
-
-    @pytest.mark.parametrize("placa", ["", "AB1234", "ABCD123", "ABC12D3", "1BC1234"])
-    def test_placa_invalida_sem_ecoar_o_valor(self, placa: str) -> None:
-        with pytest.raises(ValueError, match="Placa invalida") as erro:
-            _veiculo(placa=placa)
-        if placa:
-            assert placa not in str(erro.value)
-
-    @pytest.mark.parametrize("campo", ["marca", "modelo"])
-    @pytest.mark.parametrize("valor", ["", "  ", "x" * 101])
-    def test_marca_e_modelo_obrigatorios(self, campo: str, valor: str) -> None:
-        with pytest.raises(ValueError, match="do veiculo"):
-            _veiculo(**{campo: valor})
-
-    def test_marca_e_modelo_aparados(self) -> None:
-        veiculo = _veiculo(marca=" Fiat ", modelo=" Uno ")
-        assert (veiculo.marca, veiculo.modelo) == ("Fiat", "Uno")
-
-    @pytest.mark.parametrize("ano", [1886, datetime.now(UTC).year + 2])
-    def test_ano_fora_da_faixa(self, ano: int) -> None:
-        with pytest.raises(ValueError, match="Ano do veiculo"):
-            _veiculo(ano=ano)
-
-    def test_ano_modelo_seguinte_e_aceito(self) -> None:
-        assert (
-            _veiculo(ano=datetime.now(UTC).year + 1).ano == datetime.now(UTC).year + 1
-        )
-
-    def test_repr_mascara_a_placa(self) -> None:
-        texto = repr(_veiculo(placa="ABC1D23"))
-        assert "ABC1D23" not in texto
-        assert "AB*****" in texto
 
 
 class TestItemDiagnostico:
@@ -110,6 +62,21 @@ class TestItemDiagnostico:
 
 
 class TestDiagnostico:
+    def test_solicitacao_valida_e_normaliza_o_retrato(self) -> None:
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=_veiculo(placa="abc-1234"),
+            descricao_problema="x",
+            agora=AGORA,
+        )
+        assert diagnostico.veiculo is not None
+        assert diagnostico.veiculo.placa == "ABC1234"
+        ordem_id, invalido = uuid4(), _veiculo(placa="ABC")
+        with pytest.raises(ValueError, match="Placa invalida"):
+            Diagnostico.solicitar(
+                ordem_id=ordem_id, veiculo=invalido, descricao_problema="x", agora=AGORA
+            )
+
     def test_solicitacao_entra_aguardando_com_ordem_como_identidade(self) -> None:
         diagnostico = _diagnostico()
         assert diagnostico.status is StatusDiagnostico.AGUARDANDO

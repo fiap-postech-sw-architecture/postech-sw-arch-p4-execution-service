@@ -10,13 +10,13 @@ import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
     DescartarDiagnostico,
     RegistrarSolicitacaoDeDiagnostico,
 )
 from src.diagnostico.dominio.diagnostico import StatusDiagnostico
-from src.diagnostico.dominio.veiculo import Veiculo
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import (
     AjustarQuantidade,
@@ -32,6 +32,7 @@ from src.estoque.infraestrutura.repository import (
 )
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
 from src.execucao.dominio.execucao import StatusExecucao
+from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -143,6 +144,7 @@ def test_erro_no_meio_do_caso_de_uso_nao_deixa_rastro(
         uc = AgendarExecucao(
             ExecucaoSQLAlchemyRepository(session),
             _FilaQueQuebra(session),
+            VeiculosSQLAlchemy(session),
             _uow(session),
         )
         with pytest.raises(RuntimeError):
@@ -166,6 +168,7 @@ def test_agendamento_e_cancelamento(
             AgendarExecucao(
                 ExecucaoSQLAlchemyRepository(session),
                 FilaDeExecucaoSQLAlchemy(session),
+                VeiculosSQLAlchemy(session),
                 _uow(session),
             ).executar(ordem_id, prioridade)
     with session_factory() as session:
@@ -185,7 +188,9 @@ def test_solicitacao_e_descarte_de_diagnostico(
     session_factory: sessionmaker[Session], outbox: Callable[[], list[dict[str, Any]]]
 ) -> None:
     ordem_id = uuid4()
-    veiculo = Veiculo(placa="ABC1234", marca="VW", modelo="Gol", ano=2010)
+    veiculo = Veiculo(
+        veiculo_id=uuid4(), placa="ABC1234", marca="VW", modelo="Gol", ano=2010
+    )
     for _ in range(2):  # reenvio do comando nao duplica
         with session_factory() as session:
             RegistrarSolicitacaoDeDiagnostico(
@@ -220,13 +225,16 @@ def test_compensacoes_antes_dos_originais_gravam_lapides_e_descartam_os_atrasado
             DiagnosticoSQLAlchemyRepository(session), _uow(session)
         ).executar(
             ordem_id,
-            Veiculo(placa="ABC1234", marca="VW", modelo="Gol", ano=2010),
+            Veiculo(
+                veiculo_id=uuid4(), placa="ABC1234", marca="VW", modelo="Gol", ano=2010
+            ),
             "Nao liga",
         )
     with session_factory() as session:
         AgendarExecucao(
             ExecucaoSQLAlchemyRepository(session),
             FilaDeExecucaoSQLAlchemy(session),
+            VeiculosSQLAlchemy(session),
             _uow(session),
         ).executar(ordem_id, 0)
     reserva = _reservar(session_factory, ordem_id, 2)

@@ -26,10 +26,10 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.dominio.veiculo import Veiculo
     from src.diagnostico.aplicacao.ports import CatalogoDePecas, ValidadorDeItens
     from src.diagnostico.dominio.diagnostico import ItemDiagnostico
     from src.diagnostico.dominio.repository import DiagnosticoRepository
-    from src.diagnostico.dominio.veiculo import Veiculo
 
 _log = structlog.get_logger(__name__)
 

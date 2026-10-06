@@ -40,7 +40,7 @@ class FilaDeExecucaoSQLAlchemy:
 
     def listar(self, offset: int, limit: int) -> list[ItemDaFila]:
         stmt = (
-            select(_t.c.ordem_id, _t.c.prioridade, _t.c.enfileirada_em)
+            select(_t.c.ordem_id, _t.c.prioridade, _t.c.enfileirada_em, _t.c.veiculo)
             .where(_NA_FILA)
             .order_by(_t.c.prioridade.desc(), _t.c.enfileirada_em, _t.c.ordem_id)
             .offset(offset)
@@ -52,6 +52,7 @@ class FilaDeExecucaoSQLAlchemy:
                 ordem_id=linha.ordem_id,
                 prioridade=linha.prioridade,
                 enfileirada_em=linha.enfileirada_em,
+                veiculo=linha.veiculo,
             )
             for indice, linha in enumerate(self._session.execute(stmt), start=1)
         ]

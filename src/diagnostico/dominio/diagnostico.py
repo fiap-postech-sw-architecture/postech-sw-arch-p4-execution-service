@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
-    from src.diagnostico.dominio.veiculo import Veiculo
+    from src.compartilhado.dominio.veiculo import Veiculo
 
 # Codigos da tabela de precos do Billing (servicos e pecas): PEC-VELA, SRV-...
 PADRAO_CODIGO: Final = r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
@@ -137,7 +137,7 @@ class Diagnostico(AggregateRoot):
     ) -> Diagnostico:
         return cls(
             id=ordem_id,
-            _veiculo=veiculo,
+            _veiculo=veiculo.validado(agora),
             _descricao_problema=descricao_problema,
             _solicitado_em=agora,
         )

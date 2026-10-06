@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.compartilhado.interfaces.schemas import VeiculoResponse
 from src.diagnostico.dominio.diagnostico import (
     PADRAO_CODIGO,
     TAMANHO_MAXIMO_CODIGO,
@@ -12,15 +13,6 @@ from src.diagnostico.dominio.diagnostico import (
     StatusDiagnostico,
     TipoItem,
 )
-
-
-class VeiculoResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    placa: str
-    marca: str
-    modelo: str
-    ano: int
 
 
 class ItemDiagnosticoSchema(BaseModel):

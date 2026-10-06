@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.compartilhado.interfaces.schemas import VeiculoResponse
 from src.execucao.dominio.execucao import StatusExecucao
 
 
@@ -15,6 +16,7 @@ class ExecucaoResponse(BaseModel):
     status: StatusExecucao
     prioridade: int
     enfileirada_em: datetime
+    veiculo: VeiculoResponse | None
     mecanico_id: UUID | None
     iniciada_em: datetime | None
     finalizada_em: datetime | None
@@ -28,6 +30,9 @@ class ItemDaFilaResponse(BaseModel):
     ordem_id: UUID
     prioridade: int
     enfileirada_em: datetime
+    veiculo: VeiculoResponse | None = Field(
+        description="Retrato do diagnostico, para achar o carro no patio"
+    )
 
 
 class FilaResponse(BaseModel):

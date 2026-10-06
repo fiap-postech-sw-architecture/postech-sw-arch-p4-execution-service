@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.types import TypeDecorator
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
-from src.compartilhado.infraestrutura.tipos_sqlalchemy import JsonDeDominio
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import JsonDeDominio, reidratar
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
 from src.estoque.dominio.sku import TAMANHO_MAXIMO_SKU, Sku
@@ -38,7 +38,7 @@ class SkuType(TypeDecorator[Sku]):
         return None if value is None else str(value)
 
     def process_result_value(self, value: str | None, dialect: Dialect) -> Sku | None:
-        return None if value is None else Sku(value)
+        return None if value is None else reidratar(Sku, value)
 
 
 def _itens_para_json(itens: tuple[ItemReserva, ...]) -> list[dict[str, Any]]:

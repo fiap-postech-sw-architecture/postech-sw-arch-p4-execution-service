@@ -40,7 +40,10 @@ from src.execucao.aplicacao.use_cases import (
     IniciarExecucao,
 )
 from src.execucao.dominio.execucao import StatusExecucao
-from src.execucao.infraestrutura.adapters import EstoqueSQLAlchemyAdapter
+from src.execucao.infraestrutura.adapters import (
+    EstoqueSQLAlchemyAdapter,
+    VeiculosSQLAlchemy,
+)
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -372,6 +375,7 @@ def test_finalizacao_e_liberacao_simultaneas_nao_baixam_reserva_liberada(
         AgendarExecucao(
             ExecucaoSQLAlchemyRepository(session),
             FilaDeExecucaoSQLAlchemy(session),
+            VeiculosSQLAlchemy(session),
             _uow(session),
         ).executar(ordem_a, 0)
     with session_factory() as session:

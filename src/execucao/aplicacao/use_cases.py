@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
-    from src.execucao.aplicacao.ports import EstoquePort, FilaDeExecucao
+    from src.execucao.aplicacao.ports import EstoquePort, FilaDeExecucao, VeiculosPort
     from src.execucao.dominio.repository import ExecucaoRepository
 
 _log = structlog.get_logger(__name__)
@@ -49,23 +49,33 @@ class AgendarExecucao:
     execucao ainda AGUARDANDO, o reenvio so reemite a resposta com a posicao
     atual (a prioridade original fica); ja iniciada, finalizada ou cancelada
     (inclusive a lapide de um cancelamento adiantado), o comando atrasado e
-    descartado sem efeito e sem resposta.
+    descartado sem efeito e sem resposta. A execucao nova copia o retrato do
+    veiculo do diagnostico, que a fila mostra ao mecanico.
     """
 
     def __init__(
-        self, repo: ExecucaoRepository, fila: FilaDeExecucao, uow: UnitOfWork
+        self,
+        repo: ExecucaoRepository,
+        fila: FilaDeExecucao,
+        veiculos: VeiculosPort,
+        uow: UnitOfWork,
     ) -> None:
         self._repo = repo
         self._fila = fila
+        self._veiculos = veiculos
         self._uow = uow
 
     def executar(self, ordem_id: UUID, prioridade: int) -> Execucao:
         agora = datetime.now(UTC)
-        nova = Execucao.agendar(ordem_id=ordem_id, prioridade=prioridade, agora=agora)
         with self._uow:
             execucao = self._repo.obter(ordem_id)
             if execucao is None:
-                execucao = nova
+                execucao = Execucao.agendar(
+                    ordem_id=ordem_id,
+                    prioridade=prioridade,
+                    veiculo=self._veiculos.da_ordem(ordem_id),
+                    agora=agora,
+                )
                 self._repo.salvar(execucao)
             elif execucao.status is not StatusExecucao.AGUARDANDO:
                 _log.info(

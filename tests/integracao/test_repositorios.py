@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
+from src.compartilhado.dominio.veiculo import Veiculo
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
+    DadoPersistidoInvalidoError,
+)
 from src.diagnostico.dominio.diagnostico import (
     Diagnostico,
     ItemDiagnostico,
     StatusDiagnostico,
     TipoItem,
 )
-from src.diagnostico.dominio.veiculo import Veiculo
 from src.diagnostico.infraestrutura.adapters import CatalogoDePecasSQLAlchemy
+from src.diagnostico.infraestrutura.mapping import diagnosticos_table
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
@@ -31,6 +37,7 @@ from src.execucao.infraestrutura.repository import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
@@ -46,7 +53,28 @@ def _gravar(session_factory: sessionmaker[Session], *objetos: object) -> None:
         session.commit()
 
 
+_VEICULO_GRAVADO = {
+    "veiculo_id": "6f1d2a7e-0000-4000-8000-000000000001",
+    "placa": "ABC1234",
+    "marca": "VW",
+    "modelo": "Gol",
+    "ano": 2010,
+}
+
+
 class TestEstoque:
+    def test_sku_corrompido_e_erro_do_servidor_nao_do_cliente(
+        self, session_factory: sessionmaker[Session], engine: Engine
+    ) -> None:
+        _gravar(session_factory, _item("PEC-VELA", 3))
+        with engine.begin() as conexao:
+            conexao.execute(text("UPDATE itens_estoque SET sku = 'pec vela'"))
+
+        with session_factory() as session:
+            repo = ItemEstoqueSQLAlchemyRepository(session)
+            with pytest.raises(DadoPersistidoInvalidoError):
+                repo.listar(offset=0, limit=10)
+
     def test_item_ida_e_volta_com_sku_como_vo(
         self, session_factory: sessionmaker[Session]
     ) -> None:
@@ -159,7 +187,13 @@ class TestDiagnosticos:
     def _diagnostico(self, minutos: int, status: str = "AGUARDANDO") -> Diagnostico:
         diagnostico = Diagnostico.solicitar(
             ordem_id=uuid4(),
-            veiculo=Veiculo(placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015),
+            veiculo=Veiculo(
+                veiculo_id=uuid4(),
+                placa="ABC1D23",
+                marca="Fiat",
+                modelo="Uno",
+                ano=2015,
+            ),
             descricao_problema="Revisao",
             agora=T0 + timedelta(minutes=minutos),
         )
@@ -185,6 +219,53 @@ class TestDiagnosticos:
             assert lido.itens == tuple(itens)
             assert (lido.mecanico_id, lido.concluido_em) == (mecanico, T0)
 
+    def test_retrato_anonimizado_volta_sem_revalidar_a_placa(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        diagnostico = self._diagnostico(0)
+        assert diagnostico.veiculo is not None
+        anonimo = diagnostico.veiculo.anonimizar()
+        _gravar(session_factory, diagnostico)
+        with session_factory() as session:
+            session.execute(
+                update(diagnosticos_table)
+                .where(diagnosticos_table.c.ordem_id == diagnostico.ordem_id)
+                .values(veiculo=anonimo)
+            )
+            session.commit()
+
+        with session_factory() as session:
+            repo = DiagnosticoSQLAlchemyRepository(session)
+            lido = repo.obter(diagnostico.ordem_id)
+            assert lido is not None
+            assert lido.veiculo == anonimo
+            assert lido.veiculo.placa == f"ANONIMIZADO:{anonimo.veiculo_id}"
+            assert repo.listar(None, offset=0, limit=10) == [lido]
+
+    @pytest.mark.parametrize(
+        "veiculo",
+        [
+            pytest.param({"placa": "ABC1234"}, id="sem-chaves"),
+            pytest.param("texto", id="nao-e-objeto"),
+            pytest.param({**_VEICULO_GRAVADO, "veiculo_id": "x"}, id="id-invalido"),
+        ],
+    )
+    def test_linha_corrompida_e_erro_do_servidor_nao_do_cliente(
+        self, session_factory: sessionmaker[Session], engine: Engine, veiculo: object
+    ) -> None:
+        diagnostico = self._diagnostico(0)
+        _gravar(session_factory, diagnostico)
+        with engine.begin() as conexao:
+            conexao.execute(
+                text("UPDATE diagnosticos SET veiculo = CAST(:v AS jsonb)"),
+                {"v": json.dumps(veiculo)},
+            )
+
+        with session_factory() as session:
+            repo = DiagnosticoSQLAlchemyRepository(session)
+            with pytest.raises(DadoPersistidoInvalidoError):
+                repo.obter(diagnostico.ordem_id)
+
     def test_listar_por_status_em_ordem_de_chegada(
         self, session_factory: sessionmaker[Session]
     ) -> None:
@@ -209,6 +290,7 @@ class TestFilaDeExecucao:
         return Execucao.agendar(
             ordem_id=ordem_id or uuid4(),
             prioridade=prioridade,
+            veiculo=None,
             agora=T0 + timedelta(minutes=minutos),
         )
 

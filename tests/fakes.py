@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from src.compartilhado.aplicacao.integration_event import IntegrationEvent
+    from src.compartilhado.dominio.veiculo import Veiculo
     from src.diagnostico.dominio.diagnostico import Diagnostico, StatusDiagnostico
     from src.estoque.dominio.item_estoque import ItemEstoque
     from src.estoque.dominio.reserva import Reserva
@@ -152,6 +153,16 @@ class FilaFixa:
 
     def posicao(self, execucao: Execucao) -> int:
         return self._posicao
+
+
+class VeiculosEmMemoria:
+    """Retratos registrados nos diagnosticos, por ordem."""
+
+    def __init__(self, veiculos: dict[UUID, Veiculo] | None = None) -> None:
+        self.veiculos = veiculos or {}
+
+    def da_ordem(self, ordem_id: UUID) -> Veiculo | None:
+        return self.veiculos.get(ordem_id)
 
 
 class EstoqueEmMemoria:

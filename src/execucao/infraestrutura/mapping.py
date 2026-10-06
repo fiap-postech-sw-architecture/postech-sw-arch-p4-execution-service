@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import Column, DateTime, Enum, Index, Integer, Table, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import retrato_do_veiculo
 from src.execucao.dominio.execucao import Execucao, StatusExecucao
 
 execucoes_table = Table(
@@ -14,6 +15,8 @@ execucoes_table = Table(
     ),
     Column("prioridade", Integer, nullable=False),
     Column("enfileirada_em", DateTime(timezone=True), nullable=False),
+    # Copia do retrato do diagnostico; nula na lapide e sem diagnostico.
+    Column("veiculo", retrato_do_veiculo(), nullable=True),
     Column("mecanico_id", Uuid, nullable=True),
     Column("iniciada_em", DateTime(timezone=True), nullable=True),
     Column("finalizada_em", DateTime(timezone=True), nullable=True),
@@ -31,6 +34,7 @@ mapper_registry.map_imperatively(
         "_status": execucoes_table.c.status,
         "_prioridade": execucoes_table.c.prioridade,
         "_enfileirada_em": execucoes_table.c.enfileirada_em,
+        "_veiculo": execucoes_table.c.veiculo,
         "_mecanico_id": execucoes_table.c.mecanico_id,
         "_iniciada_em": execucoes_table.c.iniciada_em,
         "_finalizada_em": execucoes_table.c.finalizada_em,

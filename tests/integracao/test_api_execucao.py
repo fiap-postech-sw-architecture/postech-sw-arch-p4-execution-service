@@ -6,7 +6,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from src.compartilhado.dominio.exceptions import TransicaoStatusInvalidaException
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
+from src.diagnostico.aplicacao.use_cases import RegistrarSolicitacaoDeDiagnostico
+from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import ReservarPecas
 from src.estoque.dominio.reserva import ItemReserva
 from src.estoque.dominio.sku import Sku
@@ -16,6 +19,7 @@ from src.estoque.infraestrutura.repository import (
 )
 from src.estoque.infraestrutura.seed import semear
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
+from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -30,12 +34,17 @@ if TYPE_CHECKING:
 MECANICO = uuid4()
 
 
-def _agendar(session_factory: sessionmaker[Session], prioridade: int = 0) -> UUID:
-    ordem_id = uuid4()
+def _agendar(
+    session_factory: sessionmaker[Session],
+    prioridade: int = 0,
+    ordem_id: UUID | None = None,
+) -> UUID:
+    ordem_id = ordem_id or uuid4()
     with session_factory() as session:
         AgendarExecucao(
             ExecucaoSQLAlchemyRepository(session),
             FilaDeExecucaoSQLAlchemy(session),
+            VeiculosSQLAlchemy(session),
             SQLAlchemyUnitOfWork(lambda: session),
         ).executar(ordem_id, prioridade)
     return ordem_id
@@ -76,6 +85,37 @@ def test_fila_com_posicao_para_mecanico_e_atendente(
         "/api/v1/fila", params={"offset": 1}, headers=autenticar("atendente")
     )
     assert [i["posicao"] for i in pagina.json()["items"]] == [2]
+
+
+def test_fila_mostra_o_retrato_copiado_do_diagnostico(
+    api: TestClient,
+    session_factory: sessionmaker[Session],
+    autenticar: Callable[..., dict[str, str]],
+) -> None:
+    ordem_id = uuid4()
+    veiculo = Veiculo(
+        veiculo_id=uuid4(), placa="bra-2e19", marca="Chevrolet", modelo="Onix", ano=2022
+    )
+    with session_factory() as session:
+        RegistrarSolicitacaoDeDiagnostico(
+            DiagnosticoSQLAlchemyRepository(session),
+            SQLAlchemyUnitOfWork(lambda: session),
+        ).executar(ordem_id, veiculo, "Freio chiando")
+    _agendar(session_factory, ordem_id=ordem_id)
+    sem_diagnostico = _agendar(session_factory)
+
+    corpo = api.get("/api/v1/fila", headers=autenticar("mecanico")).json()
+
+    retratos = {item["ordem_id"]: item["veiculo"] for item in corpo["items"]}
+    assert retratos == {
+        str(ordem_id): {
+            "placa": "BRA2E19",
+            "marca": "Chevrolet",
+            "modelo": "Onix",
+            "ano": 2022,
+        },
+        str(sem_diagnostico): None,
+    }
 
 
 def test_inicio_e_finalizacao_com_baixa_do_estoque(

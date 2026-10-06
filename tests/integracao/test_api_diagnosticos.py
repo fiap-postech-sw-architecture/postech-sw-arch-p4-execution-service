@@ -10,12 +10,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
     DescartarDiagnostico,
     RegistrarSolicitacaoDeDiagnostico,
 )
-from src.diagnostico.dominio.veiculo import Veiculo
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.diagnostico.infraestrutura.validador_billing import CAMINHO_VALIDACAO
 from src.estoque.infraestrutura.seed import semear
@@ -45,7 +45,13 @@ def _solicitar(
             SQLAlchemyUnitOfWork(lambda: session),
         ).executar(
             ordem_id,
-            Veiculo(placa="BRA2E19", marca="Chevrolet", modelo="Onix", ano=2022),
+            Veiculo(
+                veiculo_id=uuid4(),
+                placa="BRA2E19",
+                marca="Chevrolet",
+                modelo="Onix",
+                ano=2022,
+            ),
             descricao,
         )
     return ordem_id
@@ -86,6 +92,50 @@ def test_fila_de_diagnosticos_com_filtro(
         ["AGUARDANDO", "EM_ANDAMENTO"],
     )
     assert api.get(URL, params={"status": "OUTRO"}, headers=mecanico).status_code == 422
+
+
+def test_diagnostico_anonimizado_nao_derruba_a_lista(
+    api: TestClient,
+    mecanico: dict[str, str],
+    session_factory: sessionmaker[Session],
+    engine: Engine,
+) -> None:
+    ordem_id = _solicitar(session_factory)
+    with engine.begin() as conexao:
+        veiculo_id = conexao.execute(
+            text("SELECT veiculo->>'veiculo_id' FROM diagnosticos")
+        ).scalar_one()
+        conexao.execute(
+            text(
+                "UPDATE diagnosticos SET veiculo = jsonb_set(veiculo, '{placa}', "
+                "to_jsonb('ANONIMIZADO:' || (veiculo->>'veiculo_id')))"
+            )
+        )
+
+    resposta = api.get(URL, headers=mecanico)
+
+    assert resposta.status_code == 200
+    [item] = resposta.json()["items"]
+    assert item["ordem_id"] == str(ordem_id)
+    assert item["veiculo"]["placa"] == f"ANONIMIZADO:{veiculo_id}"
+
+
+def test_retrato_corrompido_no_banco_e_500_nao_422(
+    api: TestClient,
+    mecanico: dict[str, str],
+    session_factory: sessionmaker[Session],
+    engine: Engine,
+) -> None:
+    _solicitar(session_factory)
+    with engine.begin() as conexao:
+        conexao.execute(text("""UPDATE diagnosticos SET veiculo = '{"placa": "X"}'"""))
+
+    resposta = TestClient(api.app, raise_server_exceptions=False).get(
+        URL, headers=mecanico
+    )
+
+    assert resposta.status_code == 500
+    assert resposta.json()["erro"]["codigo"] == "ERRO_INTERNO"
 
 
 def test_lapide_aparece_descartada_sem_retrato(

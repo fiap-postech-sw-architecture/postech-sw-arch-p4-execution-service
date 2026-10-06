@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
+    from src.compartilhado.dominio.veiculo import Veiculo
+
 PRIORIDADE_MAXIMA: Final = 100
 
 
@@ -43,12 +45,14 @@ class Execucao(AggregateRoot):
 
     AGUARDANDO (na fila) -> EM_EXECUCAO -> FINALIZADA; AGUARDANDO -> CANCELADA
     (compensacao). A fila ordena por ``prioridade`` (maior primeiro) e
-    ``enfileirada_em`` (mais antiga primeiro).
+    ``enfileirada_em`` (mais antiga primeiro). ``veiculo`` e a copia do retrato
+    do diagnostico, para o mecanico achar o carro no patio pela fila.
     """
 
     _status: StatusExecucao = StatusExecucao.AGUARDANDO
     _prioridade: int
     _enfileirada_em: datetime
+    _veiculo: Veiculo | None = None
     _mecanico_id: UUID | None = None
     _iniciada_em: datetime | None = None
     _finalizada_em: datetime | None = None
@@ -60,8 +64,17 @@ class Execucao(AggregateRoot):
             raise ValorInvalidoError(msg)
 
     @classmethod
-    def agendar(cls, *, ordem_id: UUID, prioridade: int, agora: datetime) -> Execucao:
-        return cls(id=ordem_id, _prioridade=prioridade, _enfileirada_em=agora)
+    def agendar(
+        cls,
+        *,
+        ordem_id: UUID,
+        prioridade: int,
+        veiculo: Veiculo | None,
+        agora: datetime,
+    ) -> Execucao:
+        return cls(
+            id=ordem_id, _prioridade=prioridade, _veiculo=veiculo, _enfileirada_em=agora
+        )
 
     @classmethod
     def lapide(cls, *, ordem_id: UUID, agora: datetime) -> Execucao:
@@ -95,6 +108,10 @@ class Execucao(AggregateRoot):
     @property
     def enfileirada_em(self) -> datetime:
         return self._enfileirada_em
+
+    @property
+    def veiculo(self) -> Veiculo | None:
+        return self._veiculo
 
     @property
     def mecanico_id(self) -> UUID | None:

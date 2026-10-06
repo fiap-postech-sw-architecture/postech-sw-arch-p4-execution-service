@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class Erro(BaseModel):
@@ -15,6 +15,17 @@ class Erro(BaseModel):
 
 class ErroResponse(BaseModel):
     erro: Erro
+
+
+class VeiculoResponse(BaseModel):
+    """Retrato do veiculo; anonimizado (LGPD), a placa vem ``ANONIMIZADO:{id}``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    placa: str
+    marca: str
+    modelo: str
+    ano: int
 
 
 def respostas(*status_codes: int) -> dict[int | str, dict[str, Any]]:

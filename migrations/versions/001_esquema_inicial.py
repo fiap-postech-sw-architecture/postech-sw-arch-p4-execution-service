@@ -81,6 +81,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("prioridade", sa.Integer(), nullable=False),
         _timestamp("enfileirada_em", nullable=False),
+        # Copia do retrato do diagnostico; nula na lapide e sem diagnostico.
+        sa.Column("veiculo", postgresql.JSONB(), nullable=True),
         sa.Column("mecanico_id", sa.Uuid(), nullable=True),
         _timestamp("iniciada_em"),
         _timestamp("finalizada_em"),

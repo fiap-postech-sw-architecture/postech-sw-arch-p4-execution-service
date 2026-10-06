@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
+    from src.compartilhado.dominio.veiculo import Veiculo
     from src.execucao.aplicacao.events import PecaConsumida
     from src.execucao.dominio.execucao import Execucao
 
@@ -17,6 +18,7 @@ class ItemDaFila:
     ordem_id: UUID
     prioridade: int
     enfileirada_em: datetime
+    veiculo: Veiculo | None
 
 
 class FilaDeExecucao(Protocol):
@@ -47,3 +49,10 @@ class EstoquePort(Protocol):
             TransicaoStatusInvalidaException: reserva liberada, recusada ou ja
                 consumida.
         """
+
+
+class VeiculosPort(Protocol):
+    """Retrato do veiculo que o diagnostico da ordem registrou."""
+
+    def da_ordem(self, ordem_id: UUID) -> Veiculo | None:
+        """Retrato (inclusive anonimizado); ``None`` se a ordem nao tem diagnostico."""

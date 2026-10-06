@@ -11,6 +11,7 @@ from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
 )
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.diagnostico.aplicacao.use_cases import (
     ConcluirDiagnostico,
     DescartarDiagnostico,
@@ -28,7 +29,6 @@ from src.diagnostico.dominio.exceptions import (
     DiagnosticoNaoEncontradoException,
     ItensInvalidosException,
 )
-from src.diagnostico.dominio.veiculo import Veiculo
 from tests.fakes import (
     CatalogoFake,
     DiagnosticosEmMemoria,
@@ -37,7 +37,9 @@ from tests.fakes import (
 )
 
 MECANICO = uuid4()
-VEICULO = Veiculo(placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015)
+VEICULO = Veiculo(
+    veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
+)
 SERVICO = ItemDiagnostico(tipo=TipoItem.SERVICO, codigo="SRV-TROCA-OLEO", quantidade=1)
 OLEO = ItemDiagnostico(tipo=TipoItem.PECA, codigo="PEC-OLEO-5W30", quantidade=4)
 
