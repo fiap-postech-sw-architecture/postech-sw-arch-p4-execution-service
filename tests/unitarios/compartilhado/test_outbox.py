@@ -72,7 +72,7 @@ def test_dados_em_tipos_json_sem_metadados_do_envelope() -> None:
 
 
 def test_float_e_recusado_no_commit_e_nao_no_relay() -> None:
-    # Valor monetario viaja como string decimal (brief secao 4), nunca float.
+    # Valor monetario viaja como string decimal (RFC-004, secao 5.2), nunca float.
     evento = _ComFloatEvent(ordem_id=uuid4(), valor=1.5)
     with pytest.raises(TypeError, match="Tipo nao suportado"):
         dados_do_evento(evento)

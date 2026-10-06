@@ -155,10 +155,10 @@ class TestScrubTelefone:
             "+55 11 99999-0000",
             "+55 (11) 99999-0000",
             "11 99999-0000",
-            # Sem espaco apos o DDD (issue #99 do p3): separador agora e opcional.
+            # Sem espaco apos o DDD (issue #99 do p2): separador agora e opcional.
             "(11)99999-0000",
             "1199999-0000",
-            # +55 com numero corrido, sem hifen local (issue #99 do p3).
+            # +55 com numero corrido, sem hifen local (issue #99 do p2).
             "+5511999990000",
             "+55 11999990000",
         ],
@@ -190,7 +190,7 @@ class TestScrubTelefone:
 
     def test_telefone_11_digitos_corrido_mascarado(self) -> None:
         # 11 digitos corridos tem o shape de CPF e caem no _CPF_PATTERN --
-        # mascarado por valor de qualquer forma (issue #99 do p3). Campos NOMEADOS
+        # mascarado por valor de qualquer forma (issue #99 do p2). Campos NOMEADOS
         # telefone/celular/contato caem na denylist de chaves.
         event_dict: dict[str, object] = {"event": "retorno 11999990000"}
         result = scrub_pii(None, "info", event_dict)
@@ -212,7 +212,7 @@ class TestScrubChavesSensiveis:
             "refresh_token",
             "access_token",
             "api_key",
-            # PII sem forma detectavel por regex (issue #99 do p3): mascara por nome.
+            # PII sem forma detectavel por regex (issue #99 do p2): mascara por nome.
             "telefone",
             "celular",
             "phone",
@@ -254,7 +254,8 @@ class TestScrubChavesSensiveis:
 class TestPipelineMascaraTraceback:
     """O traceback (chave `exception`) deve sair mascarado pelo pipeline real.
 
-    Cobre o bug central da issue #86 do p3: `scrub_pii` rodava ANTES de
+    Cobre o bug central da issue #86 do p2 (https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p2/issues/86):
+    `scrub_pii` rodava ANTES de
     `format_exc_info`, entao a chave `exception` (montada por format_exc_info)
     escapava do mascaramento. Apos o reorder, o traceback e mascarado.
     """

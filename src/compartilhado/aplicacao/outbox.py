@@ -11,7 +11,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from src.compartilhado.aplicacao.integration_event import IntegrationEvent
 
-# Metadados que viajam no envelope, fora do ``dados`` (brief secao 4).
+# Metadados que viajam no envelope, fora do ``dados`` (RFC-004, secao 5.2).
 _CAMPOS_DO_ENVELOPE = frozenset({"id", "ocorrido_em"})
 
 

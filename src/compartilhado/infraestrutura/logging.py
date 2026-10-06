@@ -103,12 +103,13 @@ _CHAVES_SENSIVEIS = frozenset(
 _MASCARA = "***"
 
 # Loggers que o uvicorn configura com handler proprio + `propagate=False`.
-# `configurar_logging` os religa ao root para passarem pelo scrubber (issue #86 do p3).
+# `configurar_logging` os religa ao root para passarem pelo scrubber (issue #86
+# do p2: https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p2/issues/86).
 _LOGGERS_UVICORN = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
-# Cap on recursion depth when scrubbing nested structures. Guards against
-# pathological or cyclic structured log payloads without sacrificing coverage
-# of realistic nesting (events usually nest 2-3 levels deep at most).
+# Teto de profundidade do scrub em estruturas aninhadas: protege contra payload
+# ciclico ou patologico sem perder o aninhamento real (eventos tem 2 ou 3
+# niveis, no maximo).
 _MAX_SCRUB_DEPTH = 6
 
 
@@ -210,7 +211,7 @@ def redigir_pii_erro(erro: str) -> str:
 
 
 # Cadeia COMPARTILHADA entre logs structlog e logs stdlib estrangeiros (uvicorn,
-# bibliotecas, handler 500). ORDEM CRITICA (issue #86 do p3): `format_exc_info` monta a
+# bibliotecas, handler 500). ORDEM CRITICA (issue #86 do p2): `format_exc_info` monta a
 # chave `exception` a partir do `exc_info` e DEVE vir ANTES de `scrub_pii`, senao
 # o traceback (com possivel PII no repr da excecao) escapa do mascaramento.
 # `StackInfoRenderer` (stack_info -> string) tambem precede o scrub, que entao
@@ -238,7 +239,7 @@ def configurar_logging(stream: TextIO | None = None) -> None:
     access/error logs do uvicorn, logs de bibliotecas) passe pela
     ``_cadeia_compartilhada`` -- inclusive ``scrub_pii`` -- via ``foreign_pre_chain``,
     sem reprocessar os logs ja-structlog (estes pulam o pre-chain). Fecha a brecha
-    LGPD da issue #86 do p3: traceback cru com PII fora do pipeline do structlog.
+    LGPD da issue #86 do p2: traceback cru com PII fora do pipeline do structlog.
 
     ``stream`` permite direcionar a saida (default ``sys.stdout``); usado em testes
     para capturar o output renderizado.
@@ -283,7 +284,7 @@ def configurar_logging(stream: TextIO | None = None) -> None:
     # scrub do root. `configurar_logging` roda no lifespan startup, DEPOIS de
     # uvicorn montar seus loggers; aqui removemos os handlers crus de uvicorn e
     # religamos `propagate=True` para que tudo flua pelo ProcessorFormatter do root
-    # (scrubado, JSON unico). Idempotente. Issue #86 do p3.
+    # (scrubado, JSON unico). Idempotente. Issue #86 do p2.
     for nome in _LOGGERS_UVICORN:
         uvlog = logging.getLogger(nome)
         uvlog.handlers = []

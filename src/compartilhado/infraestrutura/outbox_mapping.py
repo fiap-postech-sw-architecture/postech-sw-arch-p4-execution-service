@@ -1,7 +1,7 @@
 """Tabela ``outbox`` (Transactional Outbox, padrao do p3).
 
 Cada linha e uma mensagem do catalogo da saga ja no formato do envelope do
-brief (secao 4): ``mensagem_id`` (``id``/``message_id``), ``tipo``,
+RFC-004 (secao 5.2): ``mensagem_id`` (``id``/``message_id``), ``tipo``,
 ``correlation_id`` (= ``ordem_id``), ``ocorrido_em`` e ``dados``. ``id``
 bigserial da a ordem global de publicacao; as colunas de controle
 (``status``, ``tentativas``, ``proxima_tentativa_em``, ``entregue_em``,

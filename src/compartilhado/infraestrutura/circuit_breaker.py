@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 
-# Alimenta o alerta "circuito aberto" (brief secao 9).
+# Alimenta o alerta "circuito aberto" (RFC-004, secao 9).
 _CIRCUITO_ABERTO = Gauge(
     "pytstop_circuit_breaker_aberto",
     "1 com o circuito aberto (dependencia suspensa), 0 fechado.",

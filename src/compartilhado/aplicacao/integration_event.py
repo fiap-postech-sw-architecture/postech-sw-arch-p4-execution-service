@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 @dataclass(frozen=True, kw_only=True)
 class IntegrationEvent:
-    """Mensagem do catalogo da saga (brief secao 4) emitida por este servico.
+    """Mensagem do catalogo da saga (RFC-004, secao 5.3) emitida por este servico.
 
     ``ordem_id`` e o correlation_id da saga; ``id`` vira o ``message_id`` do
     envelope e ``ocorrido_em`` o instante do fato. Os campos da subclasse, mais

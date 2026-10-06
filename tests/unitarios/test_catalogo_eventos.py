@@ -1,4 +1,4 @@
-"""Contrato do catalogo da saga (brief secao 4): tipos e campos de ``dados``.
+"""Contrato do catalogo da saga (RFC-004, secao 5.3): tipos e campos de ``dados``.
 
 Renomear uma classe de evento ou um campo muda a mensagem publicada; este teste
 quebra antes de o OS Service quebrar.
@@ -46,7 +46,7 @@ def test_servico_emite_exatamente_os_eventos_do_catalogo() -> None:
         assert _campos_de_dados(tipos[tipo]) == campos, tipo
 
 
-def test_listas_aninhadas_seguem_o_brief() -> None:
+def test_listas_aninhadas_seguem_o_catalogo() -> None:
     from src.diagnostico.aplicacao.events import ItemDados
     from src.estoque.aplicacao.events import FaltanteDados
     from src.execucao.aplicacao.events import PecaConsumida

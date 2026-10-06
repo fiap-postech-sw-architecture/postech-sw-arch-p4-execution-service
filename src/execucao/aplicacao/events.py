@@ -1,4 +1,4 @@
-"""Eventos do catalogo da saga emitidos pela execucao (brief secao 4)."""
+"""Eventos do catalogo da saga emitidos pela execucao (RFC-004, secao 5.3)."""
 
 from __future__ import annotations
 
