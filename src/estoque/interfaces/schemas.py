@@ -52,7 +52,9 @@ class ItemEstoqueResponse(BaseModel):
     nome: str
     quantidade_disponivel: int = Field(description="Saldo fisico (inclui reservado)")
     quantidade_reservada: int = Field(description="Comprometido com reservas ativas")
-    quantidade_livre: int = Field(description="Disponivel para novas reservas")
+    quantidade_livre: int = Field(
+        description="Livre para novas reservas (disponivel menos reservada)"
+    )
     ativo: bool
 
     @field_validator("sku", mode="before")

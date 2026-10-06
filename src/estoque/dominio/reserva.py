@@ -44,7 +44,11 @@ class ItemReserva(ValueObject):
 
 @dataclass(frozen=True, slots=True)
 class Faltante(ValueObject):
-    """Peca que impediu a reserva; ``disponivel`` e o saldo livre no momento."""
+    """Peca que impediu a reserva.
+
+    ``disponivel`` e o saldo LIVRE no momento (``quantidade_livre`` do item, nao o
+    fisico): o nome vem do contrato ``ReservaDePecasFalhou`` da saga.
+    """
 
     sku: Sku
     solicitado: int
