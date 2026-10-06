@@ -17,4 +17,6 @@ fi
 
 # --no-proxy-headers: o X-Forwarded-For so vale atras de proxy configurado
 # explicitamente (o uvicorn confiaria no XFF de peers loopback por padrao).
-exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers
+# --no-access-log: o access log estruturado (com request_id) sai do
+# SecurityHeadersMiddleware; o do uvicorn e uma linha de texto sem campos.
+exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers --no-access-log

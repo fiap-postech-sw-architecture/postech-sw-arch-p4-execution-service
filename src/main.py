@@ -6,7 +6,7 @@ from importlib.metadata import version
 
 import httpx
 import structlog
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from src.compartilhado.infraestrutura.ambiente import (
     url_http_obrigatoria,
@@ -20,6 +20,7 @@ from src.compartilhado.infraestrutura.database import (
 from src.compartilhado.infraestrutura.jwks import ValidadorDeTokenJWKS
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.metrics import configurar_metricas
+from src.compartilhado.interfaces.dependencies import correlacionar_pela_ordem
 from src.compartilhado.interfaces.error_handler import registrar_error_handlers
 from src.compartilhado.interfaces.middleware import SecurityHeadersMiddleware
 from src.compartilhado.interfaces.router_saude import router as router_saude
@@ -64,6 +65,7 @@ def criar_app() -> FastAPI:
         version=version("pytstop-execution-service"),
         description=_DESCRICAO,
         lifespan=lifespan,
+        dependencies=[Depends(correlacionar_pela_ordem)],
     )
     application.include_router(router_saude)
     application.include_router(router_estoque)

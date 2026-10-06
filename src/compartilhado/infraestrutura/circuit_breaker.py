@@ -16,9 +16,11 @@ _log = structlog.get_logger(__name__)
 # Alimenta o alerta "circuito aberto" (RFC-004, secao 9).
 _CIRCUITO_ABERTO = Gauge(
     "pytstop_circuit_breaker_aberto",
-    "1 com o circuito aberto (dependencia suspensa), 0 fechado.",
+    "1 com o circuito aberto (dependencia suspensa), 0,5 em meia-abertura (a "
+    "proxima chamada e a prova), 0 fechado.",
     ["dependencia"],
 )
+_MEIA_ABERTURA = 0.5
 
 
 class CircuitBreaker:
@@ -47,8 +49,9 @@ class CircuitBreaker:
         self._lock = threading.Lock()
         self._falhas = 0
         self._aberto_ate: float | None = None
-        self._gauge = _CIRCUITO_ABERTO.labels(dependencia)
-        self._gauge.set(0)
+        # Lido no scrape pelo estado efetivo: vencido o prazo sem trafego, o
+        # circuito ja deixa passar a prova e o alerta nao fica preso em 1.
+        _CIRCUITO_ABERTO.labels(dependencia).set_function(self._estado_efetivo)
 
     @property
     def aberto(self) -> bool:
@@ -62,6 +65,12 @@ class CircuitBreaker:
         """
         with self._lock:
             return self._aberto_ate is not None and self._relogio() < self._aberto_ate
+
+    def _estado_efetivo(self) -> float:
+        with self._lock:
+            if self._aberto_ate is None:
+                return 0.0
+            return 1.0 if self._relogio() < self._aberto_ate else _MEIA_ABERTURA
 
     def segundos_para_nova_tentativa(self) -> int:
         """Segundos (arredondados para cima) ate a proxima prova; 0 se fechado."""
@@ -84,7 +93,6 @@ class CircuitBreaker:
         with self._lock:
             if self._aberto_ate is not None:
                 _log.info("circuit_breaker_closed", dependencia=self._dependencia)
-                self._gauge.set(0)
             self._falhas = 0
             self._aberto_ate = None
 
@@ -99,5 +107,4 @@ class CircuitBreaker:
                         dependencia=self._dependencia,
                         falhas=self._falhas,
                     )
-                    self._gauge.set(1)
                 self._aberto_ate = self._relogio() + self._segundos_aberto

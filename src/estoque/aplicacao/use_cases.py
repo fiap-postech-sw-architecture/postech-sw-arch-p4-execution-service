@@ -179,7 +179,7 @@ class ReservarPecas:
                 self._uow.commit()
                 _log.info(
                     "parts_reservation_refused",
-                    ordem_id=str(ordem_id),
+                    correlation_id=str(ordem_id),
                     skus_em_falta=[str(f.sku) for f in faltantes],
                 )
                 return recusada
@@ -198,7 +198,7 @@ class ReservarPecas:
             _log.info(
                 "late_command_discarded",
                 comando="ReservarPecas",
-                ordem_id=str(existente.ordem_id),
+                correlation_id=str(existente.ordem_id),
                 status=existente.status,
             )
             return
@@ -262,7 +262,7 @@ class LiberarReserva:
                 _log.info(
                     "compensation_tombstone_recorded",
                     comando="LiberarReserva",
-                    ordem_id=str(ordem_id),
+                    correlation_id=str(ordem_id),
                 )
             else:
                 itens = self._itens.obter_com_lock(
@@ -273,7 +273,7 @@ class LiberarReserva:
                 ReservaLiberadaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("reservation_released", ordem_id=str(ordem_id))
+        _log.info("reservation_released", correlation_id=str(ordem_id))
 
 
 def reserva_ativa(reservas: ReservaRepository, ordem_id: UUID) -> bool:

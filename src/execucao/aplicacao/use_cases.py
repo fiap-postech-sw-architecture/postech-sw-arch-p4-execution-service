@@ -103,7 +103,7 @@ class AgendarExecucao:
                 _log.info(
                     "late_command_discarded",
                     comando="AgendarExecucao",
-                    ordem_id=str(ordem_id),
+                    correlation_id=str(ordem_id),
                     status=execucao.status,
                 )
                 return execucao
@@ -152,7 +152,7 @@ class CancelarExecucao:
                 _log.info(
                     "compensation_tombstone_recorded",
                     comando="CancelarExecucao",
-                    ordem_id=str(ordem_id),
+                    correlation_id=str(ordem_id),
                 )
             else:
                 execucao.cancelar(agora)
@@ -161,7 +161,7 @@ class CancelarExecucao:
                 ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("execution_cancelled", ordem_id=str(ordem_id))
+        _log.info("execution_cancelled", correlation_id=str(ordem_id))
 
 
 class IniciarExecucao:

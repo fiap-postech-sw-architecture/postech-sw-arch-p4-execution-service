@@ -137,8 +137,12 @@ def test_gauge_acompanha_abertura_e_fechamento(relogio: _Relogio) -> None:
     assert aberto() == 0
     _falhar(breaker, 5)
     assert aberto() == 1
+    # Prazo vencido sem trafego: a proxima chamada ja e a prova (meia-abertura),
+    # entao o alerta "circuito aberto" nao fica preso em 1.
     relogio.agora += 30
+    assert aberto() == 0.5
     assert breaker.permitir()
+    assert aberto() == 1  # a prova saiu e empurrou o prazo
     breaker.registrar_sucesso()
     assert aberto() == 0
 

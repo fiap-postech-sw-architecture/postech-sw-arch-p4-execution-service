@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import json
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -55,6 +58,22 @@ class TestSecurityHeaders:
         assert resposta.headers["X-Request-ID"] == "req-500"
         assert resposta.headers["X-Content-Type-Options"] == "nosniff"
         assert resposta.headers["Content-Security-Policy"] == "default-src 'none'"
+
+    def test_access_log_estruturado_com_request_id(
+        self, log_capturado: io.StringIO
+    ) -> None:
+        _app().get("/itens/7", headers={"X-Request-ID": "req-acesso"})
+        registros = [
+            json.loads(linha) for linha in log_capturado.getvalue().splitlines()
+        ]
+        [acesso] = [r for r in registros if r["event"] == "http_request"]
+        assert (acesso["method"], acesso["path"], acesso["status"]) == (
+            "GET",
+            "/itens/7",
+            200,
+        )
+        assert acesso["request_id"] == "req-acesso"
+        assert acesso["duracao_ms"] >= 0
 
     def test_swagger_fica_sem_csp(self) -> None:
         assert "Content-Security-Policy" not in _app().get("/docs").headers

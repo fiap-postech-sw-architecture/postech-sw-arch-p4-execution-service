@@ -504,6 +504,27 @@ def test_ordem_sem_diagnostico_e_404(api: TestClient, mecanico: dict[str, str]) 
     assert resposta.json()["erro"]["codigo"] == "ENTIDADE_NAO_ENCONTRADA"
 
 
+def test_log_do_request_leva_a_ordem_como_correlation_id(
+    api: TestClient, mecanico: dict[str, str], log_capturado: io.StringIO
+) -> None:
+    # Chave de busca da saga no Loki (ADR-043), inclusive no log do handler de
+    # erro, que roda fora da thread da rota.
+    ordem_id = uuid4()
+    api.post(f"{URL}/{ordem_id}/inicio", headers=mecanico)
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    [negacao] = [r for r in registros if r["event"] == "domain_exception_handled"]
+    assert negacao["correlation_id"] == str(ordem_id)
+
+
+def test_ordem_fora_do_formato_e_422_sem_correlation_id(
+    api: TestClient, mecanico: dict[str, str], log_capturado: io.StringIO
+) -> None:
+    resposta = api.post(f"{URL}/nao-e-uuid/inicio", headers=mecanico)
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"][0]["loc"] == ["path", "ordem_id"]
+    assert "correlation_id" not in log_capturado.getvalue()
+
+
 def test_atendente_nao_mexe_em_diagnostico(
     api: TestClient,
     autenticar: Callable[..., dict[str, str]],

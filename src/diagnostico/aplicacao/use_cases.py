@@ -82,7 +82,7 @@ class RegistrarSolicitacaoDeDiagnostico:
                     _log.info(
                         "late_command_discarded",
                         comando="SolicitarDiagnostico",
-                        ordem_id=str(ordem_id),
+                        correlation_id=str(ordem_id),
                         status=existente.status,
                     )
                 return existente
@@ -269,7 +269,7 @@ class DescartarDiagnostico:
                 _log.info(
                     "compensation_tombstone_recorded",
                     comando="DescartarDiagnostico",
-                    ordem_id=str(ordem_id),
+                    correlation_id=str(ordem_id),
                 )
             else:
                 diagnostico.descartar(agora)
@@ -278,4 +278,4 @@ class DescartarDiagnostico:
                 DiagnosticoDescartadoEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("diagnosis_discarded", ordem_id=str(ordem_id))
+        _log.info("diagnosis_discarded", correlation_id=str(ordem_id))
