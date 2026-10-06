@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
+from src.compartilhado.infraestrutura.database import (
+    duplicata_vira_excecao_de_dominio,
+)
 from src.diagnostico.dominio.diagnostico import Diagnostico
 from src.diagnostico.infraestrutura.mapping import diagnosticos_table
 
@@ -30,7 +33,10 @@ class DiagnosticoSQLAlchemyRepository:
 
     def salvar(self, diagnostico: Diagnostico) -> None:
         self._session.add(diagnostico)
-        self._session.flush()
+        with duplicata_vira_excecao_de_dominio(
+            f"Ja existe diagnostico para a ordem {diagnostico.ordem_id}"
+        ):
+            self._session.flush()
 
     def listar(
         self, status: StatusDiagnostico | None, offset: int, limit: int

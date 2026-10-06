@@ -82,4 +82,7 @@ class ReservaSQLAlchemyRepository:
 
     def salvar(self, reserva: Reserva) -> None:
         self._session.add(reserva)
-        self._session.flush()
+        with duplicata_vira_excecao_de_dominio(
+            f"Ja existe reserva para a ordem {reserva.ordem_id}"
+        ):
+            self._session.flush()

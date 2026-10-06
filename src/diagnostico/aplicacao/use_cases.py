@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
 from src.diagnostico.aplicacao.events import (
     DiagnosticoConcluidoEvent,
     DiagnosticoDescartadoEvent,
@@ -57,6 +58,7 @@ class RegistrarSolicitacaoDeDiagnostico:
         self._repo = repo
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(
         self, ordem_id: UUID, veiculo: Veiculo, descricao_problema: str
     ) -> Diagnostico:
@@ -248,6 +250,7 @@ class DescartarDiagnostico:
         self._repo = repo
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(self, ordem_id: UUID) -> None:
         agora = datetime.now(UTC)
         with self._uow:

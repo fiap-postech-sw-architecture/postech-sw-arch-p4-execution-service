@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
 from src.compartilhado.dominio.exceptions import ViolacaoRegraDeNegocioException
 from src.execucao.aplicacao.events import (
     ExecucaoAgendadaEvent,
@@ -69,6 +70,7 @@ class AgendarExecucao:
         self._estoque = estoque
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(self, ordem_id: UUID, prioridade: Prioridade) -> Execucao:
         """Devolve a execucao da ordem (nova, na fila ou ja encerrada).
 
@@ -120,6 +122,7 @@ class CancelarExecucao:
         self._repo = repo
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(self, ordem_id: UUID) -> None:
         agora = datetime.now(UTC)
         with self._uow:

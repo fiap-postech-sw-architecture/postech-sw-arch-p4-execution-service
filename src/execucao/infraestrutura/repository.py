@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, case, func, or_, select
 
+from src.compartilhado.infraestrutura.database import (
+    duplicata_vira_excecao_de_dominio,
+)
 from src.execucao.aplicacao.ports import ItemDaFila
 from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 from src.execucao.infraestrutura.mapping import execucoes_table
@@ -34,7 +37,10 @@ class ExecucaoSQLAlchemyRepository:
 
     def salvar(self, execucao: Execucao) -> None:
         self._session.add(execucao)
-        self._session.flush()
+        with duplicata_vira_excecao_de_dominio(
+            f"Ja existe execucao para a ordem {execucao.ordem_id}"
+        ):
+            self._session.flush()
 
 
 class FilaDeExecucaoSQLAlchemy:

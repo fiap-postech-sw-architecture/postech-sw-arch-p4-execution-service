@@ -20,7 +20,13 @@ from src.compartilhado.dominio.exceptions import (
     TransicaoStatusInvalidaException,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
+from src.diagnostico.aplicacao.use_cases import (
+    DescartarDiagnostico,
+    RegistrarSolicitacaoDeDiagnostico,
+)
+from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import (
     AjustarQuantidade,
     CriarItemEstoque,
@@ -37,6 +43,7 @@ from src.estoque.infraestrutura.repository import (
 from src.estoque.infraestrutura.seed import ITENS_DEMO, semear
 from src.execucao.aplicacao.use_cases import (
     AgendarExecucao,
+    CancelarExecucao,
     FinalizarExecucao,
     IniciarExecucao,
 )
@@ -506,3 +513,155 @@ def test_seed_de_duas_replicas_ao_mesmo_tempo_nao_derruba_o_boot(
         )
     assert oleo is not None
     assert oleo.quantidade_disponivel == 99  # o da outra replica, intocado
+
+
+_DIAGNOSTICO_PENDENTE = (
+    "INSERT INTO diagnosticos (ordem_id, status, veiculo, descricao_problema, "
+    "itens, observacoes, solicitado_em) VALUES (:ordem_id, 'AGUARDANDO', "
+    """'{"veiculo_id": "4a7c7a6e-1b6f-4bb0-9a49-5d1b3f0c2e11", "placa": "ABC1D23", """
+    """"marca": "Fiat", "modelo": "Uno", "ano": 2015}', 'Nao liga', '[]', '', now())"""
+)
+_EXECUCAO_NA_FILA = (
+    "INSERT INTO execucoes (ordem_id, status, prioridade, enfileirada_em) "
+    "VALUES (:ordem_id, 'AGUARDANDO', 'normal', now())"
+)
+_RESERVA_SEM_PECAS = (
+    "INSERT INTO reservas (id, ordem_id, status, itens, faltantes, criada_em) "
+    "VALUES (gen_random_uuid(), :ordem_id, 'ATIVA', '[]', '[]', now())"
+)
+
+
+def _solicitar_diagnostico(session: Session, ordem_id: UUID) -> object:
+    veiculo = Veiculo(
+        veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
+    )
+    return RegistrarSolicitacaoDeDiagnostico(
+        DiagnosticoSQLAlchemyRepository(session), _uow(session)
+    ).executar(ordem_id, veiculo, "Nao liga")
+
+
+def _descartar_diagnostico(session: Session, ordem_id: UUID) -> object:
+    return DescartarDiagnostico(
+        DiagnosticoSQLAlchemyRepository(session), _uow(session)
+    ).executar(ordem_id)
+
+
+def _agendar_execucao(session: Session, ordem_id: UUID) -> object:
+    return AgendarExecucao(
+        ExecucaoSQLAlchemyRepository(session),
+        FilaDeExecucaoSQLAlchemy(session),
+        VeiculosSQLAlchemy(session),
+        EstoqueSQLAlchemyAdapter(session),
+        _uow(session),
+    ).executar(ordem_id, Prioridade.NORMAL)
+
+
+def _cancelar_execucao(session: Session, ordem_id: UUID) -> object:
+    return CancelarExecucao(
+        ExecucaoSQLAlchemyRepository(session), _uow(session)
+    ).executar(ordem_id)
+
+
+def _reservar_sem_pecas(session: Session, ordem_id: UUID) -> object:
+    return ReservarPecas(
+        ItemEstoqueSQLAlchemyRepository(session),
+        ReservaSQLAlchemyRepository(session),
+        _uow(session),
+    ).executar(ordem_id, [])
+
+
+def _liberar_reserva(session: Session, ordem_id: UUID) -> object:
+    return LiberarReserva(
+        ItemEstoqueSQLAlchemyRepository(session),
+        ReservaSQLAlchemyRepository(session),
+        _uow(session),
+    ).executar(ordem_id)
+
+
+@pytest.mark.parametrize(
+    ("insercao", "comando", "tabela", "status", "respostas"),
+    [
+        pytest.param(
+            _DIAGNOSTICO_PENDENTE,
+            _solicitar_diagnostico,
+            "diagnosticos",
+            "AGUARDANDO",
+            [],
+            id="solicitar-diagnostico",
+        ),
+        pytest.param(
+            _DIAGNOSTICO_PENDENTE,
+            _descartar_diagnostico,
+            "diagnosticos",
+            "DESCARTADO",
+            ["DiagnosticoDescartado"],
+            id="descarte-contra-a-solicitacao",
+        ),
+        pytest.param(
+            _EXECUCAO_NA_FILA,
+            _agendar_execucao,
+            "execucoes",
+            "AGUARDANDO",
+            ["ExecucaoAgendada"],
+            id="agendar-execucao",
+        ),
+        pytest.param(
+            _EXECUCAO_NA_FILA,
+            _cancelar_execucao,
+            "execucoes",
+            "CANCELADA",
+            ["ExecucaoCancelada"],
+            id="cancelamento-contra-o-agendamento",
+        ),
+        pytest.param(
+            _RESERVA_SEM_PECAS,
+            _reservar_sem_pecas,
+            "reservas",
+            "ATIVA",
+            ["PecasReservadas"],
+            id="reservar-sem-pecas",
+        ),
+        pytest.param(
+            _RESERVA_SEM_PECAS,
+            _liberar_reserva,
+            "reservas",
+            "LIBERADA",
+            ["ReservaLiberada"],
+            id="liberacao-contra-a-reserva",
+        ),
+    ],
+)
+def test_copia_simultanea_que_perde_a_corrida_le_a_vencedora(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+    insercao: str,
+    comando: Callable[[Session, UUID], object],
+    tabela: str,
+    status: str,
+    respostas: list[str],
+) -> None:
+    # A outra copia (ou o comando original, contra a lapide) ja inseriu a linha
+    # da ordem e nao comitou: esta le "nada", insere e bate na UNIQUE. Antes
+    # isso era IntegrityError (500 ou mensagem na DLQ); agora roda de novo e
+    # segue a regra de repeticao sobre a linha da vencedora.
+    ordem_id = uuid4()
+    if comando is _agendar_execucao:
+        with session_factory() as session:  # RN-027: so agenda com reserva ativa
+            _reservar_sem_pecas(session, ordem_id)
+
+    def disputar() -> None:
+        with session_factory() as session:
+            comando(session, ordem_id)
+
+    antes = len(outbox())
+    erros = _com_insercao_pendente(engine, insercao, {"ordem_id": ordem_id}, disputar)
+
+    assert erros == {}
+    with engine.connect() as conexao:
+        linhas = conexao.execute(
+            text(f"SELECT status FROM {tabela} WHERE ordem_id = :id"),  # noqa: S608 - tabela fixa do teste
+            {"id": ordem_id},
+        ).all()
+    assert [linha.status for linha in linhas] == [status]
+    assert [linha["tipo"] for linha in outbox()[antes:]] == respostas

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
 from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
 from src.estoque.aplicacao.events import (
     FaltanteDados,
@@ -139,8 +140,8 @@ class ReservarPecas:
 
     Copias simultaneas do mesmo comando: a existencia da reserva e conferida
     DEPOIS de travar os itens, entao a segunda copia ve a decisao da primeira;
-    sem itens para travar (lista vazia), a UNIQUE(ordem_id) barra a segunda
-    (IntegrityError), que o consumidor reprocessa no caminho idempotente.
+    sem itens para travar (lista vazia), a UNIQUE(ordem_id) barra a segunda,
+    que roda de novo e cai na regra de repeticao (``releitura_em_corrida``).
     """
 
     def __init__(
@@ -153,6 +154,7 @@ class ReservarPecas:
         self._reservas = reservas
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(self, ordem_id: UUID, pecas: Sequence[ItemReserva]) -> Reserva:
         """Devolve a decisao da ordem: reserva ATIVA, RECUSADA ou ja existente."""
         agora = datetime.now(UTC)
@@ -250,6 +252,7 @@ class LiberarReserva:
         self._reservas = reservas
         self._uow = uow
 
+    @releitura_em_corrida
     def executar(self, ordem_id: UUID) -> None:
         agora = datetime.now(UTC)
         with self._uow:
