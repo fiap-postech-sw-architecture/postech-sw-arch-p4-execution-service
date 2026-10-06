@@ -8,6 +8,7 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Recent decisions
 
+- 2026-10-06 - Todo lock pessimista tem teste de concorrencia real em `tests/integracao/test_concorrencia.py` (padrao `_disputar`: a primeira transacao trava e segura, a segunda bloqueia, so entao a primeira comita): itens, reserva, `reserva_ativa` (agendar e iniciar x liberar), execucao (inicio x cancelamento, inicio x inicio) e diagnostico (inicio x inicio, conclusao x descarte). Cada teste foi visto falhar numa copia sem o `FOR UPDATE`; lock novo entra com o teste no mesmo commit - PR #2
 - 2026-10-06 - Contrato da validacao de precos confirmado com o Billing: `POST /api/v1/precos/validacao` `{servicos: [codigo], pecas: [codigo]}` (ate 200 cada) -> 200 `{invalidos: [codigo]}`, com o token do mecanico repassado - PR #2
 - 2026-10-06 - Contrato de erro: envelope `{erro: {codigo, mensagem, id_requisicao}}` dos tres servicos (supera a pendencia (a) da entrada de contrato); 404 de rota inexistente usa o mesmo `ENTIDADE_NAO_ENCONTRADA` do dominio; o 422 de schema fica no formato do p3 `{detail, id_requisicao}`; 4xx do Billing e resposta fora do contrato viram 502 `RESPOSTA_INVALIDA_DA_DEPENDENCIA` (supera o "4xx vira 503") - PR #2
 - 2026-10-06 - Billing: retry so em timeout, erro de rede, protocolo remoto e 502/503/504; 500 e erro local viram 503 sem retry; cada tentativa conta no breaker (5 falhas abrem 30 s). Codigos e SKUs com no maximo 50 caracteres (o Billing e dono dos codigos); `JWKS_URL`/`BILLING_URL` sem esquema http(s) ou host param o boot - PR #2
@@ -27,6 +28,7 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Discovered conventions
 
+- 2026-10-06 - O `make smoke` prova a imagem de producao: `Config.User` = `1001:1001`, sem header `server` (`--no-server-header` no entrypoint), boot do uvicorn em JSON, `http_request` presente e nenhuma linha `uvicorn.access`. O log JSON e configurado em `criar_app()`, nao no lifespan: o uvicorn importa o modulo e monta o app antes de logar `Started server process` - PR #2
 - 2026-10-06 - `correlation_id` = `ordem_id` em toda linha de log do request: ligado por uma dependency `async` global (`correlacionar_pela_ordem`); numa dependency sync o bind fica na copia do contexto da thread e some do log do handler de erro - PR #2
 - 2026-10-06 - `make smoke` e o job `build` do CI: compose com projeto e portas proprios (18003/15433), `--wait` pelo HEALTHCHECK do Dockerfile, readiness 200, 401 sem token e `down -v` sempre. `make check` inclui `uv lock --check`; o uv (0.11) vem do `required-version` do pyproject, que o setup-uv le, e o Python do `.python-version` - PR #2
 - 2026-10-06 - Migracoes: `pg_advisory_lock` no `env.py` serializa replicas com `RUN_MIGRATIONS_ON_STARTUP`; o `lock_timeout` (`DB_LOCK_TIMEOUT_MS`) entra so depois da trava, para a segunda replica esperar a primeira e o DDL nao enfileirar o trafego - PR #2
@@ -36,6 +38,8 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Gotchas
 
+- 2026-10-06 - `--no-access-log` deixa `uvicorn.access` sem handler e com `propagate=False`, e o uvicorn decide por `hasHandlers()`, a cada conexao, se escreve o acesso: religar a propagacao ao root (o que o `configurar_logging` fazia para o scrub) trazia de volta a linha de texto, duplicando o `http_request`. Nenhum teste sobe o uvicorn, entao o teste usa o `uvicorn.Config` real e o smoke falha se o log da imagem tiver `uvicorn.access` - PR #2
+- 2026-10-06 - O split `dd-dddd-dddd` do regex de telefone casava entre os grupos de ~1,4% dos UUID v4: o `correlation_id` (= `ordem_id`) saia como `732ffc***-...` do log e os testes que comparam o UUID lido do log falhavam em ~8% das execucoes. O telefone nao pode encostar em letra, digito, `_` nem hifen (`(?<![\w-])`/`(?![\w-])`); o custo e que telefone colado numa palavra (`tel(11)99999-0000`) deixa de ser mascarado por valor, so por chave - PR #2
 - 2026-10-06 - `pg_stat_activity` e um retrato por transacao: o teste que esperava a outra transacao parar no lock lia a view num laco dentro da mesma transacao e, se a primeira leitura viesse antes da espera (CI lento), nunca a via (falha intermitente no CI). Cada leitura do laco fecha a transacao (`rollback`) - PR #2
 - 2026-10-06 - O handler de `Exception` do Starlette roda no `ServerErrorMiddleware`, por fora dos middlewares do app: o 500 saia sem headers de seguranca nem `X-Request-ID`. A conversao do erro nao tratado fica no proprio `SecurityHeadersMiddleware` - PR #2
 - 2026-10-06 - `PyJWKClient.get_signing_key` segura um RLock durante o fetch (requests em fila a 2 s cada esgotavam o threadpool) e so traduz URLError/TimeoutError/HTTPException: reset no meio do corpo sai como OSError cru. O validador usa `get_signing_keys` com lock e breaker proprios - PR #2
@@ -46,15 +50,18 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Tech debt / TODO
 
+- 2026-10-06 - LOW - As linhas do Alembic (`alembic upgrade head` no entrypoint, `fileConfig` do `alembic.ini`) saem em texto antes do JSON do uvicorn, por serem outro processo; se o Loki exigir JSON puro, o `migrations/env.py` passa a chamar `configurar_logging()` - PR #2
 - 2026-10-06 - MEDIUM - `docs/arquitetura.md` do servico com o modelo de dados completo: o ER da RFC-004 (secao 7.3) ainda difere do implementado (outbox com colunas soltas em vez de `envelope`, sem `versao`, `mensagens_processadas` so com o consumidor, `reservas.itens` em JSONB); e `docs/api` (OpenAPI exportado e collection Postman) - PR #2
 - 2026-10-06 - MEDIUM - Consumidor de comandos (PR de mensageria): ligar o `correlation_id` do envelope ao contexto de log por mensagem (hoje so a API liga, pela rota), tratar `ValorInvalidoError` de comando como erro permanente (DLQ) e criar o caso de uso de `AnonimizarVeiculo` (LGPD), que troca a placa dos retratos de diagnostico e execucao por `Veiculo.anonimizar` (hoje sem chamador) - PR #2
 - 2026-10-06 - LOW - `root_path`/`--root-path` atras do Kong (prefixo `/execucao`): sem ele o Swagger quebra atras da borda; entra com os manifests do Kubernetes - PR #2
-- 2026-10-06 - LOW - ADRs a alinhar ao codigo (coordenacao da arquitetura): ADR-037 ainda cita NOWAIT e reserva por OS e peca, ADR-034 diz que SKU sem estoque so falha na reserva (a conclusao ja recusa), ADR-039 nao lista o atendente lendo fila e estoque - PR #2
+- 2026-10-06 - LOW - ADRs a alinhar ao codigo: ADR-037 ainda cita NOWAIT e reserva por OS e peca, ADR-034 diz que SKU sem estoque so falha na reserva (a conclusao ja recusa), ADR-039 nao lista o atendente lendo fila e estoque - PR #2
 - 2026-10-06 - MEDIUM - Saga: `SolicitarDiagnostico` nao tem resposta tecnica no catalogo (o proximo fato, `DiagnosticoIniciado`, depende do mecanico), entao o prazo tecnico do orquestrador (120 s x 5) compensaria OS esperando mecanico. E passo com prazo esgotado pode ter efeito tardio (reserva ATIVA ou execucao na fila de ordem compensada) se a compensacao so incluir passos concluidos
 - 2026-10-06 - LOW - Metricas da RFC-004 secao 9 (`outbox_pendentes`, `mensagens_*`) e tracing OTel ficam para a fase de observabilidade; hoje: `http_request_duration_seconds`, `pytstop_circuit_breaker_aberto{dependencia}` (1 aberto, 0,5 meia-abertura, 0 fechado) e `pytstop_jwks_falhas_total` - PR #2
 
 ## Review lessons
 
+- 2026-10-06 - Texto que afirma cobertura ("cada lock pessimista tem um teste", "o smoke confere o usuario 1001") precisa de prova mecanica: remova o item numa copia descartavel e veja o gate falhar. Tres locks e dois itens do smoke estavam sem verificacao apesar de README, Makefile e ci.yml dizerem o contrario - PR #2
+- 2026-10-06 - Regex de PII precisa de teste com o formato dos ids do proprio servico (UUID, SKU, codigo): o comentario "nenhum log emite esse formato" nao era prova, e o regex de telefone mascarava 1,4% dos UUID v4 sem que revisao ou suite notassem - PR #2
 - 2026-10-06 - "Texto livre nunca vai para log" era so convencao e vazou por tres caminhos (DETAIL do driver no traceback, repr gerado do agregado, scrubber sem placa): regra de PII precisa de teste de ponta a ponta com o pipeline de log real - PR #2
 - 2026-10-06 - Guarda de fora do agregado conferida depois de muta-lo so fica correta por causa do rollback: valide antes (padrao `validar_*` sem efeito, depois o mutador) - PR #2
 - 2026-10-06 - Verifica-depois-insere sem traduzir a violacao de UNIQUE vira 500 (ou mensagem perdida) quando duas copias correm: procure todo `salvar` de agregado novo - PR #2
