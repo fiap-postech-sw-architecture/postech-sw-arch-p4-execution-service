@@ -43,7 +43,6 @@ _DESCRICAO = (
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Cria engine, validador de token e cliente do Billing; descarta no shutdown."""
-    configurar_logging()
     engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     app.state.session_factory = criar_session_factory(engine)
     app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
@@ -60,6 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 def criar_app() -> FastAPI:
+    # Log JSON antes da primeira linha do servidor: o uvicorn importa este modulo
+    # (e monta o app) antes de "Started server process"; configurado so no
+    # lifespan, as linhas de boot do uvicorn saiam em texto no meio do JSON.
+    configurar_logging()
     application = FastAPI(
         title="PytStop Execution Service",
         version=version("pytstop-execution-service"),

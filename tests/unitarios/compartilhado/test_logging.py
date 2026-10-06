@@ -523,3 +523,20 @@ class TestLoggersDoUvicorn:
         configurar_logging(stream=buffer_com_uvicorn_restaurado)
 
         assert not logging.getLogger("uvicorn.access").hasHandlers()
+
+
+def test_criar_app_configura_o_log_json_antes_do_lifespan(
+    capsys: pytest.CaptureFixture[str], log_capturado: io.StringIO
+) -> None:
+    # O uvicorn importa o modulo e monta o app antes de logar "Started server
+    # process": configurado so no lifespan, o boot saia em texto no meio do JSON.
+    # `log_capturado` so devolve o root e o structlog ao que eram no fim do teste.
+    from src.main import criar_app
+
+    logging.getLogger().handlers = []
+    criar_app()  # sem entrar no lifespan
+    capsys.readouterr()
+
+    logging.getLogger("uvicorn.error").info("Started server process [1]")
+    registro = json.loads(capsys.readouterr().out)
+    assert registro["event"] == "Started server process [1]"

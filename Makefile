@@ -45,10 +45,10 @@ check: lock-check lint lint-arch typecheck security test
 # Smoke da imagem pelo entrypoint real (migracao, seed), o job build do CI: sobe
 # a stack, confere a readiness (banco), que rota autenticada sem token responde
 # 401, que a imagem roda como 1001:1001, que a resposta nao traz o header
-# `server` e que o uvicorn nao escreve access log (so o `http_request`
-# estruturado do middleware), e derruba tudo com os volumes, inclusive em falha
-# (depois de mostrar os logs). Projeto e portas proprios para nao derrubar a
-# stack do compose-up.
+# `server`, que as linhas de boot do uvicorn saem em JSON e que ele nao escreve
+# access log (so o `http_request` estruturado do middleware), e derruba tudo
+# com os volumes, inclusive em falha (depois de mostrar os logs). Projeto e
+# portas proprios para nao derrubar a stack do compose-up.
 API_IMAGE ?= pytstop-execution-service:dev
 SMOKE_PORT ?= 18003
 SMOKE_DB_PORT ?= 15433
@@ -67,11 +67,13 @@ smoke:
 	&& { ! printf '%s\n' "$$cabecalhos" | grep -qi '^server:' \
 		|| { echo "smoke: a resposta traz o header server" >&2; false; }; } \
 	&& logs="$$($(SMOKE_COMPOSE) logs --no-color api)" \
+	&& { printf '%s\n' "$$logs" | grep -q '"event": "Started server process' \
+		|| { echo "smoke: as linhas de boot do uvicorn nao saem em JSON" >&2; false; }; } \
 	&& { printf '%s\n' "$$logs" | grep -q '"event": "http_request"' \
 		|| { echo "smoke: o access log estruturado (http_request) nao saiu" >&2; false; }; } \
 	&& { ! printf '%s\n' "$$logs" | grep -q 'uvicorn.access' \
 		|| { echo "smoke: o uvicorn escreveu access log (--no-access-log nao vale)" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server e so o access log estruturado" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON e sem access log do uvicorn" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
