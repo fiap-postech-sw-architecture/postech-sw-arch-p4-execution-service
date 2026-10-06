@@ -13,7 +13,7 @@ from src.execucao.aplicacao.events import (
     ExecucaoIniciadaEvent,
 )
 from src.execucao.dominio.exceptions import ExecucaoNaoEncontradaException
-from src.execucao.dominio.execucao import Execucao, StatusExecucao
+from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -65,7 +65,7 @@ class AgendarExecucao:
         self._veiculos = veiculos
         self._uow = uow
 
-    def executar(self, ordem_id: UUID, prioridade: int) -> Execucao:
+    def executar(self, ordem_id: UUID, prioridade: Prioridade) -> Execucao:
         agora = datetime.now(UTC)
         with self._uow:
             execucao = self._repo.obter(ordem_id)

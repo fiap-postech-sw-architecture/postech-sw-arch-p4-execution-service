@@ -29,7 +29,7 @@ from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
     ReservaSQLAlchemyRepository,
 )
-from src.execucao.dominio.execucao import Execucao
+from src.execucao.dominio.execucao import Execucao, Prioridade
 from src.execucao.infraestrutura.adapters import EstoqueSQLAlchemyAdapter
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
@@ -285,7 +285,7 @@ class TestDiagnosticos:
 
 class TestFilaDeExecucao:
     def _agendar(
-        self, prioridade: int, minutos: int, ordem_id: UUID | None = None
+        self, prioridade: Prioridade, minutos: int, ordem_id: UUID | None = None
     ) -> Execucao:
         return Execucao.agendar(
             ordem_id=ordem_id or uuid4(),
@@ -294,21 +294,24 @@ class TestFilaDeExecucao:
             agora=T0 + timedelta(minutes=minutos),
         )
 
-    def test_prioridade_desc_chegada_asc_e_desempate_por_ordem(
+    def test_alta_antes_chegada_asc_e_desempate_por_ordem(
         self, session_factory: sessionmaker[Session]
     ) -> None:
-        normal_cedo = self._agendar(0, 1)
-        normal_tarde = self._agendar(0, 5)
-        urgente = self._agendar(10, 9)
-        empate_a = self._agendar(3, 2, UUID(int=1))
-        empate_b = self._agendar(3, 2, UUID(int=2))
-        iniciada = self._agendar(50, 0)
+        # UUIDs fixos em ordem inversa a da chegada: ordenar por ordem_id no lugar
+        # de enfileirada_em troca normal_cedo e normal_tarde de posicao.
+        normal, alta = Prioridade.NORMAL, Prioridade.ALTA
+        normal_cedo = self._agendar(normal, 1, UUID(int=9))
+        normal_tarde = self._agendar(normal, 5, UUID(int=8))
+        alta_tarde = self._agendar(alta, 9, UUID(int=7))
+        empate_a = self._agendar(alta, 2, UUID(int=1))
+        empate_b = self._agendar(alta, 2, UUID(int=2))
+        iniciada = self._agendar(alta, 0, UUID(int=3))
         iniciada.iniciar(uuid4(), T0)
         _gravar(
             session_factory,
             normal_cedo,
             normal_tarde,
-            urgente,
+            alta_tarde,
             empate_b,
             empate_a,
             iniciada,
@@ -316,9 +319,10 @@ class TestFilaDeExecucao:
 
         with session_factory() as session:
             fila = FilaDeExecucaoSQLAlchemy(session)
-            esperada = [urgente, empate_a, empate_b, normal_cedo, normal_tarde]
+            esperada = [empate_a, empate_b, alta_tarde, normal_cedo, normal_tarde]
             itens = fila.listar(offset=0, limit=10)
             assert [i.ordem_id for i in itens] == [e.ordem_id for e in esperada]
+            assert [i.prioridade for i in itens] == 3 * [alta] + 2 * [normal]
             assert [i.posicao for i in itens] == [1, 2, 3, 4, 5]
             assert [i.posicao for i in fila.listar(offset=3, limit=10)] == [4, 5]
             assert fila.contar() == 5
@@ -327,6 +331,14 @@ class TestFilaDeExecucao:
                 lida = repo.obter(execucao.ordem_id)
                 assert lida is not None
                 assert fila.posicao(lida) == posicao
+
+    def test_prioridade_gravada_como_o_valor_do_contrato(
+        self, session_factory: sessionmaker[Session], engine: Engine
+    ) -> None:
+        _gravar(session_factory, self._agendar(Prioridade.ALTA, 0))
+        with engine.connect() as conexao:
+            gravada = conexao.execute(text("SELECT prioridade FROM execucoes"))
+            assert gravada.scalar_one() == "alta"
 
 
 class TestEstoqueDaExecucao:

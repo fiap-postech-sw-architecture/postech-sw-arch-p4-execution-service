@@ -24,7 +24,7 @@ from src.execucao.aplicacao.use_cases import (
     IniciarExecucao,
 )
 from src.execucao.dominio.exceptions import ExecucaoNaoEncontradaException
-from src.execucao.dominio.execucao import Execucao, StatusExecucao
+from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 from tests.fakes import (
     EstoqueEmMemoria,
     ExecucoesEmMemoria,
@@ -45,7 +45,7 @@ VEICULO = Veiculo(
 def _agendada(ordem_id: UUID | None = None) -> Execucao:
     return Execucao.agendar(
         ordem_id=ordem_id or uuid4(),
-        prioridade=0,
+        prioridade=Prioridade.NORMAL,
         veiculo=None,
         agora=datetime.now(UTC),
     )
@@ -103,11 +103,14 @@ class TestAgendar:
         ordem_id = uuid4()
         veiculos = VeiculosEmMemoria({ordem_id: VEICULO})
         execucao = AgendarExecucao(repo, FilaFixa(posicao=3), veiculos, uow).executar(
-            ordem_id, 7
+            ordem_id, Prioridade.ALTA
         )
 
         assert repo.execucoes[ordem_id] is execucao
-        assert (execucao.status, execucao.prioridade) == (StatusExecucao.AGUARDANDO, 7)
+        assert (execucao.status, execucao.prioridade) == (
+            StatusExecucao.AGUARDANDO,
+            Prioridade.ALTA,
+        )
         assert execucao.veiculo == VEICULO
         assert _eventos(uow) == [
             ("ExecucaoAgendada", {"ordem_id": str(ordem_id), "posicao_na_fila": 3})
@@ -118,9 +121,9 @@ class TestAgendar:
         uow = FakeUnitOfWork()
         resultado = AgendarExecucao(
             ExecucoesEmMemoria(existente), FilaFixa(posicao=2), VeiculosEmMemoria(), uow
-        ).executar(existente.ordem_id, 99)
+        ).executar(existente.ordem_id, Prioridade.ALTA)
         assert resultado is existente
-        assert resultado.prioridade == 0
+        assert resultado.prioridade is Prioridade.NORMAL
         assert _eventos(uow) == [
             (
                 "ExecucaoAgendada",
@@ -134,7 +137,7 @@ class TestAgendar:
         uow = FakeUnitOfWork()
         AgendarExecucao(
             ExecucoesEmMemoria(existente), FilaFixa(), VeiculosEmMemoria(), uow
-        ).executar(existente.ordem_id, 0)
+        ).executar(existente.ordem_id, Prioridade.NORMAL)
         assert (uow.eventos, uow.commits) == ([], 0)
 
     def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
@@ -146,19 +149,19 @@ class TestAgendar:
 
         resultado = AgendarExecucao(
             repo, FilaFixa(), VeiculosEmMemoria(), uow
-        ).executar(ordem_id, 0)
+        ).executar(ordem_id, Prioridade.NORMAL)
 
         assert resultado is lapide
         assert resultado.status is StatusExecucao.CANCELADA
         assert (uow.eventos, uow.commits) == ([], 0)
 
-    def test_prioridade_invalida(self) -> None:
+    def test_prioridade_fora_do_contrato(self) -> None:
         uc = AgendarExecucao(
             ExecucoesEmMemoria(), FilaFixa(), VeiculosEmMemoria(), FakeUnitOfWork()
         )
-        ordem_id = uuid4()
+        ordem_id, urgente = uuid4(), "urgente"
         with pytest.raises(ValueError, match="Prioridade"):
-            uc.executar(ordem_id, 101)
+            uc.executar(ordem_id, urgente)
 
 
 class TestCancelar:

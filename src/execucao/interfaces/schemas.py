@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.compartilhado.interfaces.schemas import VeiculoResponse
-from src.execucao.dominio.execucao import StatusExecucao
+from src.execucao.dominio.execucao import Prioridade, StatusExecucao
 
 
 class ExecucaoResponse(BaseModel):
@@ -14,7 +14,7 @@ class ExecucaoResponse(BaseModel):
 
     ordem_id: UUID
     status: StatusExecucao
-    prioridade: int
+    prioridade: Prioridade
     enfileirada_em: datetime
     veiculo: VeiculoResponse | None
     mecanico_id: UUID | None
@@ -28,7 +28,7 @@ class ItemDaFilaResponse(BaseModel):
 
     posicao: int
     ordem_id: UUID
-    prioridade: int
+    prioridade: Prioridade
     enfileirada_em: datetime
     veiculo: VeiculoResponse | None = Field(
         description="Retrato do diagnostico, para achar o carro no patio"

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, Enum, Index, Integer, Table, Uuid
+from sqlalchemy import Column, DateTime, Enum, Index, Table, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import retrato_do_veiculo
-from src.execucao.dominio.execucao import Execucao, StatusExecucao
+from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 
 execucoes_table = Table(
     "execucoes",
@@ -13,7 +13,17 @@ execucoes_table = Table(
     Column(
         "status", Enum(StatusExecucao, native_enum=False, length=20), nullable=False
     ),
-    Column("prioridade", Integer, nullable=False),
+    # Grava o valor do contrato ("normal"/"alta"), nao o nome do membro.
+    Column(
+        "prioridade",
+        Enum(
+            Prioridade,
+            native_enum=False,
+            length=10,
+            values_callable=lambda prioridades: [p.value for p in prioridades],
+        ),
+        nullable=False,
+    ),
     Column("enfileirada_em", DateTime(timezone=True), nullable=False),
     # Copia do retrato do diagnostico; nula na lapide e sem diagnostico.
     Column("veiculo", retrato_do_veiculo(), nullable=True),

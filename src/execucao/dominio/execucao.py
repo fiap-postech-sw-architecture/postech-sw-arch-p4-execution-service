@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from src.compartilhado.dominio.aggregate_root import AggregateRoot
 from src.compartilhado.dominio.exceptions import (
@@ -18,7 +18,12 @@ if TYPE_CHECKING:
 
     from src.compartilhado.dominio.veiculo import Veiculo
 
-PRIORIDADE_MAXIMA: Final = 100
+
+class Prioridade(StrEnum):
+    """Prioridade do contrato ``AgendarExecucao``: ``alta`` passa na frente."""
+
+    NORMAL = "normal"
+    ALTA = "alta"
 
 
 class StatusExecucao(StrEnum):
@@ -44,13 +49,13 @@ class Execucao(AggregateRoot):
     """Execucao do reparo de uma ordem; a identidade e o proprio ``ordem_id``.
 
     AGUARDANDO (na fila) -> EM_EXECUCAO -> FINALIZADA; AGUARDANDO -> CANCELADA
-    (compensacao). A fila ordena por ``prioridade`` (maior primeiro) e
-    ``enfileirada_em`` (mais antiga primeiro). ``veiculo`` e a copia do retrato
-    do diagnostico, para o mecanico achar o carro no patio pela fila.
+    (compensacao). A fila atende ``alta`` antes de ``normal`` e, dentro da
+    mesma prioridade, por ordem de chegada (``enfileirada_em``). ``veiculo`` e a
+    copia do retrato do diagnostico, para o mecanico achar o carro no patio.
     """
 
     _status: StatusExecucao = StatusExecucao.AGUARDANDO
-    _prioridade: int
+    _prioridade: Prioridade
     _enfileirada_em: datetime
     _veiculo: Veiculo | None = None
     _mecanico_id: UUID | None = None
@@ -59,8 +64,8 @@ class Execucao(AggregateRoot):
     _cancelada_em: datetime | None = None
 
     def __post_init__(self) -> None:
-        if not 0 <= self._prioridade <= PRIORIDADE_MAXIMA:
-            msg = f"Prioridade deve estar entre 0 (normal) e {PRIORIDADE_MAXIMA}"
+        if not isinstance(self._prioridade, Prioridade):
+            msg = "Prioridade deve ser 'normal' ou 'alta'"
             raise ValorInvalidoError(msg)
 
     @classmethod
@@ -68,7 +73,7 @@ class Execucao(AggregateRoot):
         cls,
         *,
         ordem_id: UUID,
-        prioridade: int,
+        prioridade: Prioridade,
         veiculo: Veiculo | None,
         agora: datetime,
     ) -> Execucao:
@@ -88,7 +93,7 @@ class Execucao(AggregateRoot):
         return cls(
             id=ordem_id,
             _status=StatusExecucao.CANCELADA,
-            _prioridade=0,
+            _prioridade=Prioridade.NORMAL,
             _enfileirada_em=agora,
             _cancelada_em=agora,
         )
@@ -102,7 +107,7 @@ class Execucao(AggregateRoot):
         return self._status
 
     @property
-    def prioridade(self) -> int:
+    def prioridade(self) -> Prioridade:
         return self._prioridade
 
     @property

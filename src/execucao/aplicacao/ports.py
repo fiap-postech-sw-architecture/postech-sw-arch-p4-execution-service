@@ -9,20 +9,20 @@ if TYPE_CHECKING:
 
     from src.compartilhado.dominio.veiculo import Veiculo
     from src.execucao.aplicacao.events import PecaConsumida
-    from src.execucao.dominio.execucao import Execucao
+    from src.execucao.dominio.execucao import Execucao, Prioridade
 
 
 @dataclass(frozen=True, slots=True)
 class ItemDaFila:
     posicao: int
     ordem_id: UUID
-    prioridade: int
+    prioridade: Prioridade
     enfileirada_em: datetime
     veiculo: Veiculo | None
 
 
 class FilaDeExecucao(Protocol):
-    """Leitura da fila (execucoes AGUARDANDO por prioridade desc, chegada asc)."""
+    """Leitura da fila: execucoes AGUARDANDO, ``alta`` antes, depois por chegada."""
 
     def listar(self, offset: int, limit: int) -> list[ItemDaFila]:
         """Pagina da fila com a posicao absoluta de cada ordem."""

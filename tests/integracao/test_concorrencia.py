@@ -39,7 +39,7 @@ from src.execucao.aplicacao.use_cases import (
     FinalizarExecucao,
     IniciarExecucao,
 )
-from src.execucao.dominio.execucao import StatusExecucao
+from src.execucao.dominio.execucao import Prioridade, StatusExecucao
 from src.execucao.infraestrutura.adapters import (
     EstoqueSQLAlchemyAdapter,
     VeiculosSQLAlchemy,
@@ -377,7 +377,7 @@ def test_finalizacao_e_liberacao_simultaneas_nao_baixam_reserva_liberada(
             FilaDeExecucaoSQLAlchemy(session),
             VeiculosSQLAlchemy(session),
             _uow(session),
-        ).executar(ordem_a, 0)
+        ).executar(ordem_a, Prioridade.NORMAL)
     with session_factory() as session:
         IniciarExecucao(
             ExecucaoSQLAlchemyRepository(session),

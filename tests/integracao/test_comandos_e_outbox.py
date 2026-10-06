@@ -31,7 +31,7 @@ from src.estoque.infraestrutura.repository import (
     ReservaSQLAlchemyRepository,
 )
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
-from src.execucao.dominio.execucao import StatusExecucao
+from src.execucao.dominio.execucao import Prioridade, StatusExecucao
 from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
@@ -148,7 +148,7 @@ def test_erro_no_meio_do_caso_de_uso_nao_deixa_rastro(
             _uow(session),
         )
         with pytest.raises(RuntimeError):
-            uc.executar(ordem_id, 1)
+            uc.executar(ordem_id, Prioridade.NORMAL)
     with session_factory() as session:
         assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
     assert outbox() == []
@@ -163,7 +163,10 @@ def test_agendamento_e_cancelamento(
     session_factory: sessionmaker[Session], outbox: Callable[[], list[dict[str, Any]]]
 ) -> None:
     primeira, segunda = uuid4(), uuid4()
-    for ordem_id, prioridade in [(primeira, 0), (segunda, 5)]:
+    for ordem_id, prioridade in [
+        (primeira, Prioridade.NORMAL),
+        (segunda, Prioridade.ALTA),
+    ]:
         with session_factory() as session:
             AgendarExecucao(
                 ExecucaoSQLAlchemyRepository(session),
@@ -178,7 +181,7 @@ def test_agendamento_e_cancelamento(
 
     assert [(linha["tipo"], linha["dados"]) for linha in outbox()] == [
         ("ExecucaoAgendada", {"ordem_id": str(primeira), "posicao_na_fila": 1}),
-        # Prioridade maior fura a fila: entra na frente da primeira.
+        # Prioridade alta fura a fila: entra na frente da primeira.
         ("ExecucaoAgendada", {"ordem_id": str(segunda), "posicao_na_fila": 1}),
         ("ExecucaoCancelada", {"ordem_id": str(segunda)}),
     ]
@@ -236,7 +239,7 @@ def test_compensacoes_antes_dos_originais_gravam_lapides_e_descartam_os_atrasado
             FilaDeExecucaoSQLAlchemy(session),
             VeiculosSQLAlchemy(session),
             _uow(session),
-        ).executar(ordem_id, 0)
+        ).executar(ordem_id, Prioridade.NORMAL)
     reserva = _reservar(session_factory, ordem_id, 2)
 
     assert respostas == [

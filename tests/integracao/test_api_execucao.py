@@ -19,6 +19,7 @@ from src.estoque.infraestrutura.repository import (
 )
 from src.estoque.infraestrutura.seed import semear
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
+from src.execucao.dominio.execucao import Prioridade
 from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
@@ -36,7 +37,7 @@ MECANICO = uuid4()
 
 def _agendar(
     session_factory: sessionmaker[Session],
-    prioridade: int = 0,
+    prioridade: Prioridade = Prioridade.NORMAL,
     ordem_id: UUID | None = None,
 ) -> UUID:
     ordem_id = ordem_id or uuid4()
@@ -71,7 +72,8 @@ def test_fila_com_posicao_para_mecanico_e_atendente(
     session_factory: sessionmaker[Session],
     autenticar: Callable[..., dict[str, str]],
 ) -> None:
-    normal, urgente = _agendar(session_factory, 0), _agendar(session_factory, 10)
+    normal = _agendar(session_factory, Prioridade.NORMAL)
+    urgente = _agendar(session_factory, Prioridade.ALTA)
     for papel in ["mecanico", "atendente", "admin"]:
         resposta = api.get("/api/v1/fila", headers=autenticar(papel))
         assert resposta.status_code == 200

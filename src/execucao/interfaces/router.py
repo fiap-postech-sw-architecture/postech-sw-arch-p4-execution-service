@@ -42,7 +42,7 @@ def listar_fila(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> FilaResponse:
-    """Ordens AGUARDANDO por prioridade (maior primeiro) e chegada (mais antiga)."""
+    """Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada."""
     fila = obter_fila(session)
     return FilaResponse(
         items=[

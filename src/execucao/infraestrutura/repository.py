@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from src.execucao.aplicacao.ports import ItemDaFila
-from src.execucao.dominio.execucao import Execucao, StatusExecucao
+from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 from src.execucao.infraestrutura.mapping import execucoes_table
 
 if TYPE_CHECKING:
@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 _t = execucoes_table
 _NA_FILA = _t.c.status == StatusExecucao.AGUARDANDO
+# Contrato AgendarExecucao: alta antes de normal, depois por chegada.
+_PESO_ALTA, _PESO_NORMAL = 0, 1
+# Expressao SQL (minuscula: o ruff trata MAIUSCULA como constante e inverte a
+# comparacao para o estilo "yoda", que o mypy le como bool).
+_peso = case((_t.c.prioridade == Prioridade.ALTA, _PESO_ALTA), else_=_PESO_NORMAL)
 
 
 class ExecucaoSQLAlchemyRepository:
@@ -33,7 +38,7 @@ class ExecucaoSQLAlchemyRepository:
 
 
 class FilaDeExecucaoSQLAlchemy:
-    """Read model da fila: prioridade desc, chegada asc, ``ordem_id`` desempata."""
+    """Read model da fila: ``alta`` antes, chegada asc, ``ordem_id`` desempata."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -42,7 +47,7 @@ class FilaDeExecucaoSQLAlchemy:
         stmt = (
             select(_t.c.ordem_id, _t.c.prioridade, _t.c.enfileirada_em, _t.c.veiculo)
             .where(_NA_FILA)
-            .order_by(_t.c.prioridade.desc(), _t.c.enfileirada_em, _t.c.ordem_id)
+            .order_by(_peso, _t.c.enfileirada_em, _t.c.ordem_id)
             .offset(offset)
             .limit(limit)
         )
@@ -61,9 +66,10 @@ class FilaDeExecucaoSQLAlchemy:
         return self._session.scalar(select(func.count()).where(_NA_FILA)) or 0
 
     def posicao(self, execucao: Execucao) -> int:
-        mesma_prioridade = _t.c.prioridade == execucao.prioridade
+        peso = _PESO_ALTA if execucao.prioridade is Prioridade.ALTA else _PESO_NORMAL
+        mesma_prioridade = _peso == peso
         a_frente = or_(
-            _t.c.prioridade > execucao.prioridade,
+            _peso < peso,
             and_(mesma_prioridade, _t.c.enfileirada_em < execucao.enfileirada_em),
             and_(
                 mesma_prioridade,

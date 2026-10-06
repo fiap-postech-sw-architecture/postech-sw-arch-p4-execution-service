@@ -9,13 +9,13 @@ from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
 )
-from src.execucao.dominio.execucao import Execucao, StatusExecucao
+from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 
 AGORA = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 MECANICO, OUTRO = uuid4(), uuid4()
 
 
-def _agendada(prioridade: int = 0) -> Execucao:
+def _agendada(prioridade: Prioridade = Prioridade.NORMAL) -> Execucao:
     return Execucao.agendar(
         ordem_id=uuid4(), prioridade=prioridade, veiculo=None, agora=AGORA
     )
@@ -28,15 +28,18 @@ def _iniciada() -> Execucao:
 
 
 def test_agendada_entra_na_fila() -> None:
-    execucao = _agendada(prioridade=5)
+    execucao = _agendada(prioridade=Prioridade.ALTA)
     assert execucao.status is StatusExecucao.AGUARDANDO
-    assert (execucao.ordem_id, execucao.prioridade) == (execucao.id, 5)
+    assert (execucao.ordem_id, execucao.prioridade) == (execucao.id, Prioridade.ALTA)
     assert execucao.enfileirada_em == AGORA
     assert (execucao.mecanico_id, execucao.iniciada_em) == (None, None)
 
 
-@pytest.mark.parametrize("prioridade", [-1, 101])
-def test_prioridade_fora_da_faixa(prioridade: int) -> None:
+@pytest.mark.parametrize(
+    "prioridade",
+    [pytest.param("urgente", id="fora-do-enum"), pytest.param(1, id="numero-antigo")],
+)
+def test_prioridade_fora_do_contrato(prioridade: object) -> None:
     with pytest.raises(ValueError, match="Prioridade"):
         _agendada(prioridade)
 
