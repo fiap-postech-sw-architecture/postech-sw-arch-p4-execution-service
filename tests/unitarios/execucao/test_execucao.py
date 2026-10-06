@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,9 @@ from src.compartilhado.dominio.exceptions import (
     TransicaoStatusInvalidaException,
 )
 from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 AGORA = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 MECANICO, OUTRO = uuid4(), uuid4()
@@ -120,3 +124,37 @@ def test_cancelada_nao_inicia() -> None:
     execucao.cancelar(AGORA)
     with pytest.raises(TransicaoStatusInvalidaException, match="estado final"):
         execucao.iniciar(MECANICO, AGORA)
+
+
+def test_validar_inicio_nao_muda_nada() -> None:
+    execucao = _agendada()
+    execucao.validar_inicio(MECANICO)
+    assert execucao.status is StatusExecucao.AGUARDANDO
+    assert (execucao.mecanico_id, execucao.iniciada_em) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("preparar", "mensagem"),
+    [
+        pytest.param(lambda e: e.iniciar(OUTRO, AGORA), "outro mecanico", id="outro"),
+        pytest.param(lambda e: e.cancelar(AGORA), "estado final", id="cancelada"),
+    ],
+)
+def test_validar_inicio_recusa_sem_mudar_o_agregado(
+    preparar: Callable[[Execucao], object], mensagem: str
+) -> None:
+    execucao = _agendada()
+    preparar(execucao)
+    status, mecanico = execucao.status, execucao.mecanico_id
+    with pytest.raises(TransicaoStatusInvalidaException, match=mensagem):
+        execucao.validar_inicio(MECANICO)
+    assert (execucao.status, execucao.mecanico_id) == (status, mecanico)
+
+
+def test_validar_finalizacao_nao_muda_nada() -> None:
+    execucao = _iniciada()
+    execucao.validar_finalizacao(MECANICO)
+    assert execucao.status is StatusExecucao.EM_EXECUCAO
+    assert execucao.finalizada_em is None
+    with pytest.raises(OperacaoNaoPermitidaException):
+        execucao.validar_finalizacao(OUTRO)

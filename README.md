@@ -32,7 +32,7 @@ Proveniência: `src/compartilhado` e o contexto `estoque` partem do snapshot do 
 | `DescartarDiagnostico` | `DescartarDiagnostico` | `DiagnosticoDescartado` | reemite a resposta |
 | `ReservarPecas` | `ReservarPecas` | `PecasReservadas` ou `ReservaDePecasFalhou{faltantes}` | reserva ativa ou recusada: reemite a mesma resposta, sem decidir de novo; liberada ou consumida: descartado |
 | `LiberarReserva` | `LiberarReserva` | `ReservaLiberada` (409 se a reserva já foi consumida) | reemite a resposta, sem devolver de novo |
-| `AgendarExecucao` | `AgendarExecucao` | `ExecucaoAgendada{posicao_na_fila}` | na fila: reemite com a posição atual; iniciada, finalizada ou cancelada: descartado |
+| `AgendarExecucao` | `AgendarExecucao` | `ExecucaoAgendada{posicao_na_fila}`; só entra na fila a ordem com reserva `ATIVA` (RN-027) | na fila: reemite com a posição atual; iniciada, finalizada ou cancelada: descartado |
 | `CancelarExecucao` | `CancelarExecucao` | `ExecucaoCancelada` (409 depois de iniciada) | reemite a resposta |
 
 Regra de repetição: enquanto o desfecho vale, o comando repetido republica a resposta registrada; depois de compensado ou superado, é descartado com log, sem efeito e sem resposta. **Lápide:** a compensação que chega antes do comando original (passo em voo, RFC-004 §4.5) grava o agregado já no estado final (reserva `LIBERADA` sem peças, execução `CANCELADA`, diagnóstico `DESCARTADO` sem retrato) e responde; o original, quando chegar, encontra a lápide pela chave `ordem_id` e é descartado.

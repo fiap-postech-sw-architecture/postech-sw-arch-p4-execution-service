@@ -45,12 +45,14 @@ def _sem_reserva() -> ViolacaoRegraDeNegocioException:
 class AgendarExecucao:
     """Comando ``AgendarExecucao`` (T7): poe a ordem na fila de execucao.
 
-    Responde ``ExecucaoAgendada{posicao_na_fila}``. Idempotente por ordem: com a
-    execucao ainda AGUARDANDO, o reenvio so reemite a resposta com a posicao
-    atual (a prioridade original fica); ja iniciada, finalizada ou cancelada
-    (inclusive a lapide de um cancelamento adiantado), o comando atrasado e
-    descartado sem efeito e sem resposta. A execucao nova copia o retrato do
-    veiculo do diagnostico, que a fila mostra ao mecanico.
+    Responde ``ExecucaoAgendada{posicao_na_fila}``. So entra na fila a ordem
+    com as pecas reservadas (reserva ATIVA, RN-027): sem ela a execucao nunca
+    poderia ser finalizada. Idempotente por ordem: com a execucao ainda
+    AGUARDANDO, o reenvio so reemite a resposta com a posicao atual (a
+    prioridade original fica); ja iniciada, finalizada ou cancelada (inclusive
+    a lapide de um cancelamento adiantado), o comando atrasado e descartado sem
+    efeito e sem resposta. A execucao nova copia o retrato do veiculo do
+    diagnostico, que a fila mostra ao mecanico.
     """
 
     def __init__(
@@ -58,14 +60,21 @@ class AgendarExecucao:
         repo: ExecucaoRepository,
         fila: FilaDeExecucao,
         veiculos: VeiculosPort,
+        estoque: EstoquePort,
         uow: UnitOfWork,
     ) -> None:
         self._repo = repo
         self._fila = fila
         self._veiculos = veiculos
+        self._estoque = estoque
         self._uow = uow
 
     def executar(self, ordem_id: UUID, prioridade: Prioridade) -> Execucao:
+        """Devolve a execucao da ordem (nova, na fila ou ja encerrada).
+
+        Raises:
+            ViolacaoRegraDeNegocioException: ordem nova sem reserva ATIVA.
+        """
         agora = datetime.now(UTC)
         with self._uow:
             execucao = self._repo.obter(ordem_id)
@@ -76,6 +85,8 @@ class AgendarExecucao:
                     veiculo=self._veiculos.da_ordem(ordem_id),
                     agora=agora,
                 )
+                if not self._estoque.tem_reserva_ativa(ordem_id):
+                    raise _sem_reserva()
                 self._repo.salvar(execucao)
             elif execucao.status is not StatusExecucao.AGUARDANDO:
                 _log.info(
@@ -148,19 +159,24 @@ class IniciarExecucao:
         agora = datetime.now(UTC)
         with self._uow:
             execucao = _obter(self._repo, ordem_id, com_lock=True)
-            if execucao.iniciar(mecanico_id, agora):
-                if not self._estoque.tem_reserva_ativa(ordem_id):
-                    raise _sem_reserva()
-                self._repo.salvar(execucao)
-                self._uow.registrar_evento(
-                    ExecucaoIniciadaEvent(
-                        ordem_id=ordem_id,
-                        ocorrido_em=agora,
-                        mecanico_id=mecanico_id,
-                        iniciada_em=agora,
-                    )
+            if execucao.iniciada_por(mecanico_id):
+                return execucao
+            # Guardas antes de qualquer mudanca: transicao, responsavel e a
+            # reserva ativa (travada ate o commit).
+            execucao.validar_inicio(mecanico_id)
+            if not self._estoque.tem_reserva_ativa(ordem_id):
+                raise _sem_reserva()
+            execucao.iniciar(mecanico_id, agora)
+            self._repo.salvar(execucao)
+            self._uow.registrar_evento(
+                ExecucaoIniciadaEvent(
+                    ordem_id=ordem_id,
+                    ocorrido_em=agora,
+                    mecanico_id=mecanico_id,
+                    iniciada_em=agora,
                 )
-                self._uow.commit()
+            )
+            self._uow.commit()
         return execucao
 
 
@@ -191,11 +207,15 @@ class FinalizarExecucao:
                 if pelo_admin and execucao.mecanico_id is not None
                 else mecanico_id
             )
-            if not execucao.finalizar(responsavel, agora):
+            if execucao.finalizada_por(responsavel):
                 return execucao
+            execucao.validar_finalizacao(responsavel)
+            # A baixa vem antes de mexer no agregado: reserva fora de ATIVA (ou
+            # inexistente) recusa a finalizacao sem mudar nada.
             pecas = self._estoque.consumir_reserva(ordem_id, agora)
             if pecas is None:
                 raise _sem_reserva()
+            execucao.finalizar(responsavel, agora)
             self._repo.salvar(execucao)
             self._uow.registrar_evento(
                 ExecucaoFinalizadaEvent(

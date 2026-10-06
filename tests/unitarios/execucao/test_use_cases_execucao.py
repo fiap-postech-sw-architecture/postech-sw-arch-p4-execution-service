@@ -51,6 +51,14 @@ def _agendada(ordem_id: UUID | None = None) -> Execucao:
     )
 
 
+def _estoque_com_reserva(*ordens: UUID) -> EstoqueEmMemoria:
+    """Estoque em memoria com uma reserva ATIVA (sem pecas) para cada ordem."""
+    itens, reservas = ItensEmMemoria(), ReservasEmMemoria()
+    for ordem_id in ordens:
+        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(ordem_id, [])
+    return EstoqueEmMemoria(itens, reservas)
+
+
 def _eventos(uow: FakeUnitOfWork) -> list[tuple[str, dict[str, object]]]:
     return [(e.tipo, dados_do_evento(e)) for e in uow.eventos]
 
@@ -102,9 +110,9 @@ class TestAgendar:
         repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
         ordem_id = uuid4()
         veiculos = VeiculosEmMemoria({ordem_id: VEICULO})
-        execucao = AgendarExecucao(repo, FilaFixa(posicao=3), veiculos, uow).executar(
-            ordem_id, Prioridade.ALTA
-        )
+        execucao = AgendarExecucao(
+            repo, FilaFixa(posicao=3), veiculos, _estoque_com_reserva(ordem_id), uow
+        ).executar(ordem_id, Prioridade.ALTA)
 
         assert repo.execucoes[ordem_id] is execucao
         assert (execucao.status, execucao.prioridade) == (
@@ -120,7 +128,11 @@ class TestAgendar:
         existente = _agendada()
         uow = FakeUnitOfWork()
         resultado = AgendarExecucao(
-            ExecucoesEmMemoria(existente), FilaFixa(posicao=2), VeiculosEmMemoria(), uow
+            ExecucoesEmMemoria(existente),
+            FilaFixa(posicao=2),
+            VeiculosEmMemoria(),
+            _estoque_com_reserva(existente.ordem_id),
+            uow,
         ).executar(existente.ordem_id, Prioridade.ALTA)
         assert resultado is existente
         assert resultado.prioridade is Prioridade.NORMAL
@@ -136,7 +148,11 @@ class TestAgendar:
         existente.iniciar(MECANICO, datetime.now(UTC))
         uow = FakeUnitOfWork()
         AgendarExecucao(
-            ExecucoesEmMemoria(existente), FilaFixa(), VeiculosEmMemoria(), uow
+            ExecucoesEmMemoria(existente),
+            FilaFixa(),
+            VeiculosEmMemoria(),
+            _estoque_com_reserva(existente.ordem_id),
+            uow,
         ).executar(existente.ordem_id, Prioridade.NORMAL)
         assert (uow.eventos, uow.commits) == ([], 0)
 
@@ -148,7 +164,7 @@ class TestAgendar:
         uow = FakeUnitOfWork()
 
         resultado = AgendarExecucao(
-            repo, FilaFixa(), VeiculosEmMemoria(), uow
+            repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
         ).executar(ordem_id, Prioridade.NORMAL)
 
         assert resultado is lapide
@@ -156,12 +172,53 @@ class TestAgendar:
         assert (uow.eventos, uow.commits) == ([], 0)
 
     def test_prioridade_fora_do_contrato(self) -> None:
-        uc = AgendarExecucao(
-            ExecucoesEmMemoria(), FilaFixa(), VeiculosEmMemoria(), FakeUnitOfWork()
-        )
         ordem_id, urgente = uuid4(), "urgente"
+        uc = AgendarExecucao(
+            ExecucoesEmMemoria(),
+            FilaFixa(),
+            VeiculosEmMemoria(),
+            _estoque_com_reserva(ordem_id),
+            FakeUnitOfWork(),
+        )
         with pytest.raises(ValueError, match="Prioridade"):
             uc.executar(ordem_id, urgente)
+
+    @pytest.mark.parametrize(
+        "reserva",
+        [
+            pytest.param("nenhuma", id="sem-reserva"),
+            pytest.param("liberada", id="reserva-liberada"),
+            pytest.param("recusada", id="reserva-recusada"),
+        ],
+    )
+    def test_sem_reserva_ativa_nao_entra_na_fila(self, reserva: str) -> None:
+        # RN-027: so entra na fila a ordem com as pecas reservadas.
+        ordem_id = uuid4()
+        itens = ItensEmMemoria(
+            ItemEstoque.criar(sku=VELA, nome="Vela", quantidade_disponivel=1)
+        )
+        reservas = ReservasEmMemoria()
+        if reserva != "nenhuma":
+            quantidade = 9 if reserva == "recusada" else 1
+            ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+                ordem_id, [ItemReserva(VELA, quantidade)]
+            )
+        if reserva == "liberada":
+            reservas.reservas[ordem_id].liberar(datetime.now(UTC))
+        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        uc = AgendarExecucao(
+            repo,
+            FilaFixa(),
+            VeiculosEmMemoria(),
+            EstoqueEmMemoria(itens, reservas),
+            uow,
+        )
+
+        with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
+            uc.executar(ordem_id, Prioridade.NORMAL)
+
+        assert repo.execucoes == {}
+        assert (uow.eventos, uow.rollbacks) == ([], 1)
 
 
 class TestCancelar:
@@ -228,6 +285,9 @@ class TestIniciar:
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
             o.iniciar.executar(o.execucao.ordem_id, MECANICO)
         assert (o.uow.eventos, o.uow.rollbacks) == ([], 1)
+        # A guarda vem antes da mudanca: o agregado nem chega a EM_EXECUCAO.
+        assert o.execucao.status is StatusExecucao.AGUARDANDO
+        assert o.execucao.mecanico_id is None
 
     def test_ordem_desconhecida(self) -> None:
         o = _oficina()
@@ -273,6 +333,7 @@ class TestFinalizar:
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
             o.finalizar.executar(o.execucao.ordem_id, MECANICO)
         assert (o.uow.eventos, o.uow.rollbacks) == ([], 1)
+        assert o.execucao.status is StatusExecucao.EM_EXECUCAO
 
     def test_reserva_liberada_bloqueia_a_finalizacao(self) -> None:
         o = _em_execucao()
@@ -282,6 +343,9 @@ class TestFinalizar:
             o.finalizar.executar(o.execucao.ordem_id, MECANICO)
         assert reserva.status is StatusReserva.LIBERADA
         assert o.uow.eventos == []
+        # A baixa vem antes de mudar o agregado: a execucao segue EM_EXECUCAO.
+        assert o.execucao.status is StatusExecucao.EM_EXECUCAO
+        assert o.execucao.finalizada_em is None
 
     def test_outro_mecanico_nao_finaliza_e_nada_e_baixado(self) -> None:
         o = _em_execucao()

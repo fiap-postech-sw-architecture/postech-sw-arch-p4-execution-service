@@ -377,6 +377,7 @@ def test_finalizacao_e_liberacao_simultaneas_nao_baixam_reserva_liberada(
             ExecucaoSQLAlchemyRepository(session),
             FilaDeExecucaoSQLAlchemy(session),
             VeiculosSQLAlchemy(session),
+            EstoqueSQLAlchemyAdapter(session),
             _uow(session),
         ).executar(ordem_a, Prioridade.NORMAL)
     with session_factory() as session:

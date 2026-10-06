@@ -134,14 +134,37 @@ class Execucao(AggregateRoot):
     def cancelada_em(self) -> datetime | None:
         return self._cancelada_em
 
-    def iniciar(self, mecanico_id: UUID, agora: datetime) -> bool:
-        """AGUARDANDO -> EM_EXECUCAO; repetir pelo mesmo mecanico e no-op (False)."""
-        if self._status is StatusExecucao.EM_EXECUCAO:
-            if self._mecanico_id == mecanico_id:
-                return False
+    def iniciada_por(self, mecanico_id: UUID) -> bool:
+        return (
+            self._status is StatusExecucao.EM_EXECUCAO
+            and self._mecanico_id == mecanico_id
+        )
+
+    def validar_inicio(self, mecanico_id: UUID) -> None:
+        """Checa estado e responsavel sem alterar nada.
+
+        Separado de ``iniciar`` para o caso de uso conferir as guardas de fora
+        do agregado (a reserva ativa) antes de qualquer mudanca.
+
+        Raises:
+            TransicaoStatusInvalidaException: fora da fila (AGUARDANDO) ou ja
+                iniciada por outro mecanico.
+        """
+        if self._status is StatusExecucao.EM_EXECUCAO and not self.iniciada_por(
+            mecanico_id
+        ):
             msg = "Execucao ja iniciada por outro mecanico"
             raise TransicaoStatusInvalidaException(msg)
-        self._transicionar(StatusExecucao.EM_EXECUCAO)
+        validar_transicao(
+            _TRANSICOES, self._status, StatusExecucao.EM_EXECUCAO, agregado="Execucao"
+        )
+
+    def iniciar(self, mecanico_id: UUID, agora: datetime) -> bool:
+        """AGUARDANDO -> EM_EXECUCAO; repetir pelo mesmo mecanico e no-op (False)."""
+        if self.iniciada_por(mecanico_id):
+            return False
+        self.validar_inicio(mecanico_id)
+        self._status = StatusExecucao.EM_EXECUCAO
         self._mecanico_id = mecanico_id
         self._iniciada_em = agora
         return True
@@ -152,16 +175,25 @@ class Execucao(AggregateRoot):
             and self._mecanico_id == mecanico_id
         )
 
-    def finalizar(self, mecanico_id: UUID, agora: datetime) -> bool:
-        """EM_EXECUCAO -> FINALIZADA, so pelo mecanico que iniciou; repetir e no-op."""
-        if self.finalizada_por(mecanico_id):
-            return False
+    def validar_finalizacao(self, mecanico_id: UUID) -> None:
+        """Checa estado e responsavel sem alterar nada (a baixa vem antes).
+
+        Raises:
+            TransicaoStatusInvalidaException: execucao fora de EM_EXECUCAO.
+            OperacaoNaoPermitidaException: outro mecanico que nao o que iniciou.
+        """
         validar_transicao(
             _TRANSICOES, self._status, StatusExecucao.FINALIZADA, agregado="Execucao"
         )
         if self._mecanico_id != mecanico_id:
             msg = "Somente o mecanico que iniciou a execucao pode finaliza-la"
             raise OperacaoNaoPermitidaException(msg)
+
+    def finalizar(self, mecanico_id: UUID, agora: datetime) -> bool:
+        """EM_EXECUCAO -> FINALIZADA, so pelo mecanico que iniciou; repetir e no-op."""
+        if self.finalizada_por(mecanico_id):
+            return False
+        self.validar_finalizacao(mecanico_id)
         self._status = StatusExecucao.FINALIZADA
         self._finalizada_em = agora
         return True

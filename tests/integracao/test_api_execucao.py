@@ -4,13 +4,14 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 
 from src.compartilhado.dominio.exceptions import TransicaoStatusInvalidaException
 from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import RegistrarSolicitacaoDeDiagnostico
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
-from src.estoque.aplicacao.use_cases import ReservarPecas
+from src.estoque.aplicacao.use_cases import LiberarReserva, ReservarPecas
 from src.estoque.dominio.reserva import ItemReserva
 from src.estoque.dominio.sku import Sku
 from src.estoque.infraestrutura.repository import (
@@ -20,7 +21,10 @@ from src.estoque.infraestrutura.repository import (
 from src.estoque.infraestrutura.seed import semear
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
 from src.execucao.dominio.execucao import Prioridade
-from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
+from src.execucao.infraestrutura.adapters import (
+    EstoqueSQLAlchemyAdapter,
+    VeiculosSQLAlchemy,
+)
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -30,25 +34,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fastapi.testclient import TestClient
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
 MECANICO = uuid4()
-
-
-def _agendar(
-    session_factory: sessionmaker[Session],
-    prioridade: Prioridade = Prioridade.NORMAL,
-    ordem_id: UUID | None = None,
-) -> UUID:
-    ordem_id = ordem_id or uuid4()
-    with session_factory() as session:
-        AgendarExecucao(
-            ExecucaoSQLAlchemyRepository(session),
-            FilaDeExecucaoSQLAlchemy(session),
-            VeiculosSQLAlchemy(session),
-            SQLAlchemyUnitOfWork(lambda: session),
-        ).executar(ordem_id, prioridade)
-    return ordem_id
 
 
 def _reservar(
@@ -60,6 +49,35 @@ def _reservar(
             ReservaSQLAlchemyRepository(session),
             SQLAlchemyUnitOfWork(lambda: session),
         ).executar(ordem_id, [ItemReserva(Sku(sku), q) for sku, q in pecas.items()])
+
+
+def _agendar(
+    session_factory: sessionmaker[Session],
+    prioridade: Prioridade = Prioridade.NORMAL,
+    ordem_id: UUID | None = None,
+    **pecas: int,
+) -> UUID:
+    """Ordem da saga ate a fila: reserva (sem pecas = servico puro) e agenda."""
+    ordem_id = ordem_id or uuid4()
+    _reservar(session_factory, ordem_id, **pecas)
+    with session_factory() as session:
+        AgendarExecucao(
+            ExecucaoSQLAlchemyRepository(session),
+            FilaDeExecucaoSQLAlchemy(session),
+            VeiculosSQLAlchemy(session),
+            EstoqueSQLAlchemyAdapter(session),
+            SQLAlchemyUnitOfWork(lambda: session),
+        ).executar(ordem_id, prioridade)
+    return ordem_id
+
+
+def _liberar(session_factory: sessionmaker[Session], ordem_id: UUID) -> None:
+    with session_factory() as session:
+        LiberarReserva(
+            ItemEstoqueSQLAlchemyRepository(session),
+            ReservaSQLAlchemyRepository(session),
+            SQLAlchemyUnitOfWork(lambda: session),
+        ).executar(ordem_id)
 
 
 @pytest.fixture
@@ -128,8 +146,7 @@ def test_inicio_e_finalizacao_com_baixa_do_estoque(
     autenticar: Callable[..., dict[str, str]],
 ) -> None:
     semear(session_factory)
-    ordem_id = _agendar(session_factory)
-    _reservar(session_factory, ordem_id, **{"PEC-OLEO-5W30": 4, "PEC-FILTRO-OLEO": 1})
+    ordem_id = _agendar(session_factory, **{"PEC-OLEO-5W30": 4, "PEC-FILTRO-OLEO": 1})
 
     inicio = api.post(f"/api/v1/execucoes/{ordem_id}/inicio", headers=mecanico)
     assert inicio.status_code == 200
@@ -150,8 +167,8 @@ def test_inicio_e_finalizacao_com_baixa_do_estoque(
     assert (oleo["quantidade_disponivel"], oleo["quantidade_reservada"]) == (36, 0)
     linhas = [linha for linha in outbox() if linha["correlation_id"] == ordem_id]
     assert [linha["tipo"] for linha in linhas] == [
-        "ExecucaoAgendada",
         "PecasReservadas",
+        "ExecucaoAgendada",
         "ExecucaoIniciada",
         "ExecucaoFinalizada",
     ]
@@ -164,8 +181,7 @@ def test_inicio_e_finalizacao_com_baixa_do_estoque(
 def _em_execucao(
     api: TestClient, mecanico: dict[str, str], session_factory: sessionmaker[Session]
 ) -> UUID:
-    ordem_id = _agendar(session_factory)
-    _reservar(session_factory, ordem_id)  # servico sem peca: reserva vazia e valida
+    ordem_id = _agendar(session_factory)  # servico sem peca: reserva vazia e valida
     resposta = api.post(f"/api/v1/execucoes/{ordem_id}/inicio", headers=mecanico)
     assert resposta.status_code == 200, resposta.text
     return ordem_id
@@ -178,6 +194,7 @@ def test_inicio_sem_reserva_ativa_e_409_e_nao_cruza_o_pivot(
     outbox: Callable[[], list[dict[str, Any]]],
 ) -> None:
     ordem_id = _agendar(session_factory)
+    _liberar(session_factory, ordem_id)  # compensacao fora de ordem
     resposta = api.post(f"/api/v1/execucoes/{ordem_id}/inicio", headers=mecanico)
     assert resposta.status_code == 409
     assert "reserva" in resposta.json()["erro"]["mensagem"]
@@ -186,6 +203,46 @@ def test_inicio_sem_reserva_ativa_e_409_e_nao_cruza_o_pivot(
         assert execucao is not None
         assert execucao.status == "AGUARDANDO"
     assert "ExecucaoIniciada" not in [linha["tipo"] for linha in outbox()]
+
+
+def test_finalizacao_recusada_nao_deixa_efeito(
+    api: TestClient,
+    mecanico: dict[str, str],
+    session_factory: sessionmaker[Session],
+    engine: Engine,
+    outbox: Callable[[], list[dict[str, Any]]],
+    autenticar: Callable[..., dict[str, str]],
+) -> None:
+    # Finalizacao e baixa sao uma transacao so: com a reserva liberada a baixa
+    # recusa (409) e nem a execucao, nem o estoque, nem a outbox mudam.
+    semear(session_factory)
+    ordem_id = _agendar(session_factory, **{"PEC-OLEO-5W30": 4})
+    assert (
+        api.post(f"/api/v1/execucoes/{ordem_id}/inicio", headers=mecanico).status_code
+        == 200
+    )
+    _liberar(session_factory, ordem_id)
+    antes = outbox()
+
+    resposta = api.post(f"/api/v1/execucoes/{ordem_id}/finalizacao", headers=mecanico)
+
+    assert resposta.status_code == 409
+    assert resposta.json()["erro"]["codigo"] == "TRANSICAO_STATUS_INVALIDA"
+    with engine.connect() as conexao:
+        status, finalizada_em = conexao.execute(
+            text("SELECT status, finalizada_em FROM execucoes WHERE ordem_id = :id"),
+            {"id": ordem_id},
+        ).one()
+    assert (status, finalizada_em) == ("EM_EXECUCAO", None)
+    oleo = api.get("/api/v1/estoque/PEC-OLEO-5W30", headers=autenticar("admin"))
+    assert (
+        oleo.json()["quantidade_disponivel"],
+        oleo.json()["quantidade_reservada"],
+    ) == (
+        40,
+        0,
+    )
+    assert outbox() == antes
 
 
 def test_pivot_depois_de_iniciar_nao_cancela(

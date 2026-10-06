@@ -10,6 +10,7 @@ import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+from src.compartilhado.dominio.exceptions import ViolacaoRegraDeNegocioException
 from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
@@ -32,7 +33,10 @@ from src.estoque.infraestrutura.repository import (
 )
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
 from src.execucao.dominio.execucao import Prioridade, StatusExecucao
-from src.execucao.infraestrutura.adapters import VeiculosSQLAlchemy
+from src.execucao.infraestrutura.adapters import (
+    EstoqueSQLAlchemyAdapter,
+    VeiculosSQLAlchemy,
+)
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -63,12 +67,26 @@ def _criar_item(
 def _reservar(
     session_factory: sessionmaker[Session], ordem_id: Any, quantidade: int
 ) -> Any:
+    """Reserva ``quantidade`` velas (0 = reserva sem pecas, de servico puro)."""
+    pecas = [ItemReserva(VELA, quantidade)] if quantidade else []
     with session_factory() as session:
         return ReservarPecas(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
             _uow(session),
-        ).executar(ordem_id, [ItemReserva(VELA, quantidade)])
+        ).executar(ordem_id, pecas)
+
+
+def _agendador(
+    session: Session, fila: FilaDeExecucaoSQLAlchemy | None = None
+) -> AgendarExecucao:
+    return AgendarExecucao(
+        ExecucaoSQLAlchemyRepository(session),
+        fila or FilaDeExecucaoSQLAlchemy(session),
+        VeiculosSQLAlchemy(session),
+        EstoqueSQLAlchemyAdapter(session),
+        _uow(session),
+    )
 
 
 def _liberar(session_factory: sessionmaker[Session], ordem_id: Any) -> None:
@@ -140,14 +158,25 @@ def test_erro_no_meio_do_caso_de_uso_nao_deixa_rastro(
     session_factory: sessionmaker[Session], outbox: Callable[[], list[dict[str, Any]]]
 ) -> None:
     ordem_id = uuid4()
+    _reservar(session_factory, ordem_id, 0)
+    respostas = outbox()
     with session_factory() as session:
-        uc = AgendarExecucao(
-            ExecucaoSQLAlchemyRepository(session),
-            _FilaQueQuebra(session),
-            VeiculosSQLAlchemy(session),
-            _uow(session),
-        )
+        uc = _agendador(session, _FilaQueQuebra(session))
         with pytest.raises(RuntimeError):
+            uc.executar(ordem_id, Prioridade.NORMAL)
+    with session_factory() as session:
+        assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
+    assert outbox() == respostas  # so a PecasReservadas de antes
+
+
+def test_agendamento_sem_reserva_ativa_nao_entra_na_fila(
+    session_factory: sessionmaker[Session], outbox: Callable[[], list[dict[str, Any]]]
+) -> None:
+    # RN-027: sem pecas reservadas a execucao nunca poderia ser finalizada.
+    ordem_id = uuid4()
+    with session_factory() as session:
+        uc = _agendador(session)
+        with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
             uc.executar(ordem_id, Prioridade.NORMAL)
     with session_factory() as session:
         assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
@@ -167,19 +196,20 @@ def test_agendamento_e_cancelamento(
         (primeira, Prioridade.NORMAL),
         (segunda, Prioridade.ALTA),
     ]:
+        _reservar(session_factory, ordem_id, 0)
         with session_factory() as session:
-            AgendarExecucao(
-                ExecucaoSQLAlchemyRepository(session),
-                FilaDeExecucaoSQLAlchemy(session),
-                VeiculosSQLAlchemy(session),
-                _uow(session),
-            ).executar(ordem_id, prioridade)
+            _agendador(session).executar(ordem_id, prioridade)
     with session_factory() as session:
         CancelarExecucao(ExecucaoSQLAlchemyRepository(session), _uow(session)).executar(
             segunda
         )
 
-    assert [(linha["tipo"], linha["dados"]) for linha in outbox()] == [
+    agendamentos = [
+        (linha["tipo"], linha["dados"])
+        for linha in outbox()
+        if linha["tipo"] != "PecasReservadas"
+    ]
+    assert agendamentos == [
         ("ExecucaoAgendada", {"ordem_id": str(primeira), "posicao_na_fila": 1}),
         # Prioridade alta fura a fila: entra na frente da primeira.
         ("ExecucaoAgendada", {"ordem_id": str(segunda), "posicao_na_fila": 1}),
@@ -233,14 +263,9 @@ def test_compensacoes_antes_dos_originais_gravam_lapides_e_descartam_os_atrasado
             ),
             "Nao liga",
         )
-    with session_factory() as session:
-        AgendarExecucao(
-            ExecucaoSQLAlchemyRepository(session),
-            FilaDeExecucaoSQLAlchemy(session),
-            VeiculosSQLAlchemy(session),
-            _uow(session),
-        ).executar(ordem_id, Prioridade.NORMAL)
     reserva = _reservar(session_factory, ordem_id, 2)
+    with session_factory() as session:
+        _agendador(session).executar(ordem_id, Prioridade.NORMAL)
 
     assert respostas == [
         ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)}),

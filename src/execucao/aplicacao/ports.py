@@ -38,7 +38,11 @@ class EstoquePort(Protocol):
     """Estoque do proprio servico, na mesma transacao do caso de uso."""
 
     def tem_reserva_ativa(self, ordem_id: UUID) -> bool:
-        """A ordem tem pecas separadas esperando a baixa."""
+        """A ordem tem pecas separadas esperando a baixa.
+
+        Trava a reserva ate o fim da transacao: uma liberacao em curso termina
+        antes e e vista; uma que chegar depois espera esta comitar.
+        """
 
     def consumir_reserva(
         self, ordem_id: UUID, agora: datetime

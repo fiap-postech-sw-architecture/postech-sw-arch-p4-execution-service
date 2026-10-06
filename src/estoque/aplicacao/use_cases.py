@@ -274,8 +274,12 @@ class LiberarReserva:
 
 
 def reserva_ativa(reservas: ReservaRepository, ordem_id: UUID) -> bool:
-    """A ordem tem pecas separadas esperando a baixa (consulta sem lock)."""
-    reserva = reservas.obter_por_ordem(ordem_id)
+    """A ordem tem pecas separadas esperando a baixa.
+
+    Trava a reserva (FOR UPDATE) ate o fim da transacao de quem chama: uma
+    liberacao concorrente nao some no meio do agendamento ou do inicio.
+    """
+    reserva = reservas.obter_por_ordem(ordem_id, com_lock=True)
     return reserva is not None and reserva.status is StatusReserva.ATIVA
 
 
