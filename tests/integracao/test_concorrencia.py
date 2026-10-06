@@ -25,9 +25,17 @@ from src.compartilhado.dominio.exceptions import (
 from src.compartilhado.dominio.veiculo import Veiculo
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
+    ConcluirDiagnostico,
     DescartarDiagnostico,
+    IniciarDiagnostico,
     RegistrarSolicitacaoDeDiagnostico,
 )
+from src.diagnostico.dominio.diagnostico import (
+    ItemDiagnostico,
+    StatusDiagnostico,
+    TipoItem,
+)
+from src.diagnostico.infraestrutura.adapters import CatalogoDePecasSQLAlchemy
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import (
     AjustarQuantidade,
@@ -58,6 +66,7 @@ from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
 )
+from tests.fakes import ValidadorFake
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -65,6 +74,7 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
+    from src.diagnostico.dominio.diagnostico import Diagnostico
     from src.estoque.dominio.item_estoque import ItemEstoque
     from src.execucao.dominio.execucao import Execucao
 
@@ -111,6 +121,23 @@ class _ExecucoesQueSeguramOLock(ExecucaoSQLAlchemyRepository):
         if com_lock:
             _pausar(self._travou, self._seguir)
         return execucao
+
+
+class _DiagnosticosQueSeguramOLock(DiagnosticoSQLAlchemyRepository):
+    """Trava o diagnostico (``FOR UPDATE``) e so devolve quando o teste mandar."""
+
+    def __init__(
+        self, session: Session, travou: threading.Event, seguir: threading.Event
+    ) -> None:
+        super().__init__(session)
+        self._travou = travou
+        self._seguir = seguir
+
+    def obter(self, ordem_id: UUID, *, com_lock: bool = False) -> Diagnostico | None:
+        diagnostico = super().obter(ordem_id, com_lock=com_lock)
+        if com_lock:
+            _pausar(self._travou, self._seguir)
+        return diagnostico
 
 
 def _uow(session: Session) -> SQLAlchemyUnitOfWork:
@@ -705,10 +732,19 @@ def test_copia_simultanea_que_perde_a_corrida_le_a_vencedora(
             assert compensacao["tombstone"] is False  # leu a linha da vencedora
 
 
+_SERVICO = ItemDiagnostico(tipo=TipoItem.SERVICO, codigo="SRV-TROCA-OLEO", quantidade=1)
+
+
 def _execucoes_que_seguram(
     travou: threading.Event, seguir: threading.Event
 ) -> Callable[[Session], ExecucaoSQLAlchemyRepository]:
     return lambda session: _ExecucoesQueSeguramOLock(session, travou, seguir)
+
+
+def _diagnosticos_que_seguram(
+    travou: threading.Event, seguir: threading.Event
+) -> Callable[[Session], DiagnosticoSQLAlchemyRepository]:
+    return lambda session: _DiagnosticosQueSeguramOLock(session, travou, seguir)
 
 
 def _execucao_na_fila(session_factory: sessionmaker[Session]) -> UUID:
@@ -751,6 +787,65 @@ def _execucao(session_factory: sessionmaker[Session], ordem_id: UUID) -> Execuca
         execucao = ExecucaoSQLAlchemyRepository(session).obter(ordem_id)
     assert execucao is not None
     return execucao
+
+
+def _iniciar_diagnostico(
+    session_factory: sessionmaker[Session],
+    ordem_id: UUID,
+    mecanico_id: UUID,
+    diagnosticos: Callable[[Session], DiagnosticoSQLAlchemyRepository] = (
+        DiagnosticoSQLAlchemyRepository
+    ),
+) -> None:
+    with session_factory() as session:
+        IniciarDiagnostico(diagnosticos(session), _uow(session)).executar(
+            ordem_id, mecanico_id
+        )
+
+
+def _concluir_diagnostico(
+    session_factory: sessionmaker[Session],
+    ordem_id: UUID,
+    mecanico_id: UUID,
+    diagnosticos: Callable[[Session], DiagnosticoSQLAlchemyRepository] = (
+        DiagnosticoSQLAlchemyRepository
+    ),
+) -> None:
+    with session_factory() as session:
+        ConcluirDiagnostico(
+            diagnosticos(session),
+            CatalogoDePecasSQLAlchemy(session),
+            ValidadorFake(),  # o Billing nao e parte da disputa
+            _uow(session),
+        ).executar(ordem_id, mecanico_id, [_SERVICO], "Troca feita")
+
+
+def _descartar(
+    session_factory: sessionmaker[Session],
+    ordem_id: UUID,
+    diagnosticos: Callable[[Session], DiagnosticoSQLAlchemyRepository] = (
+        DiagnosticoSQLAlchemyRepository
+    ),
+) -> None:
+    with session_factory() as session:
+        DescartarDiagnostico(diagnosticos(session), _uow(session)).executar(ordem_id)
+
+
+def _diagnostico(session_factory: sessionmaker[Session], ordem_id: UUID) -> Diagnostico:
+    with session_factory() as session:
+        diagnostico = DiagnosticoSQLAlchemyRepository(session).obter(ordem_id)
+    assert diagnostico is not None
+    return diagnostico
+
+
+def _diagnostico_em_andamento(
+    session_factory: sessionmaker[Session], mecanico_id: UUID
+) -> UUID:
+    ordem_id = uuid4()
+    with session_factory() as session:
+        _solicitar_diagnostico(session, ordem_id)
+    _iniciar_diagnostico(session_factory, ordem_id, mecanico_id)
+    return ordem_id
 
 
 @pytest.mark.parametrize(
@@ -833,3 +928,102 @@ def test_inicios_simultaneos_de_dois_mecanicos_deixam_so_o_primeiro(
     assert [
         (linha["tipo"], linha["dados"]["mecanico_id"]) for linha in outbox()[antes:]
     ] == [("ExecucaoIniciada", str(primeiro))]
+
+
+def test_inicios_simultaneos_do_diagnostico_por_dois_mecanicos_deixam_so_o_primeiro(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # Sem o FOR UPDATE do diagnostico, os dois mecanicos assumiriam a mesma
+    # ordem: dois DiagnosticoIniciado e o ultimo a gravar como responsavel.
+    ordem_id = uuid4()
+    with session_factory() as session:
+        _solicitar_diagnostico(session, ordem_id)
+    primeiro, segundo = uuid4(), uuid4()
+    antes = len(outbox())
+
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: _iniciar_diagnostico(
+            session_factory,
+            ordem_id,
+            primeiro,
+            _diagnosticos_que_seguram(travou, seguir),
+        ),
+        lambda: _iniciar_diagnostico(session_factory, ordem_id, segundo),
+    )
+
+    assert list(erros) == ["disputa"]
+    assert isinstance(erros["disputa"], TransicaoStatusInvalidaException)
+    diagnostico = _diagnostico(session_factory, ordem_id)
+    assert (diagnostico.status, diagnostico.mecanico_id) == (
+        StatusDiagnostico.EM_ANDAMENTO,
+        primeiro,
+    )
+    assert [
+        (linha["tipo"], linha["dados"]["mecanico_id"]) for linha in outbox()[antes:]
+    ] == [("DiagnosticoIniciado", str(primeiro))]
+
+
+@pytest.mark.parametrize(
+    ("segura", "erro", "eventos"),
+    [
+        pytest.param(
+            "descarte",
+            TransicaoStatusInvalidaException,
+            ["DiagnosticoDescartado"],
+            id="descarte-primeiro",
+        ),
+        pytest.param(
+            "conclusao",
+            None,
+            ["DiagnosticoConcluido", "DiagnosticoDescartado"],
+            id="conclusao-primeiro",
+        ),
+    ],
+)
+def test_conclusao_e_descarte_simultaneos_terminam_descartados(
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
+    segura: str,
+    erro: type[BaseException] | None,
+    eventos: list[str],
+) -> None:
+    # A compensacao sempre prevalece e os eventos saem na ordem em que as
+    # transacoes comitaram. Descarte em curso: a conclusao espera, rele
+    # DESCARTADO e recebe 409 (nao ha DiagnosticoConcluido depois do descarte).
+    # Conclusao em curso: o descarte espera e vem depois. Sem o FOR UPDATE, o
+    # descarte comitaria no meio e a conclusao, decidida sobre o estado antigo,
+    # gravaria CONCLUIDO por cima da compensacao.
+    mecanico = uuid4()
+    ordem_id = _diagnostico_em_andamento(session_factory, mecanico)
+    antes = len(outbox())
+
+    def conclusao(
+        diagnosticos: Callable[[Session], DiagnosticoSQLAlchemyRepository],
+    ) -> None:
+        _concluir_diagnostico(session_factory, ordem_id, mecanico, diagnosticos)
+
+    def descarte(
+        diagnosticos: Callable[[Session], DiagnosticoSQLAlchemyRepository],
+    ) -> None:
+        _descartar(session_factory, ordem_id, diagnosticos)
+
+    primeira, segunda = (
+        (descarte, conclusao) if segura == "descarte" else (conclusao, descarte)
+    )
+    erros = _disputar(
+        engine,
+        lambda travou, seguir: primeira(_diagnosticos_que_seguram(travou, seguir)),
+        lambda: segunda(DiagnosticoSQLAlchemyRepository),
+    )
+
+    assert list(erros) == ([] if erro is None else ["disputa"])
+    if erro is not None:
+        assert isinstance(erros["disputa"], erro)
+    assert (
+        _diagnostico(session_factory, ordem_id).status is StatusDiagnostico.DESCARTADO
+    )
+    assert [linha["tipo"] for linha in outbox()[antes:]] == eventos
