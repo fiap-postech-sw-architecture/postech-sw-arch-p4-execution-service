@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.compartilhado.dominio.quantidade import QUANTIDADE_MAXIMA_POR_LINHA
 from src.compartilhado.interfaces.schemas import VeiculoResponse
 from src.diagnostico.dominio.diagnostico import (
     PADRAO_CODIGO,
@@ -25,7 +26,7 @@ class ItemDiagnosticoSchema(BaseModel):
         description="Codigo da tabela de precos do Billing (peca = SKU do estoque)",
         examples=["PEC-PASTILHA-FREIO"],
     )
-    quantidade: int = Field(ge=1, le=1000)
+    quantidade: int = Field(ge=1, le=QUANTIDADE_MAXIMA_POR_LINHA)
 
 
 class ConclusaoRequest(BaseModel):

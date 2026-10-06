@@ -56,10 +56,14 @@ class SQLAlchemyUnitOfWork:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if exc_type is not None:
-            self.rollback()
-        self._sessao().close()
-        self._session = None
+        try:
+            if exc_type is not None:
+                self.rollback()
+        finally:
+            # Mesmo com o rollback falhando (conexao caida), a sessao fecha e
+            # devolve a conexao ao pool.
+            self._sessao().close()
+            self._session = None
 
     def registrar_evento(self, evento: IntegrationEvent) -> None:
         self._eventos.append(evento)

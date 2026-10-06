@@ -67,6 +67,15 @@ class Execucao(AggregateRoot):
         if not isinstance(self._prioridade, Prioridade):
             msg = "Prioridade deve ser 'normal' ou 'alta'"
             raise ValorInvalidoError(msg)
+        # Status x responsavel: so a execucao iniciada (ou finalizada) tem
+        # mecanico; na fila e cancelada (inclusive a lapide), nao.
+        iniciada = self._status in {
+            StatusExecucao.EM_EXECUCAO,
+            StatusExecucao.FINALIZADA,
+        }
+        if iniciada != (self._mecanico_id is not None):
+            msg = f"Execucao {self._status} nao combina com o mecanico informado"
+            raise ValorInvalidoError(msg)
 
     @classmethod
     def agendar(

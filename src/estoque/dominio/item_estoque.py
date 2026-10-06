@@ -9,22 +9,29 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.dominio.quantidade import quantidade_valida
 from src.compartilhado.dominio.texto import texto_valido
 
 if TYPE_CHECKING:
     from src.estoque.dominio.sku import Sku
 
 TAMANHO_MAXIMO_NOME: Final = 255
+# Teto do saldo fisico, o mesmo do schema da API.
+SALDO_MAXIMO: Final = 1_000_000
 
 
 def _nome_valido(nome: str) -> str:
     return texto_valido(nome, "Nome do item", maximo=TAMANHO_MAXIMO_NOME)
 
 
-def _exigir_positiva(quantidade: int, operacao: str) -> None:
-    if quantidade <= 0:
-        msg = f"Quantidade para {operacao} deve ser positiva (recebido: {quantidade})"
+def _saldo_valido(quantidade_disponivel: int) -> int:
+    if not 0 <= quantidade_disponivel <= SALDO_MAXIMO:
+        msg = (
+            f"Quantidade disponivel deve estar entre 0 e {SALDO_MAXIMO} "
+            "(nao pode ser negativa)"
+        )
         raise ValorInvalidoError(msg)
+    return quantidade_disponivel
 
 
 @dataclass(eq=False, kw_only=True)
@@ -45,9 +52,7 @@ class ItemEstoque(AggregateRoot):
 
     def __post_init__(self) -> None:
         self._nome = _nome_valido(self._nome)
-        if self._quantidade_disponivel < 0:
-            msg = "Quantidade disponivel nao pode ser negativa"
-            raise ValorInvalidoError(msg)
+        _saldo_valido(self._quantidade_disponivel)
         if not 0 <= self._quantidade_reservada <= self._quantidade_disponivel:
             msg = "Quantidade reservada deve estar entre 0 e a quantidade disponivel"
             raise ValorInvalidoError(msg)
@@ -85,9 +90,7 @@ class ItemEstoque(AggregateRoot):
 
     def ajustar_quantidade(self, quantidade_disponivel: int) -> None:
         """Define o saldo fisico (inventario); nunca abaixo do que esta reservado."""
-        if quantidade_disponivel < 0:
-            msg = "Quantidade disponivel nao pode ser negativa"
-            raise ValorInvalidoError(msg)
+        _saldo_valido(quantidade_disponivel)
         if quantidade_disponivel < self._quantidade_reservada:
             msg = (
                 f"Quantidade disponivel ({quantidade_disponivel}) abaixo da reservada "
@@ -116,7 +119,7 @@ class ItemEstoque(AggregateRoot):
             ViolacaoRegraDeNegocioException: peca inativa.
             EstoqueInsuficienteException: saldo livre menor que o pedido.
         """
-        _exigir_positiva(quantidade, "reserva")
+        quantidade_valida(quantidade, "para reserva")
         if not self._ativo:
             msg = f"Item {self._sku} esta inativo e nao pode ser reservado"
             raise ViolacaoRegraDeNegocioException(msg)
@@ -130,13 +133,13 @@ class ItemEstoque(AggregateRoot):
 
     def liberar_reserva(self, quantidade: int) -> None:
         """Devolve ao saldo livre unidades antes reservadas."""
-        _exigir_positiva(quantidade, "liberacao")
+        quantidade_valida(quantidade, "para liberacao")
         self._exigir_reservado(quantidade)
         self._quantidade_reservada -= quantidade
 
     def consumir_reserva(self, quantidade: int) -> None:
         """Baixa: as unidades reservadas saem do estoque fisico."""
-        _exigir_positiva(quantidade, "baixa")
+        quantidade_valida(quantidade, "para baixa")
         self._exigir_reservado(quantidade)
         self._quantidade_reservada -= quantidade
         self._quantidade_disponivel -= quantidade

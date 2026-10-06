@@ -34,8 +34,17 @@ class _SessaoFake:
         self.chamadas.append(("close",))
 
 
-def _uow() -> tuple[SQLAlchemyUnitOfWork, _SessaoFake]:
-    sessao = _SessaoFake()
+class _SessaoSemConexao(_SessaoFake):
+    def rollback(self) -> None:
+        super().rollback()
+        raise ConnectionError
+
+
+def _uow(
+    sessao: _SessaoFake | None = None,
+) -> tuple[SQLAlchemyUnitOfWork, _SessaoFake]:
+    sessao = sessao or _SessaoFake()
+    # Fake so com a superficie da Session que a UoW usa (o tipo e Session).
     return SQLAlchemyUnitOfWork(lambda: sessao), sessao  # type: ignore[arg-type,return-value]
 
 
@@ -118,3 +127,12 @@ def test_commit_fora_do_with_e_erro_de_programacao() -> None:
     uow, _ = _uow()
     with pytest.raises(RuntimeError, match="nao foi iniciada"):
         uow.commit()
+
+
+def test_rollback_que_falha_ainda_fecha_a_sessao() -> None:
+    # Conexao caida no meio: sem o finally, a sessao ficaria aberta segurando a
+    # conexao do pool.
+    uow, sessao = _uow(_SessaoSemConexao())
+    with pytest.raises(ConnectionError):
+        _falhar_no_meio(uow)
+    assert sessao.chamadas == [("rollback",), ("close",)]

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.estoque.dominio.item_estoque import TAMANHO_MAXIMO_NOME
+from src.estoque.dominio.item_estoque import SALDO_MAXIMO, TAMANHO_MAXIMO_NOME
 from src.estoque.dominio.sku import PADRAO_SKU, TAMANHO_MAXIMO_SKU
 
 SkuTexto = Annotated[
@@ -18,7 +18,7 @@ SkuTexto = Annotated[
     ),
 ]
 Nome = Annotated[str, Field(min_length=1, max_length=TAMANHO_MAXIMO_NOME)]
-Quantidade = Annotated[int, Field(ge=0, le=1_000_000)]
+Quantidade = Annotated[int, Field(ge=0, le=SALDO_MAXIMO)]
 
 
 class CriarItemEstoqueRequest(BaseModel):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -234,3 +234,51 @@ class TestDiagnostico:
         assert "Joao" not in texto
         assert "Maria" not in texto
         assert "ABC1D23" not in texto
+
+
+class TestCoerenciaNaConstrucao:
+    """Status x campos conferidos no construtor (a reidratacao nao passa por ele)."""
+
+    @pytest.mark.parametrize(
+        ("status", "mecanico", "itens", "erro"),
+        [
+            pytest.param(
+                StatusDiagnostico.EM_ANDAMENTO,
+                None,
+                (),
+                "responsavel",
+                id="sem-mecanico",
+            ),
+            pytest.param(
+                StatusDiagnostico.AGUARDANDO, MECANICO, (), "AGUARDANDO", id="cedo"
+            ),
+            pytest.param(
+                StatusDiagnostico.CONCLUIDO, MECANICO, (), "itens", id="concluido-vazio"
+            ),
+            pytest.param(
+                StatusDiagnostico.EM_ANDAMENTO,
+                MECANICO,
+                tuple(ITENS),
+                "itens",
+                id="itens-antes-da-conclusao",
+            ),
+        ],
+    )
+    def test_estado_incoerente_e_recusado(
+        self,
+        status: StatusDiagnostico,
+        mecanico: UUID | None,
+        itens: tuple[ItemDiagnostico, ...],
+        erro: str,
+    ) -> None:
+        ordem_id, veiculo = uuid4(), _veiculo()
+        with pytest.raises(ValueError, match=erro):
+            Diagnostico(
+                id=ordem_id,
+                _veiculo=veiculo,
+                _descricao_problema="x",
+                _status=status,
+                _mecanico_id=mecanico,
+                _itens=itens,
+                _solicitado_em=AGORA,
+            )

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from src.compartilhado.dominio.aggregate_root import AggregateRoot
 from src.compartilhado.dominio.exceptions import ValorInvalidoError
 from src.compartilhado.dominio.maquina_de_estados import validar_transicao
+from src.compartilhado.dominio.quantidade import quantidade_valida
 from src.compartilhado.dominio.value_object import ValueObject
 
 if TYPE_CHECKING:
@@ -38,9 +39,7 @@ class ItemReserva(ValueObject):
     quantidade: int
 
     def __post_init__(self) -> None:
-        if self.quantidade <= 0:
-            msg = f"Quantidade da peca {self.sku} deve ser positiva"
-            raise ValorInvalidoError(msg)
+        quantidade_valida(self.quantidade, f"da peca {self.sku}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +49,12 @@ class Faltante(ValueObject):
     sku: Sku
     solicitado: int
     disponivel: int
+
+    def __post_init__(self) -> None:
+        quantidade_valida(self.solicitado, f"solicitada da peca {self.sku}")
+        if not 0 <= self.disponivel < self.solicitado:
+            msg = f"Faltante de {self.sku} exige saldo livre entre 0 e o solicitado"
+            raise ValorInvalidoError(msg)
 
 
 @dataclass(eq=False, kw_only=True)

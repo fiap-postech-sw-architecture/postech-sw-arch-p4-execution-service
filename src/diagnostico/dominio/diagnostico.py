@@ -12,6 +12,7 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
 )
 from src.compartilhado.dominio.maquina_de_estados import validar_transicao
+from src.compartilhado.dominio.quantidade import quantidade_valida
 from src.compartilhado.dominio.texto import texto_valido
 from src.compartilhado.dominio.value_object import ValueObject
 
@@ -73,9 +74,7 @@ class ItemDiagnostico(ValueObject):
         ):
             msg = f"Codigo de item invalido: {self.codigo!r}"
             raise ValorInvalidoError(msg)
-        if self.quantidade <= 0:
-            msg = f"Quantidade do item {self.codigo} deve ser positiva"
-            raise ValorInvalidoError(msg)
+        quantidade_valida(self.quantidade, f"do item {self.codigo}")
 
 
 def _texto_livre(valor: str, campo: str, *, obrigatorio: bool) -> str:
@@ -96,6 +95,34 @@ def _validar_itens(itens: Sequence[ItemDiagnostico]) -> None:
     if len(chaves) != len(set(chaves)):
         msg = "Cada servico ou peca deve aparecer uma unica vez no diagnostico"
         raise ValorInvalidoError(msg)
+
+
+def _exigir_coerencia(
+    status: StatusDiagnostico,
+    mecanico_id: UUID | None,
+    itens: Sequence[ItemDiagnostico],
+) -> None:
+    """Status x campos: AGUARDANDO sem mecanico; em andamento ou concluido com
+    ele; itens so depois da conclusao (o descarte guarda o que havia)."""
+    com_mecanico = status in {
+        StatusDiagnostico.EM_ANDAMENTO,
+        StatusDiagnostico.CONCLUIDO,
+    }
+    if com_mecanico and mecanico_id is None:
+        msg = f"Diagnostico {status} exige o mecanico responsavel"
+        raise ValorInvalidoError(msg)
+    if status is StatusDiagnostico.AGUARDANDO and mecanico_id is not None:
+        msg = "Diagnostico AGUARDANDO ainda nao tem mecanico"
+        raise ValorInvalidoError(msg)
+    concluido = status is StatusDiagnostico.CONCLUIDO
+    if (concluido and not itens) or (status in _ANTES_DA_CONCLUSAO and itens):
+        msg = f"Diagnostico {status} nao combina com os itens informados"
+        raise ValorInvalidoError(msg)
+
+
+_ANTES_DA_CONCLUSAO = frozenset(
+    {StatusDiagnostico.AGUARDANDO, StatusDiagnostico.EM_ANDAMENTO}
+)
 
 
 @dataclass(eq=False, kw_only=True)
@@ -121,6 +148,7 @@ class Diagnostico(AggregateRoot):
     _descartado_em: datetime | None = None
 
     def __post_init__(self) -> None:
+        _exigir_coerencia(self._status, self._mecanico_id, self._itens)
         if self._veiculo is None or self._descricao_problema is None:
             if self._status is not StatusDiagnostico.DESCARTADO:
                 msg = "So a lapide (DESCARTADO) fica sem veiculo e descricao"

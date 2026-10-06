@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -158,3 +158,24 @@ def test_validar_finalizacao_nao_muda_nada() -> None:
     assert execucao.finalizada_em is None
     with pytest.raises(OperacaoNaoPermitidaException):
         execucao.validar_finalizacao(OUTRO)
+
+
+@pytest.mark.parametrize(
+    ("status", "mecanico"),
+    [
+        pytest.param(StatusExecucao.EM_EXECUCAO, None, id="iniciada-sem-mecanico"),
+        pytest.param(StatusExecucao.AGUARDANDO, MECANICO, id="na-fila-com-mecanico"),
+    ],
+)
+def test_estado_incoerente_e_recusado_na_construcao(
+    status: StatusExecucao, mecanico: UUID | None
+) -> None:
+    ordem_id = uuid4()
+    with pytest.raises(ValueError, match="mecanico"):
+        Execucao(
+            id=ordem_id,
+            _status=status,
+            _prioridade=Prioridade.NORMAL,
+            _enfileirada_em=AGORA,
+            _mecanico_id=mecanico,
+        )

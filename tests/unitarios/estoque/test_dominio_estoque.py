@@ -61,6 +61,41 @@ class TestSku:
             um.valor = "OUTRO"  # type: ignore[misc]
 
 
+class TestQuantidades:
+    """Uma regra so para quantidade de linha (1 a 1000) e teto do saldo."""
+
+    @pytest.mark.parametrize("quantidade", [1, 1000], ids=["minimo", "teto"])
+    def test_linha_nas_bordas(self, quantidade: int) -> None:
+        assert ItemReserva(Sku("PEC-X"), quantidade).quantidade == quantidade
+
+    @pytest.mark.parametrize(
+        "quantidade", [0, -1, 1001], ids=["zero", "negativa", "1001"]
+    )
+    def test_linha_fora_da_faixa(self, quantidade: int) -> None:
+        with pytest.raises(ValueError, match="positiva e no maximo 1000"):
+            ItemReserva(Sku("PEC-X"), quantidade)
+
+    def test_saldo_no_teto_e_acima(self) -> None:
+        item = ItemEstoque.criar(
+            sku=Sku("PEC-X"), nome="x", quantidade_disponivel=1_000_000
+        )
+        with pytest.raises(ValueError, match="1000000"):
+            item.ajustar_quantidade(1_000_001)
+
+    @pytest.mark.parametrize(
+        ("solicitado", "disponivel"),
+        [
+            pytest.param(2, 2, id="sem-falta"),
+            pytest.param(2, 3, id="sobra"),
+            pytest.param(2, -1, id="saldo-negativo"),
+            pytest.param(0, 0, id="nada-solicitado"),
+        ],
+    )
+    def test_faltante_incoerente(self, solicitado: int, disponivel: int) -> None:
+        with pytest.raises(ValueError, match=r"(?i)quantidade|faltante"):
+            Faltante(sku=Sku("PEC-X"), solicitado=solicitado, disponivel=disponivel)
+
+
 class TestItemEstoque:
     def test_criar_normaliza_nome_e_comeca_sem_reserva(self) -> None:
         item = ItemEstoque.criar(
