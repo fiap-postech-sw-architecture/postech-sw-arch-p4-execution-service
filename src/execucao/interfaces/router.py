@@ -16,9 +16,9 @@ from src.compartilhado.interfaces.autenticacao import (
 from src.compartilhado.interfaces.dependencies import obter_session
 from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
 from src.execucao.interfaces.dependencies import (
-    obter_fila,
     obter_finalizar_execucao,
     obter_iniciar_execucao,
+    obter_listar_fila,
 )
 from src.execucao.interfaces.schemas import ExecucaoResponse, ItemDaFilaResponse
 
@@ -37,13 +37,10 @@ def listar_fila(
     session: SessionDep, offset: Offset = 0, limit: Limite = 20
 ) -> Pagina[ItemDaFilaResponse]:
     """Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada."""
-    fila = obter_fila(session)
+    itens, total = obter_listar_fila(session).executar(offset=offset, limit=limit)
     return Pagina(
-        items=[
-            ItemDaFilaResponse.model_validate(item)
-            for item in fila.listar(offset=offset, limit=limit)
-        ],
-        total=fila.contar(),
+        items=[ItemDaFilaResponse.model_validate(item) for item in itens],
+        total=total,
         offset=offset,
         limit=limit,
     )

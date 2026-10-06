@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from src.compartilhado.dominio.veiculo import Veiculo
-    from src.execucao.aplicacao.events import PecaConsumida
+    from src.execucao.aplicacao.events import PecaConsumidaDTO
     from src.execucao.dominio.execucao import Execucao, Prioridade
 
 
@@ -21,7 +21,7 @@ class ItemDaFila:
     veiculo: Veiculo | None
 
 
-class FilaDeExecucao(Protocol):
+class FilaDeExecucaoPort(Protocol):
     """Leitura da fila: execucoes AGUARDANDO, ``alta`` antes, depois por chegada."""
 
     def listar(self, offset: int, limit: int) -> list[ItemDaFila]:
@@ -46,7 +46,7 @@ class EstoquePort(Protocol):
 
     def consumir_reserva(
         self, ordem_id: UUID, agora: datetime
-    ) -> list[PecaConsumida] | None:
+    ) -> list[PecaConsumidaDTO] | None:
         """Baixa a reserva ATIVA da ordem; ``None`` se a ordem nao tem reserva.
 
         Raises:

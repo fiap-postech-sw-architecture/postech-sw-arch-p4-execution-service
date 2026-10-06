@@ -47,17 +47,17 @@ def test_servico_emite_exatamente_os_eventos_do_catalogo() -> None:
 
 
 def test_listas_aninhadas_seguem_o_catalogo() -> None:
-    from src.diagnostico.aplicacao.events import ItemDados
-    from src.estoque.aplicacao.events import FaltanteDados
-    from src.execucao.aplicacao.events import PecaConsumida
+    from src.diagnostico.aplicacao.events import ItemDTO
+    from src.estoque.aplicacao.events import FaltanteDTO
+    from src.execucao.aplicacao.events import PecaConsumidaDTO
 
-    assert [f.name for f in fields(ItemDados)] == ["tipo", "codigo", "quantidade"]
-    assert [f.name for f in fields(FaltanteDados)] == [
+    assert [f.name for f in fields(ItemDTO)] == ["tipo", "codigo", "quantidade"]
+    assert [f.name for f in fields(FaltanteDTO)] == [
         "sku",
         "solicitado",
         "disponivel",
     ]
-    assert [f.name for f in fields(PecaConsumida)] == ["sku", "quantidade"]
+    assert [f.name for f in fields(PecaConsumidaDTO)] == ["sku", "quantidade"]
 
 
 def test_repr_do_evento_nao_leva_as_observacoes() -> None:

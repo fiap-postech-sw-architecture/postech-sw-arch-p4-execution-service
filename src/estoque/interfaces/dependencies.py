@@ -8,10 +8,10 @@ from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.estoque.aplicacao.use_cases import (
     AjustarQuantidade,
     AtualizarItemEstoque,
+    ConsultarItemEstoque,
     CriarItemEstoque,
     DesativarItemEstoque,
     ListarItensEstoque,
-    ObterItemEstoque,
 )
 from src.estoque.infraestrutura.repository import ItemEstoqueSQLAlchemyRepository
 
@@ -35,8 +35,8 @@ def obter_listar_itens(session: Session) -> ListarItensEstoque:
     return ListarItensEstoque(_repo(session))
 
 
-def obter_obter_item(session: Session) -> ObterItemEstoque:
-    return ObterItemEstoque(_repo(session))
+def obter_consultar_item(session: Session) -> ConsultarItemEstoque:
+    return ConsultarItemEstoque(_repo(session))
 
 
 def obter_atualizar_item(session: Session) -> AtualizarItemEstoque:

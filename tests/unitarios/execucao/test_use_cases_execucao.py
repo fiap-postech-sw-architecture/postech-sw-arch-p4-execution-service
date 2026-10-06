@@ -20,11 +20,13 @@ from src.estoque.aplicacao.use_cases import ReservarPecas
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import ItemReserva, StatusReserva
 from src.estoque.dominio.sku import Sku
+from src.execucao.aplicacao.ports import ItemDaFila
 from src.execucao.aplicacao.use_cases import (
     AgendarExecucao,
     CancelarExecucao,
     FinalizarExecucao,
     IniciarExecucao,
+    ListarFila,
 )
 from src.execucao.dominio.exceptions import ExecucaoNaoEncontradaException
 from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
@@ -222,6 +224,23 @@ class TestAgendar:
 
         assert repo.execucoes == {}
         assert (uow.eventos, uow.rollbacks) == ([], 1)
+
+
+class TestListarFila:
+    def test_pagina_da_fila_e_o_tamanho_dela(self) -> None:
+        agora = datetime.now(UTC)
+        itens = [
+            ItemDaFila(
+                posicao=posicao,
+                ordem_id=uuid4(),
+                prioridade=Prioridade.NORMAL,
+                enfileirada_em=agora,
+                veiculo=None,
+            )
+            for posicao in (1, 2, 3)
+        ]
+        pagina, total = ListarFila(FilaFixa(itens=itens)).executar(offset=1, limit=1)
+        assert (pagina, total) == ([itens[1]], 3)
 
 
 class TestCancelar:

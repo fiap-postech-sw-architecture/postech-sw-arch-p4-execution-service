@@ -10,7 +10,7 @@ from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
     ReservaSQLAlchemyRepository,
 )
-from src.execucao.aplicacao.events import PecaConsumida
+from src.execucao.aplicacao.events import PecaConsumidaDTO
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 class EstoqueSQLAlchemyAdapter:
-    """Port ``EstoquePort`` sobre o contexto estoque, na sessao do caso de uso.
+    """``EstoquePort`` sobre o contexto estoque, na sessao do caso de uso.
 
     A baixa e a do proprio estoque (``baixar_reserva``): ordem de lock execucao
     -> reserva -> itens por sku, igual a da liberacao, sem deadlock entre elas.
@@ -37,18 +37,18 @@ class EstoqueSQLAlchemyAdapter:
 
     def consumir_reserva(
         self, ordem_id: UUID, agora: datetime
-    ) -> list[PecaConsumida] | None:
+    ) -> list[PecaConsumidaDTO] | None:
         reserva = baixar_reserva(self._itens, self._reservas, ordem_id, agora)
         if reserva is None:
             return None
         return [
-            PecaConsumida(sku=str(linha.sku), quantidade=linha.quantidade)
+            PecaConsumidaDTO(sku=str(linha.sku), quantidade=linha.quantidade)
             for linha in reserva.itens
         ]
 
 
 class VeiculosSQLAlchemy:
-    """Port ``VeiculosPort`` sobre a tabela do diagnostico (mesmo banco do servico)."""
+    """``VeiculosPort`` sobre a tabela do diagnostico (mesmo banco do servico)."""
 
     def __init__(self, session: Session) -> None:
         self._session = session

@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-class ValidadorDeItens(Protocol):
+class ValidadorDeItensPort(Protocol):
     """Tabela de precos do Billing (unica chamada sincrona entre servicos)."""
 
     def codigos_invalidos(
@@ -20,7 +20,7 @@ class ValidadorDeItens(Protocol):
         """
 
 
-class CatalogoDePecas(Protocol):
+class CatalogoDePecasPort(Protocol):
     """Pecas cadastradas no estoque local."""
 
     def skus_indisponiveis(self, skus: Sequence[str]) -> list[str]:

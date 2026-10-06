@@ -14,7 +14,7 @@ from src.diagnostico.aplicacao.events import (
     DiagnosticoConcluidoEvent,
     DiagnosticoDescartadoEvent,
     DiagnosticoIniciadoEvent,
-    ItemDados,
+    ItemDTO,
 )
 from src.diagnostico.dominio.diagnostico import (
     Diagnostico,
@@ -32,7 +32,10 @@ if TYPE_CHECKING:
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
     from src.compartilhado.dominio.veiculo import Veiculo
-    from src.diagnostico.aplicacao.ports import CatalogoDePecas, ValidadorDeItens
+    from src.diagnostico.aplicacao.ports import (
+        CatalogoDePecasPort,
+        ValidadorDeItensPort,
+    )
     from src.diagnostico.dominio.diagnostico import ItemDiagnostico
     from src.diagnostico.dominio.repository import DiagnosticoRepository
 
@@ -149,8 +152,8 @@ class ConcluirDiagnostico:
     def __init__(
         self,
         repo: DiagnosticoRepository,
-        catalogo: CatalogoDePecas,
-        validador: ValidadorDeItens,
+        catalogo: CatalogoDePecasPort,
+        validador: ValidadorDeItensPort,
         uow: UnitOfWork,
     ) -> None:
         self._repo = repo
@@ -198,7 +201,7 @@ class ConcluirDiagnostico:
                         ordem_id=ordem_id,
                         ocorrido_em=agora,
                         itens=tuple(
-                            ItemDados(
+                            ItemDTO(
                                 tipo=item.tipo.value,
                                 codigo=item.codigo,
                                 quantidade=item.quantidade,

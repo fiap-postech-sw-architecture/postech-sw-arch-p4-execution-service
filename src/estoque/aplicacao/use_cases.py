@@ -8,7 +8,7 @@ import structlog
 from src.compartilhado.aplicacao.idempotencia import releitura_em_corrida
 from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
 from src.estoque.aplicacao.events import (
-    FaltanteDados,
+    FaltanteDTO,
     PecasReservadasEvent,
     ReservaDePecasFalhouEvent,
     ReservaLiberadaEvent,
@@ -73,7 +73,7 @@ class ListarItensEstoque:
         return self._repo.listar(offset=offset, limit=limit), self._repo.contar()
 
 
-class ObterItemEstoque:
+class ConsultarItemEstoque:
     def __init__(self, repo: ItemEstoqueRepository) -> None:
         self._repo = repo
 
@@ -223,7 +223,7 @@ def _falha(recusada: Reserva, agora: datetime) -> ReservaDePecasFalhouEvent:
         ordem_id=recusada.ordem_id,
         ocorrido_em=agora,
         faltantes=tuple(
-            FaltanteDados(
+            FaltanteDTO(
                 sku=str(f.sku), solicitado=f.solicitado, disponivel=f.disponivel
             )
             for f in recusada.faltantes

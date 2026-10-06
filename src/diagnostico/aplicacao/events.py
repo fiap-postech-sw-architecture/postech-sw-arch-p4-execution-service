@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class ItemDados:
+class ItemDTO:
     tipo: str
     codigo: str
     quantidade: int
@@ -27,7 +27,7 @@ class DiagnosticoIniciadoEvent(IntegrationEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class DiagnosticoConcluidoEvent(IntegrationEvent):
-    itens: tuple[ItemDados, ...]
+    itens: tuple[ItemDTO, ...]
     observacoes: str = field(repr=False)  # texto livre: fora de traceback e log
     concluido_em: datetime
 

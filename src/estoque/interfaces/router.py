@@ -19,10 +19,10 @@ from src.estoque.dominio.sku import PADRAO_SKU, TAMANHO_MAXIMO_SKU, Sku
 from src.estoque.interfaces.dependencies import (
     obter_ajustar_quantidade,
     obter_atualizar_item,
+    obter_consultar_item,
     obter_criar_item,
     obter_desativar_item,
     obter_listar_itens,
-    obter_obter_item,
 )
 from src.estoque.interfaces.schemas import (
     AjustarQuantidadeRequest,
@@ -86,7 +86,7 @@ def listar_itens(
     responses=respostas(404),
 )
 def obter_item(sku: SkuPath, session: SessionDep) -> ItemEstoqueResponse:
-    item = obter_obter_item(session).executar(Sku(sku))
+    item = obter_consultar_item(session).executar(Sku(sku))
     return ItemEstoqueResponse.model_validate(item)
 
 

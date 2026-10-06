@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class FaltanteDados:
+class FaltanteDTO:
     sku: str
     solicitado: int
     disponivel: int
@@ -25,7 +25,7 @@ class PecasReservadasEvent(IntegrationEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class ReservaDePecasFalhouEvent(IntegrationEvent):
-    faltantes: tuple[FaltanteDados, ...]
+    faltantes: tuple[FaltanteDTO, ...]
 
 
 @dataclass(frozen=True, kw_only=True)

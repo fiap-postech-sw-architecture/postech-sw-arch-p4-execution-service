@@ -74,16 +74,16 @@ known-first-party = ["src"]
 "**/exceptions.py" = ["N818"]
 
 # Contratos de camada (DDD + onion), verificados por `uv run lint-imports`.
-# `infraestrutura` fica fora do contrato de camadas porque importa aplicacao e
-# dominio legitimamente (adapters implementam ports); o sentido proibido
-# (dominio/aplicacao -> infraestrutura) e coberto pelo contrato forbidden.
+# Dentro de cada contexto: interfaces -> infraestrutura -> aplicacao -> dominio
+# (camada de cima importa as de baixo, nunca o contrario; infraestrutura nunca
+# importa interfaces). Entre contextos, o contrato forbidden abaixo.
 [tool.importlinter]
 root_packages = ["src"]
 
 [[tool.importlinter.contracts]]
-name = "Camadas por contexto (interfaces -> aplicacao -> dominio)"
+name = "Camadas por contexto (interfaces -> infraestrutura -> aplicacao -> dominio)"
 type = "layers"
-layers = ["interfaces", "aplicacao", "dominio"]
+layers = ["interfaces", "infraestrutura", "aplicacao", "dominio"]
 containers = [
     "src.compartilhado",
     "src.estoque",
@@ -169,6 +169,3 @@ testpaths = ["tests"]
 # Teto por teste: uma regressao de lock no teste de concorrencia vira falha
 # visivel em vez de pendurar a suite.
 timeout = 120
-
-[tool.bandit]
-targets = ["src"]

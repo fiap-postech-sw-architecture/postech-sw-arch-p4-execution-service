@@ -24,7 +24,12 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
-    from src.execucao.aplicacao.ports import EstoquePort, FilaDeExecucao, VeiculosPort
+    from src.execucao.aplicacao.ports import (
+        EstoquePort,
+        FilaDeExecucaoPort,
+        ItemDaFila,
+        VeiculosPort,
+    )
     from src.execucao.dominio.repository import ExecucaoRepository
 
 _log = structlog.get_logger(__name__)
@@ -63,7 +68,7 @@ class AgendarExecucao:
     def __init__(
         self,
         repo: ExecucaoRepository,
-        fila: FilaDeExecucao,
+        fila: FilaDeExecucaoPort,
         veiculos: VeiculosPort,
         estoque: EstoquePort,
         uow: UnitOfWork,
@@ -111,6 +116,17 @@ class AgendarExecucao:
             )
             self._uow.commit()
         return execucao
+
+
+class ListarFila:
+    """Fila de execucao: ``alta`` antes de ``normal``, depois por chegada."""
+
+    def __init__(self, fila: FilaDeExecucaoPort) -> None:
+        self._fila = fila
+
+    def executar(self, offset: int, limit: int) -> tuple[list[ItemDaFila], int]:
+        """Pagina da fila (com a posicao absoluta de cada ordem) e o tamanho dela."""
+        return self._fila.listar(offset=offset, limit=limit), self._fila.contar()
 
 
 class CancelarExecucao:

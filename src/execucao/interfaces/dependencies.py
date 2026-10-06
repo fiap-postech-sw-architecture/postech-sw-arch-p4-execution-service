@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
-from src.execucao.aplicacao.use_cases import FinalizarExecucao, IniciarExecucao
+from src.execucao.aplicacao.use_cases import (
+    FinalizarExecucao,
+    IniciarExecucao,
+    ListarFila,
+)
 from src.execucao.infraestrutura.adapters import EstoqueSQLAlchemyAdapter
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
@@ -16,8 +20,8 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
-def obter_fila(session: Session) -> FilaDeExecucaoSQLAlchemy:
-    return FilaDeExecucaoSQLAlchemy(session)
+def obter_listar_fila(session: Session) -> ListarFila:
+    return ListarFila(FilaDeExecucaoSQLAlchemy(session))
 
 
 def obter_iniciar_execucao(session: Session) -> IniciarExecucao:

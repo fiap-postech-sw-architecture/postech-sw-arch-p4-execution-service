@@ -1,4 +1,4 @@
-"""Port ``ValidadorDeItens`` sobre o Billing: ``POST /api/v1/precos/validacao``.
+"""``ValidadorDeItensPort`` sobre o Billing: ``POST /api/v1/precos/validacao``.
 
 Envelope de resiliencia (RFC-004, secao 6.1; ADR-038): timeout de 2 s (no
 ``httpx.Client`` criado no lifespan), 2 retries com jitter so em erro

@@ -15,11 +15,11 @@ from src.compartilhado.dominio.exceptions import (
 from src.estoque.aplicacao.use_cases import (
     AjustarQuantidade,
     AtualizarItemEstoque,
+    ConsultarItemEstoque,
     CriarItemEstoque,
     DesativarItemEstoque,
     LiberarReserva,
     ListarItensEstoque,
-    ObterItemEstoque,
     ReservarPecas,
 )
 from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
@@ -63,8 +63,8 @@ class TestCadastro:
         repo = ItensEmMemoria(_item(VELA, 1), _item(OLEO, 2))
         itens, total = ListarItensEstoque(repo).executar(offset=0, limit=1)
         assert ([i.sku for i in itens], total) == ([OLEO], 2)
-        assert ObterItemEstoque(repo).executar(VELA).quantidade_disponivel == 1
-        uc, inexistente = ObterItemEstoque(repo), Sku("PEC-NADA")
+        assert ConsultarItemEstoque(repo).executar(VELA).quantidade_disponivel == 1
+        uc, inexistente = ConsultarItemEstoque(repo), Sku("PEC-NADA")
         with pytest.raises(ItemEstoqueNaoEncontradoException):
             uc.executar(inexistente)
 

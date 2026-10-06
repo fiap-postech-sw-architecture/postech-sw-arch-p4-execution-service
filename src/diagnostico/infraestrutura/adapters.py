@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class CatalogoDePecasSQLAlchemy:
-    """Port ``CatalogoDePecas`` sobre a tabela do estoque (mesmo banco do servico)."""
+    """``CatalogoDePecasPort`` sobre a tabela do estoque (mesmo banco do servico)."""
 
     def __init__(self, session: Session) -> None:
         self._session = session

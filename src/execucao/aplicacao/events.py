@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class PecaConsumida:
+class PecaConsumidaDTO:
     sku: str
     quantidade: int
 
@@ -37,4 +37,4 @@ class ExecucaoIniciadaEvent(IntegrationEvent):
 @dataclass(frozen=True, kw_only=True)
 class ExecucaoFinalizadaEvent(IntegrationEvent):
     finalizada_em: datetime
-    pecas_consumidas: tuple[PecaConsumida, ...]
+    pecas_consumidas: tuple[PecaConsumidaDTO, ...]

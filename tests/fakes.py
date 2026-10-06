@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 from src.compartilhado.dominio.exceptions import DependenciaIndisponivelException
 from src.estoque.aplicacao.use_cases import baixar_reserva, reserva_ativa
-from src.execucao.aplicacao.events import PecaConsumida
+from src.execucao.aplicacao.events import PecaConsumidaDTO
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Sequence
@@ -140,16 +140,17 @@ class ExecucoesEmMemoria:
 
 
 class FilaFixa:
-    """Fila de leitura com posicao fixa (a ordenacao real e testada no Postgres)."""
+    """Fila de leitura ja ordenada (a ordenacao real e testada no Postgres)."""
 
-    def __init__(self, posicao: int = 1) -> None:
+    def __init__(self, posicao: int = 1, itens: Sequence[ItemDaFila] = ()) -> None:
         self._posicao = posicao
+        self._itens = list(itens)
 
     def listar(self, offset: int, limit: int) -> list[ItemDaFila]:
-        return []
+        return self._itens[offset : offset + limit]
 
     def contar(self) -> int:
-        return 0
+        return len(self._itens)
 
     def posicao(self, execucao: Execucao) -> int:
         return self._posicao
@@ -178,13 +179,13 @@ class EstoqueEmMemoria:
 
     def consumir_reserva(
         self, ordem_id: UUID, agora: datetime
-    ) -> list[PecaConsumida] | None:
+    ) -> list[PecaConsumidaDTO] | None:
         self.baixas += 1
         reserva = baixar_reserva(self._itens, self._reservas, ordem_id, agora)
         if reserva is None:
             return None
         return [
-            PecaConsumida(sku=str(linha.sku), quantidade=linha.quantidade)
+            PecaConsumidaDTO(sku=str(linha.sku), quantidade=linha.quantidade)
             for linha in reserva.itens
         ]
 
