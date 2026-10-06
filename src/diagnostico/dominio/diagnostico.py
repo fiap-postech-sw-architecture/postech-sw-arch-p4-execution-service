@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from src.compartilhado.dominio.aggregate_root import AggregateRoot
+from src.compartilhado.dominio.codigo import codigo_valido
 from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
@@ -23,12 +23,7 @@ if TYPE_CHECKING:
 
     from src.compartilhado.dominio.veiculo import Veiculo
 
-# Codigos da tabela de precos do Billing (servicos e pecas): PEC-VELA, SRV-...
-# O Billing e o dono: mesmo formato e mesmo limite de 50 caracteres.
-PADRAO_CODIGO: Final = r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
-TAMANHO_MAXIMO_CODIGO: Final = 50
 TAMANHO_MAXIMO_TEXTO_LIVRE: Final = 2000
-_REGEX_CODIGO = re.compile(PADRAO_CODIGO)
 
 
 class StatusDiagnostico(StrEnum):
@@ -68,10 +63,7 @@ class ItemDiagnostico(ValueObject):
             # ValueError (nao TypeError): invariante de VO, que a API devolve em 422.
             msg = "Tipo do item deve ser 'servico' ou 'peca'"
             raise ValorInvalidoError(msg)
-        # fullmatch: com match, o `$` aceitaria um "\n" final.
-        if len(self.codigo) > TAMANHO_MAXIMO_CODIGO or not _REGEX_CODIGO.fullmatch(
-            self.codigo
-        ):
+        if not codigo_valido(self.codigo):
             msg = f"Codigo de item invalido: {self.codigo!r}"
             raise ValorInvalidoError(msg)
         quantidade_valida(self.quantidade, f"do item {self.codigo}")

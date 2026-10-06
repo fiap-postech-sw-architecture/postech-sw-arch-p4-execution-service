@@ -5,11 +5,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.compartilhado.dominio.codigo import PADRAO_CODIGO, TAMANHO_MAXIMO_CODIGO
 from src.compartilhado.dominio.quantidade import QUANTIDADE_MAXIMA_POR_LINHA
 from src.compartilhado.interfaces.schemas import VeiculoResponse
 from src.diagnostico.dominio.diagnostico import (
-    PADRAO_CODIGO,
-    TAMANHO_MAXIMO_CODIGO,
     TAMANHO_MAXIMO_TEXTO_LIVRE,
     StatusDiagnostico,
     TipoItem,

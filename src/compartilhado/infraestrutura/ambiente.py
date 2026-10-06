@@ -28,7 +28,8 @@ def inteiro_opcional(nome: str, padrao: int) -> int:
     bruto = os.environ.get(nome, "").strip()
     if not bruto:
         return padrao
-    if not bruto.isdigit():
+    # isdecimal, nao isdigit: "²" passaria e o int() levantaria ValueError cru.
+    if not bruto.isdecimal():
         msg = f"Variavel de ambiente {nome} deve ser inteiro >= 0 (recebido: {bruto!r})"
         raise RuntimeError(msg)
     return int(bruto)

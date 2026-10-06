@@ -1,18 +1,10 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Final
 
+from src.compartilhado.dominio.codigo import TAMANHO_MAXIMO_CODIGO, codigo_valido
 from src.compartilhado.dominio.exceptions import ValorInvalidoError
 from src.compartilhado.dominio.value_object import ValueObject
-
-# Mesmo formato e tamanho dos codigos da tabela de precos do Billing, dono dos
-# codigos (ex.: PEC-OLEO-5W30): um SKU mais longo passaria aqui e o Billing o
-# recusaria na validacao do diagnostico.
-PADRAO_SKU: Final = r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
-TAMANHO_MAXIMO_SKU: Final = 50
-_REGEX_SKU = re.compile(PADRAO_SKU)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +14,13 @@ class Sku(ValueObject):
     valor: str
 
     def __post_init__(self) -> None:
-        # fullmatch: com match, o `$` aceitaria um "\n" final.
-        if len(self.valor) > TAMANHO_MAXIMO_SKU or not _REGEX_SKU.fullmatch(self.valor):
+        # Um SKU fora da regra do Billing seria recusado na validacao do
+        # diagnostico; aqui ja vira 422.
+        if not codigo_valido(self.valor):
             msg = (
                 f"SKU invalido: {self.valor!r}. Use letras maiusculas, digitos e "
-                f"hifens (ex.: PEC-OLEO-5W30), com ate {TAMANHO_MAXIMO_SKU} caracteres"
+                f"hifens (ex.: PEC-OLEO-5W30), com ate {TAMANHO_MAXIMO_CODIGO} "
+                "caracteres"
             )
             raise ValorInvalidoError(msg)
 

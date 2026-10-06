@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.types import TypeDecorator
 
+from src.compartilhado.dominio.codigo import TAMANHO_MAXIMO_CODIGO
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
     JsonDeDominio,
@@ -24,7 +25,7 @@ from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
 )
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
-from src.estoque.dominio.sku import TAMANHO_MAXIMO_SKU, Sku
+from src.estoque.dominio.sku import Sku
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Dialect
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 class SkuType(TypeDecorator[Sku]):
     """VARCHAR <-> ``Sku``; aceita ``str`` no bind (filtro vindo de outro contexto)."""
 
-    impl = String(TAMANHO_MAXIMO_SKU)
+    impl = String(TAMANHO_MAXIMO_CODIGO)
     cache_ok = True
 
     def process_bind_param(

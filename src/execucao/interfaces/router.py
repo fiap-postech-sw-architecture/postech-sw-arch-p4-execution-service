@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 # Runtime import: o FastAPI resolve `Annotated[Session, Depends(...)]` em runtime.
 from sqlalchemy.orm import Session
 
+from src.compartilhado.aplicacao.responsavel import registrar_auditoria
 from src.compartilhado.interfaces.autenticacao import (
     Papel,
     UsuarioAutenticado,
@@ -56,9 +57,12 @@ def iniciar_execucao(
 ) -> ExecucaoResponse:
     """Exige a reserva de pecas ativa (409 sem ela): depois daqui a OS nao cancela.
 
-    Repetir pelo mesmo mecanico e idempotente.
+    Repetir pelo mesmo mecanico e idempotente. O admin tambem pode iniciar (vira
+    o responsavel), com log de auditoria.
     """
     execucao = obter_iniciar_execucao(session).executar(ordem_id, usuario.id)
+    if usuario.papel is Papel.ADMIN:
+        registrar_auditoria("iniciar_execucao", ator_id=usuario.id, alvo=str(ordem_id))
     return ExecucaoResponse.model_validate(execucao)
 
 

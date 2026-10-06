@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.orm import Session
 
 from src.compartilhado.aplicacao.responsavel import registrar_auditoria
+from src.compartilhado.dominio.codigo import PADRAO_CODIGO, TAMANHO_MAXIMO_CODIGO
 from src.compartilhado.interfaces.autenticacao import (
     Papel,
     UsuarioAutenticado,
@@ -15,7 +16,7 @@ from src.compartilhado.interfaces.autenticacao import (
 )
 from src.compartilhado.interfaces.dependencies import obter_session
 from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
-from src.estoque.dominio.sku import PADRAO_SKU, TAMANHO_MAXIMO_SKU, Sku
+from src.estoque.dominio.sku import Sku
 from src.estoque.interfaces.dependencies import (
     obter_ajustar_quantidade,
     obter_atualizar_item,
@@ -38,7 +39,9 @@ router = APIRouter(
 SessionDep = Annotated[Session, Depends(obter_session)]
 SkuPath = Annotated[
     str,
-    Path(pattern=PADRAO_SKU, max_length=TAMANHO_MAXIMO_SKU, examples=["PEC-VELA"]),
+    Path(
+        pattern=PADRAO_CODIGO, max_length=TAMANHO_MAXIMO_CODIGO, examples=["PEC-VELA"]
+    ),
 ]
 # Escrita so do admin, com log de auditoria (quem, o que, qual SKU).
 Admin = Annotated[UsuarioAutenticado, Depends(exigir_papel())]
@@ -102,7 +105,9 @@ def atualizar_item(
     item = obter_atualizar_item(session).executar(
         Sku(sku), nome=body.nome, ativo=body.ativo
     )
-    registrar_auditoria("atualizar_peca", ator_id=admin.id, alvo=sku)
+    registrar_auditoria(
+        "atualizar_peca", ator_id=admin.id, alvo=sku, ativo=str(body.ativo)
+    )
     return ItemEstoqueResponse.model_validate(item)
 
 

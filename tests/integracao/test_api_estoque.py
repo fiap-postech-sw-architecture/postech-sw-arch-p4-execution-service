@@ -63,6 +63,7 @@ def test_escrita_do_admin_deixa_log_de_auditoria(
     api.patch(
         f"{URL}/PEC-VELA/quantidade", json={"quantidade_disponivel": 3}, headers=admin
     )
+    api.put(f"{URL}/PEC-VELA", json={"nome": "Vela NGK", "ativo": True}, headers=admin)
     api.delete(f"{URL}/PEC-VELA", headers=admin)
 
     registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
@@ -72,8 +73,11 @@ def test_escrita_do_admin_deixa_log_de_auditoria(
     assert auditoria == [
         ("cadastrar_peca", str(admin_id), "PEC-VELA"),
         ("ajustar_saldo", str(admin_id), "PEC-VELA"),
+        ("atualizar_peca", str(admin_id), "PEC-VELA"),
         ("desativar_peca", str(admin_id), "PEC-VELA"),
     ]
+    [atualizacao] = [r for r in registros if r.get("acao") == "atualizar_peca"]
+    assert atualizacao["ativo"] == "True"  # desativar pelo PUT fica visivel
 
 
 def test_crud_completo_pelo_admin(api: TestClient, admin: dict[str, str]) -> None:

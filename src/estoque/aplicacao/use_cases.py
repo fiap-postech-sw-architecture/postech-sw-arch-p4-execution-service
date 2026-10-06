@@ -278,13 +278,9 @@ class LiberarReserva:
         agora = datetime.now(UTC)
         with self._uow:
             reserva = self._reservas.obter_por_ordem(ordem_id, com_lock=True)
+            lapide = reserva is None
             if reserva is None:
                 self._reservas.salvar(Reserva.lapide(ordem_id=ordem_id, agora=agora))
-                _log.info(
-                    "compensation_tombstone_recorded",
-                    comando="LiberarReserva",
-                    correlation_id=str(ordem_id),
-                )
             else:
                 itens = self._itens.obter_com_lock(
                     [linha.sku for linha in reserva.itens]
@@ -294,7 +290,11 @@ class LiberarReserva:
                 ReservaLiberadaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("reservation_released", correlation_id=str(ordem_id))
+        # Depois do commit: a copia que perde a corrida pela lapide roda de novo
+        # e nao registra uma lapide que nao gravou.
+        _log.info(
+            "reservation_released", correlation_id=str(ordem_id), tombstone=lapide
+        )
 
 
 def reserva_ativa(reservas: ReservaRepository, ordem_id: UUID) -> bool:

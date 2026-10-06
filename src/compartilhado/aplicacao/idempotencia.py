@@ -16,8 +16,8 @@ def releitura_em_corrida[**P, T](executar: Callable[P, T]) -> Callable[P, T]:
 
     Duas copias (reenvio do orquestrador, compensacao e original em voo) leem
     "nada gravado" e inserem; a UNIQUE da ordem barra a segunda, que o
-    repositorio traduz em ``EntidadeDuplicadaException``. A segunda rodada le a
-    linha da vencedora e segue a regra de repeticao, em vez de virar erro.
+    repositorio traduz em ``EntidadeDuplicadaException``. A segunda execucao le
+    a linha da vencedora e segue a regra de repeticao, em vez de virar erro.
     """
 
     @functools.wraps(executar)

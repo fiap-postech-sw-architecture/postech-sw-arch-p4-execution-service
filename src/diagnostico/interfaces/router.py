@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from starlette.requests import Request  # noqa: TC002
 
+from src.compartilhado.aplicacao.responsavel import registrar_auditoria
 from src.compartilhado.interfaces.autenticacao import (
     Papel,
     UsuarioAutenticado,
@@ -63,8 +64,15 @@ def listar_diagnosticos(
 def iniciar_diagnostico(
     ordem_id: UUID, usuario: Mecanico, session: SessionDep
 ) -> DiagnosticoResponse:
-    """O mecanico autenticado vira o responsavel; repetir por ele e idempotente."""
+    """O mecanico autenticado vira o responsavel; repetir por ele e idempotente.
+
+    O admin tambem pode assumir (vira o responsavel), com log de auditoria.
+    """
     diagnostico = obter_iniciar_diagnostico(session).executar(ordem_id, usuario.id)
+    if usuario.papel is Papel.ADMIN:
+        registrar_auditoria(
+            "iniciar_diagnostico", ator_id=usuario.id, alvo=str(ordem_id)
+        )
     return DiagnosticoResponse.model_validate(diagnostico)
 
 

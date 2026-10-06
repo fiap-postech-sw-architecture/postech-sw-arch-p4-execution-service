@@ -264,13 +264,9 @@ class DescartarDiagnostico:
         agora = datetime.now(UTC)
         with self._uow:
             diagnostico = self._repo.obter(ordem_id, com_lock=True)
+            lapide = diagnostico is None
             if diagnostico is None:
                 diagnostico = Diagnostico.lapide(ordem_id=ordem_id, agora=agora)
-                _log.info(
-                    "compensation_tombstone_recorded",
-                    comando="DescartarDiagnostico",
-                    correlation_id=str(ordem_id),
-                )
             else:
                 diagnostico.descartar(agora)
             self._repo.salvar(diagnostico)
@@ -278,4 +274,6 @@ class DescartarDiagnostico:
                 DiagnosticoDescartadoEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("diagnosis_discarded", correlation_id=str(ordem_id))
+        # Depois do commit: a copia que perde a corrida pela lapide roda de novo
+        # e nao registra uma lapide que nao gravou.
+        _log.info("diagnosis_discarded", correlation_id=str(ordem_id), tombstone=lapide)

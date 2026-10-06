@@ -49,10 +49,14 @@ class EntidadeDuplicadaException(DomainException):
 
 
 class OperacaoNaoPermitidaException(DomainException):
-    """O usuario autenticado nao e o responsavel pelo objeto (ex.: outro mecanico)."""
+    """O usuario autenticado nao e o responsavel pelo objeto (ex.: outro mecanico).
+
+    403 com o codigo ``ACESSO_NEGADO``, o mesmo do papel sem permissao: a
+    convencao HTTP dos tres servicos.
+    """
 
     def __init__(self, mensagem: str = "Operacao nao permitida") -> None:
-        super().__init__(codigo="OPERACAO_NAO_PERMITIDA", mensagem=mensagem)
+        super().__init__(codigo="ACESSO_NEGADO", mensagem=mensagem)
 
 
 class DadosInvalidosException(DomainException):

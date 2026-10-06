@@ -445,7 +445,7 @@ def test_so_quem_iniciou_conclui(
         headers=autenticar("mecanico"),
     )
     assert resposta.status_code == 403
-    assert resposta.json()["erro"]["codigo"] == "OPERACAO_NAO_PERMITIDA"
+    assert resposta.json()["erro"]["codigo"] == "ACESSO_NEGADO"
     assert rota.call_count == 0
 
 
@@ -558,3 +558,22 @@ def test_atendente_nao_mexe_em_diagnostico(
     atendente = autenticar("atendente")
     assert api.get(URL, headers=atendente).status_code == 403
     assert api.post(f"{URL}/{ordem_id}/inicio", headers=atendente).status_code == 403
+
+
+def test_admin_que_assume_o_diagnostico_vira_o_responsavel_com_auditoria(
+    api: TestClient,
+    session_factory: sessionmaker[Session],
+    autenticar: Callable[..., dict[str, str]],
+    log_capturado: io.StringIO,
+) -> None:
+    admin_id = uuid4()
+    ordem_id = _solicitar(session_factory)
+    resposta = api.post(
+        f"{URL}/{ordem_id}/inicio", headers=autenticar("admin", admin_id)
+    )
+    assert resposta.json()["mecanico_id"] == str(admin_id)
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    auditoria = [
+        (r["acao"], r["ator_id"], r["alvo"]) for r in registros if r["event"] == "audit"
+    ]
+    assert auditoria == [("iniciar_diagnostico", str(admin_id), str(ordem_id))]

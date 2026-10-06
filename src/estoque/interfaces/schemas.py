@@ -5,14 +5,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.compartilhado.dominio.codigo import PADRAO_CODIGO, TAMANHO_MAXIMO_CODIGO
 from src.estoque.dominio.item_estoque import SALDO_MAXIMO, TAMANHO_MAXIMO_NOME
-from src.estoque.dominio.sku import PADRAO_SKU, TAMANHO_MAXIMO_SKU
 
 SkuTexto = Annotated[
     str,
     Field(
-        pattern=PADRAO_SKU,
-        max_length=TAMANHO_MAXIMO_SKU,
+        pattern=PADRAO_CODIGO,
+        max_length=TAMANHO_MAXIMO_CODIGO,
         examples=["PEC-OLEO-5W30"],
         description="Mesmo codigo da tabela de precos do Billing",
     ),

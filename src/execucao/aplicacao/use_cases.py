@@ -147,13 +147,9 @@ class CancelarExecucao:
         agora = datetime.now(UTC)
         with self._uow:
             execucao = self._repo.obter(ordem_id, com_lock=True)
+            lapide = execucao is None
             if execucao is None:
                 execucao = Execucao.lapide(ordem_id=ordem_id, agora=agora)
-                _log.info(
-                    "compensation_tombstone_recorded",
-                    comando="CancelarExecucao",
-                    correlation_id=str(ordem_id),
-                )
             else:
                 execucao.cancelar(agora)
             self._repo.salvar(execucao)
@@ -161,7 +157,8 @@ class CancelarExecucao:
                 ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
             self._uow.commit()
-        _log.info("execution_cancelled", correlation_id=str(ordem_id))
+        # Depois do commit (ver DescartarDiagnostico).
+        _log.info("execution_cancelled", correlation_id=str(ordem_id), tombstone=lapide)
 
 
 class IniciarExecucao:

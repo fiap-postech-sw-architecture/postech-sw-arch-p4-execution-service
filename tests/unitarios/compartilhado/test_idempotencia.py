@@ -12,11 +12,11 @@ from src.compartilhado.dominio.exceptions import (
 class _Comando:
     def __init__(self, *falhas: Exception) -> None:
         self.falhas = list(falhas)
-        self.rodadas = 0
+        self.execucoes = 0
 
     @releitura_em_corrida
     def executar(self, valor: int) -> int:
-        self.rodadas += 1
+        self.execucoes += 1
         if self.falhas:
             raise self.falhas.pop(0)
         return valor
@@ -25,24 +25,24 @@ class _Comando:
 def test_copia_que_perdeu_a_corrida_roda_de_novo_e_le_a_vencedora() -> None:
     comando = _Comando(EntidadeDuplicadaException())
     assert comando.executar(7) == 7
-    assert comando.rodadas == 2
+    assert comando.execucoes == 2
 
 
 def test_sem_corrida_roda_uma_vez() -> None:
     comando = _Comando()
     assert comando.executar(7) == 7
-    assert comando.rodadas == 1
+    assert comando.execucoes == 1
 
 
-def test_duplicata_persistente_sobe_na_segunda_rodada() -> None:
+def test_duplicata_persistente_sobe_na_segunda_execucao() -> None:
     comando = _Comando(EntidadeDuplicadaException(), EntidadeDuplicadaException())
     with pytest.raises(EntidadeDuplicadaException):
         comando.executar(7)
-    assert comando.rodadas == 2
+    assert comando.execucoes == 2
 
 
 def test_outros_erros_nao_repetem() -> None:
     comando = _Comando(ViolacaoRegraDeNegocioException())
     with pytest.raises(ViolacaoRegraDeNegocioException):
         comando.executar(7)
-    assert comando.rodadas == 1
+    assert comando.execucoes == 1

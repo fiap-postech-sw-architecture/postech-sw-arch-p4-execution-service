@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -31,6 +32,7 @@ from src.execucao.infraestrutura.repository import (
 )
 
 if TYPE_CHECKING:
+    import io
     from collections.abc import Callable
 
     from fastapi.testclient import TestClient
@@ -302,3 +304,22 @@ def test_atendente_so_le_a_fila(
 def test_execucao_desconhecida_e_404(api: TestClient, mecanico: dict[str, str]) -> None:
     resposta = api.post(f"/api/v1/execucoes/{uuid4()}/inicio", headers=mecanico)
     assert resposta.status_code == 404
+
+
+def test_admin_que_inicia_vira_o_responsavel_com_auditoria(
+    api: TestClient,
+    session_factory: sessionmaker[Session],
+    autenticar: Callable[..., dict[str, str]],
+    log_capturado: io.StringIO,
+) -> None:
+    admin_id = uuid4()
+    ordem_id = _agendar(session_factory)
+    resposta = api.post(
+        f"/api/v1/execucoes/{ordem_id}/inicio", headers=autenticar("admin", admin_id)
+    )
+    assert resposta.json()["mecanico_id"] == str(admin_id)
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    auditoria = [
+        (r["acao"], r["ator_id"], r["alvo"]) for r in registros if r["event"] == "audit"
+    ]
+    assert auditoria == [("iniciar_execucao", str(admin_id), str(ordem_id))]

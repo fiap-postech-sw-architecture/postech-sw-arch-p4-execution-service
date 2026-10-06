@@ -8,6 +8,8 @@ sairia errado (ou viraria erro de CHECK no banco em vez do 409 do dominio).
 
 from __future__ import annotations
 
+import io
+import json
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -578,6 +580,15 @@ def _liberar_reserva(session: Session, ordem_id: UUID) -> object:
     ).executar(ordem_id)
 
 
+# Log de cada compensacao (depois do commit): a lapide que perdeu a corrida nao
+# pode aparecer como gravada.
+_LOG_DA_COMPENSACAO = {
+    "DiagnosticoDescartado": "diagnosis_discarded",
+    "ExecucaoCancelada": "execution_cancelled",
+    "ReservaLiberada": "reservation_released",
+}
+
+
 @pytest.mark.parametrize(
     ("insercao", "comando", "tabela", "status", "respostas"),
     [
@@ -640,6 +651,7 @@ def test_copia_simultanea_que_perde_a_corrida_le_a_vencedora(
     tabela: str,
     status: str,
     respostas: list[str],
+    log_capturado: io.StringIO,
 ) -> None:
     # A outra copia (ou o comando original, contra a lapide) ja inseriu a linha
     # da ordem e nao comitou: esta le "nada", insere e bate na UNIQUE. Antes
@@ -665,3 +677,10 @@ def test_copia_simultanea_que_perde_a_corrida_le_a_vencedora(
         ).all()
     assert [linha.status for linha in linhas] == [status]
     assert [linha["tipo"] for linha in outbox()[antes:]] == respostas
+    registros = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    for resposta in respostas:
+        if resposta in _LOG_DA_COMPENSACAO:
+            [compensacao] = [
+                r for r in registros if r["event"] == _LOG_DA_COMPENSACAO[resposta]
+            ]
+            assert compensacao["tombstone"] is False  # leu a linha da vencedora
