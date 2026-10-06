@@ -30,8 +30,10 @@ lint-arch:
 	$(PY) lint-imports
 
 # Unitarios + integracao (testcontainers) com o gate de cobertura do .coveragerc.
+# coverage.xml alimenta o SonarQube e o resumo do CI; htmlcov/ e reports/ viram
+# artefato do job `test`.
 test:
-	$(PY) pytest
+	$(PY) pytest --cov-report=xml:coverage.xml --cov-report=html:htmlcov --junitxml=reports/junit.xml
 
 check: lint lint-arch typecheck security test
 	@echo "Todos os gates passaram"

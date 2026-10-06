@@ -105,6 +105,17 @@ Sem o OS Service no ar, as rotas autenticadas respondem 503 (JWKS indisponível)
 
 `make test` (ou `uv run pytest`) roda os unitários e os de integração: estes sobem um PostgreSQL 16 efêmero via testcontainers, aplicam as migrações do Alembic e cobrem repositórios, outbox (incluindo o `NOTIFY`), API com JWT real (chave RSA gerada no teste e JWKS servido por HTTP local), Billing simulado com `respx` e a disputa concorrente pela última unidade de uma peça (uma reserva vence, a outra recebe `ReservaDePecasFalhou`, sem saldo negativo). O gate de cobertura (ramos incluídos) é de 90% no `.coveragerc`.
 
+## Integração contínua
+
+Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os checks obrigatórios da branch protection):
+
+| Workflow | Jobs | O que garante |
+|---|---|---|
+| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | ruff + import-linter, mypy strict, bandit, testes com gate de 90% (relatório por pacote no summary e `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`) e imagem que sobe e importa a aplicação |
+| `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos na árvore e CVE HIGH/CRITICAL com correção na imagem; roda também toda segunda-feira |
+
+`make check` roda localmente os mesmos gates de código do job `CI`.
+
 ## Repositórios da fase 4
 
 | Repositório | Papel |
