@@ -63,11 +63,13 @@ def test_seed_nao_mexe_em_saldo_existente(
 
 def test_saude_metrics_e_swagger(api: TestClient) -> None:
     assert api.get("/api/v1/saude").json() == {"status": "ok"}
+    assert api.get("/api/v1/saude/pronto").json() == {"status": "ok"}  # banco real
     assert "http_request_duration_seconds" in api.get("/metrics").text
     openapi = api.get("/openapi.json").json()
     assert openapi["info"]["title"] == "PytStop Execution Service"
     assert {
         "/api/v1/saude",
+        "/api/v1/saude/pronto",
         "/api/v1/estoque",
         "/api/v1/estoque/{sku}",
         "/api/v1/estoque/{sku}/quantidade",

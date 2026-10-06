@@ -54,7 +54,9 @@ Swagger em `/docs`. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "i
 | `GET /api/v1/estoque`, `GET /api/v1/estoque/{sku}` | mecânico, atendente, admin | Consulta o estoque |
 | `POST /api/v1/estoque`, `PUT /api/v1/estoque/{sku}`, `DELETE /api/v1/estoque/{sku}` | admin | Cadastro, nome/situação e desativação |
 | `PATCH /api/v1/estoque/{sku}/quantidade` | admin | Ajuste do saldo físico (nunca abaixo do reservado) |
-| `GET /api/v1/saude`, `GET /metrics` | — | Liveness/readiness e métricas Prometheus (`http_request_duration_seconds`, `pytstop_circuit_breaker_aberto`) |
+| `GET /api/v1/saude` | — | Liveness: processo de pé, sem tocar dependências (HEALTHCHECK da imagem) |
+| `GET /api/v1/saude/pronto` | — | Readiness: 200 só com o banco respondendo `SELECT 1` em até 2 s, senão 503 |
+| `GET /metrics` | — | Métricas Prometheus (`http_request_duration_seconds`, `pytstop_circuit_breaker_aberto`); fica fora da borda |
 
 Exemplos (com `TOKEN` emitido pelo OS Service):
 
