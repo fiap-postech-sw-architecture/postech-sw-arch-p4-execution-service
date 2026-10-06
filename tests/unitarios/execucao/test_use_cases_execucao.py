@@ -125,6 +125,19 @@ class TestAgendar:
         )
         assert (uow.eventos, uow.commits) == ([], 0)
 
+    def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
+        repo = ExecucoesEmMemoria()
+        ordem_id = uuid4()
+        CancelarExecucao(repo, FakeUnitOfWork()).executar(ordem_id)
+        lapide = repo.execucoes[ordem_id]
+        uow = FakeUnitOfWork()
+
+        resultado = AgendarExecucao(repo, FilaFixa(), uow).executar(ordem_id, 0)
+
+        assert resultado is lapide
+        assert resultado.status is StatusExecucao.CANCELADA
+        assert (uow.eventos, uow.commits) == ([], 0)
+
     def test_prioridade_invalida(self) -> None:
         uc = AgendarExecucao(ExecucoesEmMemoria(), FilaFixa(), FakeUnitOfWork())
         ordem_id = uuid4()
@@ -158,10 +171,16 @@ class TestCancelar:
             uc.executar(execucao.ordem_id)
         assert uow.eventos == []
 
-    def test_ordem_desconhecida(self) -> None:
-        uc, ordem_id = CancelarExecucao(ExecucoesEmMemoria(), FakeUnitOfWork()), uuid4()
-        with pytest.raises(ExecucaoNaoEncontradaException):
-            uc.executar(ordem_id)
+    def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
+        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        ordem_id = uuid4()
+
+        CancelarExecucao(repo, uow).executar(ordem_id)
+
+        lapide = repo.execucoes[ordem_id]
+        assert lapide.status is StatusExecucao.CANCELADA
+        assert lapide.cancelada_em is not None
+        assert _eventos(uow) == [("ExecucaoCancelada", {"ordem_id": str(ordem_id)})]
 
 
 class TestIniciar:
@@ -190,6 +209,11 @@ class TestIniciar:
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
             o.iniciar.executar(o.execucao.ordem_id, MECANICO)
         assert (o.uow.eventos, o.uow.rollbacks) == ([], 1)
+
+    def test_ordem_desconhecida(self) -> None:
+        o = _oficina()
+        with pytest.raises(ExecucaoNaoEncontradaException):
+            o.iniciar.executar(uuid4(), MECANICO)
 
     def test_reserva_liberada_tambem_barra_o_inicio(self) -> None:
         o = _oficina()

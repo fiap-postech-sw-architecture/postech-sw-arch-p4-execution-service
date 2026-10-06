@@ -63,6 +63,23 @@ class Execucao(AggregateRoot):
     def agendar(cls, *, ordem_id: UUID, prioridade: int, agora: datetime) -> Execucao:
         return cls(id=ordem_id, _prioridade=prioridade, _enfileirada_em=agora)
 
+    @classmethod
+    def lapide(cls, *, ordem_id: UUID, agora: datetime) -> Execucao:
+        """Cancelamento que chegou antes do ``AgendarExecucao``: nasce CANCELADA.
+
+        Nunca entra na fila (so AGUARDANDO entra); prioridade normal e
+        ``enfileirada_em`` = instante da compensacao so preenchem as colunas
+        obrigatorias. O agendamento atrasado acha a lapide pela chave
+        ``ordem_id`` e e descartado sem efeito (RFC-004, secao 4.5).
+        """
+        return cls(
+            id=ordem_id,
+            _status=StatusExecucao.CANCELADA,
+            _prioridade=0,
+            _enfileirada_em=agora,
+            _cancelada_em=agora,
+        )
+
     @property
     def ordem_id(self) -> UUID:
         return self.id

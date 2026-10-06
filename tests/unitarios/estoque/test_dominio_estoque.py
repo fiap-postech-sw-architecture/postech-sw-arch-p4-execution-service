@@ -216,6 +216,17 @@ class TestReserva:
                 _criada_em=AGORA,
             )
 
+    def test_lapide_nasce_liberada_sem_pecas(self) -> None:
+        ordem_id = uuid4()
+        lapide = Reserva.lapide(ordem_id=ordem_id, agora=AGORA)
+        assert (lapide.ordem_id, lapide.status, lapide.itens) == (
+            ordem_id,
+            StatusReserva.LIBERADA,
+            (),
+        )
+        assert (lapide.criada_em, lapide.encerrada_em) == (AGORA, AGORA)
+        assert lapide.liberar(AGORA) is False
+
     def test_lista_vazia_e_reserva_valida(self) -> None:
         reserva = Reserva.criar(ordem_id=uuid4(), itens=[], agora=AGORA)
         assert reserva.itens == ()

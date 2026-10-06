@@ -103,6 +103,21 @@ class Reserva(AggregateRoot):
             _encerrada_em=agora,
         )
 
+    @classmethod
+    def lapide(cls, *, ordem_id: UUID, agora: datetime) -> Reserva:
+        """Liberacao que chegou antes do ``ReservarPecas``: nasce LIBERADA, sem pecas.
+
+        O ``ReservarPecas`` atrasado acha a lapide pela UNIQUE(ordem_id) e e
+        descartado sem efeito (RFC-004, secao 4.5).
+        """
+        return cls(
+            _ordem_id=ordem_id,
+            _itens=(),
+            _status=StatusReserva.LIBERADA,
+            _criada_em=agora,
+            _encerrada_em=agora,
+        )
+
     @property
     def ordem_id(self) -> UUID:
         return self._ordem_id

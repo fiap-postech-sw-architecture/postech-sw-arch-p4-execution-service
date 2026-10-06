@@ -28,12 +28,14 @@ Proveniência: `src/compartilhado` e o contexto `estoque` partem do snapshot do 
 
 | Comando (OS → Execução) | Caso de uso | Resposta (evento) | Repetição do comando |
 |---|---|---|---|
-| `SolicitarDiagnostico` | `RegistrarSolicitacaoDeDiagnostico` | — (o próximo fato é `DiagnosticoIniciado`) | devolve o diagnóstico existente |
+| `SolicitarDiagnostico` | `RegistrarSolicitacaoDeDiagnostico` | — (o próximo fato é `DiagnosticoIniciado`) | devolve o diagnóstico existente; concluído ou descartado, é descartado |
 | `DescartarDiagnostico` | `DescartarDiagnostico` | `DiagnosticoDescartado` | reemite a resposta |
-| `ReservarPecas` | `ReservarPecas` | `PecasReservadas` ou `ReservaDePecasFalhou{faltantes}` | reemite a mesma resposta, sem decidir de novo (a recusa fica registrada) |
+| `ReservarPecas` | `ReservarPecas` | `PecasReservadas` ou `ReservaDePecasFalhou{faltantes}` | reserva ativa ou recusada: reemite a mesma resposta, sem decidir de novo; liberada ou consumida: descartado |
 | `LiberarReserva` | `LiberarReserva` | `ReservaLiberada` (409 se a reserva já foi consumida) | reemite a resposta, sem devolver de novo |
-| `AgendarExecucao` | `AgendarExecucao` | `ExecucaoAgendada{posicao_na_fila}` | reemite com a posição atual |
+| `AgendarExecucao` | `AgendarExecucao` | `ExecucaoAgendada{posicao_na_fila}` | na fila: reemite com a posição atual; iniciada, finalizada ou cancelada: descartado |
 | `CancelarExecucao` | `CancelarExecucao` | `ExecucaoCancelada` (409 depois de iniciada) | reemite a resposta |
+
+Regra de repetição: enquanto o desfecho vale, o comando repetido republica a resposta registrada; depois de compensado ou superado, é descartado com log, sem efeito e sem resposta. **Lápide:** a compensação que chega antes do comando original (passo em voo, RFC-004 §4.5) grava o agregado já no estado final (reserva `LIBERADA` sem peças, execução `CANCELADA`, diagnóstico `DESCARTADO` sem retrato) e responde; o original, quando chegar, encontra a lápide pela chave `ordem_id` e é descartado.
 
 Ações do mecânico pela API: `DiagnosticoIniciado`, `DiagnosticoConcluido`, `ExecucaoIniciada` (pivot: daqui em diante a OS não cancela, por isso o início exige a reserva de peças ativa) e `ExecucaoFinalizada{pecas_consumidas}` (baixa do estoque na mesma transação). Só o mecânico que iniciou conclui o diagnóstico ou finaliza a execução; o admin pode fazê-lo em nome dele. Repetir a ação devolve o estado atual sem novo evento. O `motivo` dos comandos de compensação não é registrado aqui: o histórico da saga fica no OS Service.
 

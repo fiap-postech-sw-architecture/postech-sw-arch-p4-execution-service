@@ -78,6 +78,24 @@ class TestRegistrarSolicitacao:
         assert resultado.status is StatusDiagnostico.EM_ANDAMENTO
         assert uow.commits == 0
 
+    def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(self) -> None:
+        repo = DiagnosticosEmMemoria()
+        ordem_id = uuid4()
+        DescartarDiagnostico(repo, FakeUnitOfWork()).executar(ordem_id)
+        lapide = repo.diagnosticos[ordem_id]
+        uow = FakeUnitOfWork()
+
+        resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
+            ordem_id, VEICULO, "Barulho no motor"
+        )
+
+        assert resultado is lapide
+        assert (resultado.status, resultado.veiculo) == (
+            StatusDiagnostico.DESCARTADO,
+            None,
+        )
+        assert (uow.eventos, uow.commits) == ([], 0)
+
 
 def test_listar_filtra_por_status_em_ordem_de_chegada() -> None:
     primeiro, segundo, andamento = (
@@ -300,10 +318,16 @@ class TestDescartar:
         assert diagnostico.descartado_em == descartado_em
         assert [e.tipo for e in uow.eventos] == 2 * ["DiagnosticoDescartado"]
 
-    def test_ordem_desconhecida(self) -> None:
-        uc, ordem_id = (
-            DescartarDiagnostico(DiagnosticosEmMemoria(), FakeUnitOfWork()),
-            uuid4(),
-        )
-        with pytest.raises(DiagnosticoNaoEncontradoException):
-            uc.executar(ordem_id)
+    def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
+        repo, uow = DiagnosticosEmMemoria(), FakeUnitOfWork()
+        ordem_id = uuid4()
+
+        DescartarDiagnostico(repo, uow).executar(ordem_id)
+
+        lapide = repo.diagnosticos[ordem_id]
+        assert lapide.status is StatusDiagnostico.DESCARTADO
+        assert (lapide.veiculo, lapide.descricao_problema) == (None, None)
+        assert lapide.descartado_em is not None
+        assert [(e.tipo, dados_do_evento(e)) for e in uow.eventos] == [
+            ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)})
+        ]

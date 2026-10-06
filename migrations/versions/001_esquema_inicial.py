@@ -58,8 +58,9 @@ def upgrade() -> None:
         "diagnosticos",
         sa.Column("ordem_id", sa.Uuid(), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
-        sa.Column("veiculo", postgresql.JSONB(), nullable=False),
-        sa.Column("descricao_problema", sa.Text(), nullable=False),
+        # Anulaveis so na lapide (descarte que chegou antes da solicitacao).
+        sa.Column("veiculo", postgresql.JSONB(), nullable=True),
+        sa.Column("descricao_problema", sa.Text(), nullable=True),
         sa.Column("mecanico_id", sa.Uuid(), nullable=True),
         sa.Column("itens", postgresql.JSONB(), nullable=False),
         sa.Column("observacoes", sa.Text(), nullable=False),

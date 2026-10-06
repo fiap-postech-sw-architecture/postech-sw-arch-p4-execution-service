@@ -15,6 +15,7 @@ from src.diagnostico.aplicacao.use_cases import (
     DescartarDiagnostico,
     RegistrarSolicitacaoDeDiagnostico,
 )
+from src.diagnostico.dominio.diagnostico import StatusDiagnostico
 from src.diagnostico.dominio.veiculo import Veiculo
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import (
@@ -30,6 +31,7 @@ from src.estoque.infraestrutura.repository import (
     ReservaSQLAlchemyRepository,
 )
 from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
+from src.execucao.dominio.execucao import StatusExecucao
 from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
@@ -194,6 +196,61 @@ def test_solicitacao_e_descarte_de_diagnostico(
             DiagnosticoSQLAlchemyRepository(session), _uow(session)
         ).executar(ordem_id)
     assert [linha["tipo"] for linha in outbox()] == ["DiagnosticoDescartado"]
+
+
+def test_compensacoes_antes_dos_originais_gravam_lapides_e_descartam_os_atrasados(
+    session_factory: sessionmaker[Session], outbox: Callable[[], list[dict[str, Any]]]
+) -> None:
+    # Passos em voo compensados: a compensacao chega primeiro, o original depois.
+    _criar_item(session_factory, VELA, 5)
+    ordem_id = uuid4()
+    with session_factory() as session:
+        DescartarDiagnostico(
+            DiagnosticoSQLAlchemyRepository(session), _uow(session)
+        ).executar(ordem_id)
+    with session_factory() as session:
+        CancelarExecucao(ExecucaoSQLAlchemyRepository(session), _uow(session)).executar(
+            ordem_id
+        )
+    _liberar(session_factory, ordem_id)
+    respostas = [(linha["tipo"], linha["dados"]) for linha in outbox()]
+
+    with session_factory() as session:
+        RegistrarSolicitacaoDeDiagnostico(
+            DiagnosticoSQLAlchemyRepository(session), _uow(session)
+        ).executar(
+            ordem_id,
+            Veiculo(placa="ABC1234", marca="VW", modelo="Gol", ano=2010),
+            "Nao liga",
+        )
+    with session_factory() as session:
+        AgendarExecucao(
+            ExecucaoSQLAlchemyRepository(session),
+            FilaDeExecucaoSQLAlchemy(session),
+            _uow(session),
+        ).executar(ordem_id, 0)
+    reserva = _reservar(session_factory, ordem_id, 2)
+
+    assert respostas == [
+        ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)}),
+        ("ExecucaoCancelada", {"ordem_id": str(ordem_id)}),
+        ("ReservaLiberada", {"ordem_id": str(ordem_id)}),
+    ]
+    assert [(linha["tipo"], linha["dados"]) for linha in outbox()] == respostas
+    assert (reserva.status, reserva.itens) == (StatusReserva.LIBERADA, ())
+    assert _saldo(session_factory) == (5, 0)
+    with session_factory() as session:
+        diagnostico = DiagnosticoSQLAlchemyRepository(session).obter(ordem_id)
+        execucao = ExecucaoSQLAlchemyRepository(session).obter(ordem_id)
+        fila = FilaDeExecucaoSQLAlchemy(session).contar()
+    assert diagnostico is not None
+    assert (diagnostico.status, diagnostico.veiculo) == (
+        StatusDiagnostico.DESCARTADO,
+        None,
+    )
+    assert execucao is not None
+    assert execucao.status is StatusExecucao.CANCELADA
+    assert fila == 0
 
 
 def test_commit_com_evento_acorda_o_relay(

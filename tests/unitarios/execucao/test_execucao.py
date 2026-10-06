@@ -102,6 +102,14 @@ def test_depois_de_iniciada_nao_cancela() -> None:
         execucao.cancelar(AGORA)
 
 
+def test_lapide_nasce_cancelada_fora_da_fila() -> None:
+    ordem_id = uuid4()
+    lapide = Execucao.lapide(ordem_id=ordem_id, agora=AGORA)
+    assert (lapide.ordem_id, lapide.status) == (ordem_id, StatusExecucao.CANCELADA)
+    assert lapide.cancelada_em == AGORA
+    assert (lapide.mecanico_id, lapide.iniciada_em) == (None, None)
+
+
 def test_cancelada_nao_inicia() -> None:
     execucao = _agendada()
     execucao.cancelar(AGORA)

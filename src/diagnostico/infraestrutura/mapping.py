@@ -53,10 +53,11 @@ diagnosticos_table = Table(
     Column(
         "status", Enum(StatusDiagnostico, native_enum=False, length=20), nullable=False
     ),
+    # Anulaveis so na lapide (descarte que chegou antes da solicitacao).
     Column(
-        "veiculo", JsonDeDominio(_veiculo_para_json, _veiculo_de_json), nullable=False
+        "veiculo", JsonDeDominio(_veiculo_para_json, _veiculo_de_json), nullable=True
     ),
-    Column("descricao_problema", Text, nullable=False),
+    Column("descricao_problema", Text, nullable=True),
     Column("mecanico_id", Uuid, nullable=True),
     Column("itens", JsonDeDominio(_itens_para_json, _itens_de_json), nullable=False),
     Column("observacoes", Text, nullable=False),

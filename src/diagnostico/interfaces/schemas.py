@@ -48,8 +48,10 @@ class DiagnosticoResponse(BaseModel):
 
     ordem_id: UUID
     status: StatusDiagnostico
-    veiculo: VeiculoResponse
-    descricao_problema: str
+    veiculo: VeiculoResponse | None = Field(
+        description="Retrato do veiculo; nulo so na lapide de um descarte adiantado"
+    )
+    descricao_problema: str | None
     mecanico_id: UUID | None
     itens: list[ItemDiagnosticoSchema]
     observacoes: str

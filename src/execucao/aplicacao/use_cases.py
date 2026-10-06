@@ -47,8 +47,9 @@ class AgendarExecucao:
 
     Responde ``ExecucaoAgendada{posicao_na_fila}``. Idempotente por ordem: com a
     execucao ainda AGUARDANDO, o reenvio so reemite a resposta com a posicao
-    atual (a prioridade original fica); ja iniciada, finalizada ou cancelada, o
-    comando atrasado e ignorado sem resposta.
+    atual (a prioridade original fica); ja iniciada, finalizada ou cancelada
+    (inclusive a lapide de um cancelamento adiantado), o comando atrasado e
+    descartado sem efeito e sem resposta.
     """
 
     def __init__(
@@ -68,7 +69,8 @@ class AgendarExecucao:
                 self._repo.salvar(execucao)
             elif execucao.status is not StatusExecucao.AGUARDANDO:
                 _log.info(
-                    "duplicate_schedule_command_ignored",
+                    "late_command_discarded",
+                    comando="AgendarExecucao",
                     ordem_id=str(ordem_id),
                     status=execucao.status,
                 )
@@ -88,7 +90,8 @@ class CancelarExecucao:
     """Comando de compensacao ``CancelarExecucao``, idempotente por ordem.
 
     Tira a ordem da fila e responde ``ExecucaoCancelada``; repetido, so reemite
-    a resposta. Depois de iniciada (pivot da saga) nao cancela: 409. O
+    a resposta. Depois de iniciada (pivot da saga) nao cancela: 409. Ordem sem
+    execucao (``AgendarExecucao`` ainda em voo): grava a lapide e responde. O
     ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
     """
 
@@ -99,8 +102,16 @@ class CancelarExecucao:
     def executar(self, ordem_id: UUID) -> None:
         agora = datetime.now(UTC)
         with self._uow:
-            execucao = _obter(self._repo, ordem_id, com_lock=True)
-            execucao.cancelar(agora)
+            execucao = self._repo.obter(ordem_id, com_lock=True)
+            if execucao is None:
+                execucao = Execucao.lapide(ordem_id=ordem_id, agora=agora)
+                _log.info(
+                    "compensation_tombstone_recorded",
+                    comando="CancelarExecucao",
+                    ordem_id=str(ordem_id),
+                )
+            else:
+                execucao.cancelar(agora)
             self._repo.salvar(execucao)
             self._uow.registrar_evento(
                 ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)

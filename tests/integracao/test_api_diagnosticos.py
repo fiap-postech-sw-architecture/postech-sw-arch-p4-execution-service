@@ -8,7 +8,10 @@ import httpx
 import pytest
 
 from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
-from src.diagnostico.aplicacao.use_cases import RegistrarSolicitacaoDeDiagnostico
+from src.diagnostico.aplicacao.use_cases import (
+    DescartarDiagnostico,
+    RegistrarSolicitacaoDeDiagnostico,
+)
 from src.diagnostico.dominio.veiculo import Veiculo
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.diagnostico.infraestrutura.validador_billing import CAMINHO_VALIDACAO
@@ -80,6 +83,24 @@ def test_fila_de_diagnosticos_com_filtro(
         ["AGUARDANDO", "EM_ANDAMENTO"],
     )
     assert api.get(URL, params={"status": "OUTRO"}, headers=mecanico).status_code == 422
+
+
+def test_lapide_aparece_descartada_sem_retrato(
+    api: TestClient, mecanico: dict[str, str], session_factory: sessionmaker[Session]
+) -> None:
+    ordem_id = uuid4()
+    with session_factory() as session:
+        DescartarDiagnostico(
+            DiagnosticoSQLAlchemyRepository(session),
+            SQLAlchemyUnitOfWork(lambda: session),
+        ).executar(ordem_id)
+
+    resposta = api.get(URL, params={"status": "DESCARTADO"}, headers=mecanico)
+
+    assert resposta.status_code == 200
+    [lapide] = resposta.json()["items"]
+    assert (lapide["ordem_id"], lapide["status"]) == (str(ordem_id), "DESCARTADO")
+    assert (lapide["veiculo"], lapide["descricao_problema"]) == (None, None)
 
 
 def test_inicio_emite_evento_e_e_idempotente(

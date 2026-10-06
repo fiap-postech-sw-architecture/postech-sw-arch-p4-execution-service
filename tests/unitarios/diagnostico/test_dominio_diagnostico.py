@@ -201,6 +201,26 @@ class TestDiagnostico:
         assert diagnostico.status is StatusDiagnostico.DESCARTADO
         assert diagnostico.descartado_em == AGORA
 
+    def test_lapide_nasce_descartada_sem_retrato(self) -> None:
+        ordem_id = uuid4()
+        lapide = Diagnostico.lapide(ordem_id=ordem_id, agora=AGORA)
+        assert (lapide.ordem_id, lapide.status) == (
+            ordem_id,
+            StatusDiagnostico.DESCARTADO,
+        )
+        assert (lapide.veiculo, lapide.descricao_problema) == (None, None)
+        assert (lapide.solicitado_em, lapide.descartado_em) == (AGORA, AGORA)
+
+    def test_so_a_lapide_fica_sem_veiculo(self) -> None:
+        ordem_id = uuid4()
+        with pytest.raises(ValueError, match="lapide"):
+            Diagnostico(
+                id=ordem_id,
+                _veiculo=None,
+                _descricao_problema="x",
+                _solicitado_em=AGORA,
+            )
+
     def test_descarte_idempotente_e_final(self) -> None:
         diagnostico = _diagnostico()
         diagnostico.descartar(AGORA)

@@ -100,11 +100,13 @@ class Diagnostico(AggregateRoot):
     """Diagnostico de uma ordem; a identidade e o proprio ``ordem_id``.
 
     AGUARDANDO -> EM_ANDAMENTO -> CONCLUIDO; qualquer estado nao final ->
-    DESCARTADO (compensacao da saga). So o mecanico que iniciou conclui.
+    DESCARTADO (compensacao da saga). So o mecanico que iniciou conclui. A
+    lapide (descarte que chegou antes do ``SolicitarDiagnostico``) e o unico
+    diagnostico sem veiculo e sem descricao.
     """
 
-    _veiculo: Veiculo
-    _descricao_problema: str
+    _veiculo: Veiculo | None
+    _descricao_problema: str | None
     _status: StatusDiagnostico = StatusDiagnostico.AGUARDANDO
     _mecanico_id: UUID | None = None
     _itens: tuple[ItemDiagnostico, ...] = ()
@@ -115,6 +117,11 @@ class Diagnostico(AggregateRoot):
     _descartado_em: datetime | None = None
 
     def __post_init__(self) -> None:
+        if self._veiculo is None or self._descricao_problema is None:
+            if self._status is not StatusDiagnostico.DESCARTADO:
+                msg = "So a lapide (DESCARTADO) fica sem veiculo e descricao"
+                raise ValorInvalidoError(msg)
+            return
         self._descricao_problema = _texto_livre(
             self._descricao_problema, "Descricao do problema", obrigatorio=True
         )
@@ -135,16 +142,33 @@ class Diagnostico(AggregateRoot):
             _solicitado_em=agora,
         )
 
+    @classmethod
+    def lapide(cls, *, ordem_id: UUID, agora: datetime) -> Diagnostico:
+        """Descarte que chegou antes do ``SolicitarDiagnostico``: nasce DESCARTADO.
+
+        Sem veiculo nem descricao (o comando original nunca chegou); a
+        solicitacao atrasada acha a lapide pela chave ``ordem_id`` e e
+        descartada sem efeito (RFC-004, secao 4.5).
+        """
+        return cls(
+            id=ordem_id,
+            _veiculo=None,
+            _descricao_problema=None,
+            _status=StatusDiagnostico.DESCARTADO,
+            _solicitado_em=agora,
+            _descartado_em=agora,
+        )
+
     @property
     def ordem_id(self) -> UUID:
         return self.id
 
     @property
-    def veiculo(self) -> Veiculo:
+    def veiculo(self) -> Veiculo | None:
         return self._veiculo
 
     @property
-    def descricao_problema(self) -> str:
+    def descricao_problema(self) -> str | None:
         return self._descricao_problema
 
     @property

@@ -12,10 +12,7 @@ from src.estoque.aplicacao.events import (
     ReservaDePecasFalhouEvent,
     ReservaLiberadaEvent,
 )
-from src.estoque.dominio.exceptions import (
-    ItemEstoqueNaoEncontradoException,
-    ReservaNaoEncontradaException,
-)
+from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Reserva, StatusReserva
 from src.estoque.dominio.services import (
@@ -133,11 +130,12 @@ class ReservarPecas:
     """Comando ``ReservarPecas`` (passo T5 da saga), idempotente por ordem.
 
     Responde ``PecasReservadas`` ou ``ReservaDePecasFalhou{faltantes}``; com
-    falta de qualquer peca nada e separado e a recusa fica registrada. Comando
-    repetido (reenvio do orquestrador) recebe a mesma resposta, sem decidir de
-    novo: uma reposicao de estoque no meio do caminho nao vira reserva tardia
-    de ordem que a saga ja compensou. Com a reserva LIBERADA (compensacao ja
-    feita), o comando atrasado e ignorado sem resposta.
+    falta de qualquer peca nada e separado e a recusa fica registrada. Regra de
+    repeticao: enquanto o desfecho vale (reserva ATIVA ou RECUSADA), o comando
+    repetido recebe a mesma resposta, sem decidir de novo (uma reposicao de
+    estoque no meio do caminho nao vira reserva tardia); depois de compensado
+    ou superado (LIBERADA, inclusive a lapide, ou CONSUMIDA), e descartado sem
+    efeito e sem resposta.
 
     Copias simultaneas do mesmo comando: a existencia da reserva e conferida
     DEPOIS de travar os itens, entao a segunda copia ve a decisao da primeira;
@@ -194,9 +192,10 @@ class ReservarPecas:
         return nova
 
     def _responder_de_novo(self, existente: Reserva) -> None:
-        if existente.status is StatusReserva.LIBERADA:
+        if existente.status in _RESERVA_ENCERRADA:
             _log.info(
-                "duplicate_reserve_command_ignored",
+                "late_command_discarded",
+                comando="ReservarPecas",
                 ordem_id=str(existente.ordem_id),
                 status=existente.status,
             )
@@ -210,6 +209,11 @@ class ReservarPecas:
                 )
             )
         self._uow.commit()
+
+
+# Compensada (inclusive a lapide) ou superada pela baixa: o comando atrasado
+# nao tem mais desfecho a republicar.
+_RESERVA_ENCERRADA = frozenset({StatusReserva.LIBERADA, StatusReserva.CONSUMIDA})
 
 
 def _falha(recusada: Reserva, agora: datetime) -> ReservaDePecasFalhouEvent:
@@ -230,9 +234,10 @@ class LiberarReserva:
 
     Devolve as quantidades reservadas e responde ``ReservaLiberada``; repetido,
     ou para reserva recusada (nada separado), so responde. Reserva ja consumida
-    (execucao finalizada) nao volta: 409. Ordem sem reserva: 404 (o
-    orquestrador so compensa passo concluido). O ``motivo`` do comando nao e
-    usado aqui: o historico da saga fica no OS Service.
+    (execucao finalizada) nao volta: 409. Ordem sem reserva (o ``ReservarPecas``
+    ainda em voo): grava a lapide, uma reserva ja LIBERADA e sem pecas, e
+    responde; o comando original, quando chegar, e descartado. O ``motivo`` do
+    comando nao e usado aqui: o historico da saga fica no OS Service.
     """
 
     def __init__(
@@ -250,9 +255,17 @@ class LiberarReserva:
         with self._uow:
             reserva = self._reservas.obter_por_ordem(ordem_id, com_lock=True)
             if reserva is None:
-                raise ReservaNaoEncontradaException(ordem_id)
-            itens = self._itens.obter_com_lock([linha.sku for linha in reserva.itens])
-            liberar(reserva, itens, agora)
+                self._reservas.salvar(Reserva.lapide(ordem_id=ordem_id, agora=agora))
+                _log.info(
+                    "compensation_tombstone_recorded",
+                    comando="LiberarReserva",
+                    ordem_id=str(ordem_id),
+                )
+            else:
+                itens = self._itens.obter_com_lock(
+                    [linha.sku for linha in reserva.itens]
+                )
+                liberar(reserva, itens, agora)
             self._uow.registrar_evento(
                 ReservaLiberadaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )

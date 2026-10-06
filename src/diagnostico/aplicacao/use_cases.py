@@ -11,7 +11,11 @@ from src.diagnostico.aplicacao.events import (
     DiagnosticoIniciadoEvent,
     ItemDados,
 )
-from src.diagnostico.dominio.diagnostico import Diagnostico, TipoItem
+from src.diagnostico.dominio.diagnostico import (
+    Diagnostico,
+    StatusDiagnostico,
+    TipoItem,
+)
 from src.diagnostico.dominio.exceptions import (
     DiagnosticoNaoEncontradoException,
     ItensInvalidosException,
@@ -23,10 +27,7 @@ if TYPE_CHECKING:
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
     from src.diagnostico.aplicacao.ports import CatalogoDePecas, ValidadorDeItens
-    from src.diagnostico.dominio.diagnostico import (
-        ItemDiagnostico,
-        StatusDiagnostico,
-    )
+    from src.diagnostico.dominio.diagnostico import ItemDiagnostico
     from src.diagnostico.dominio.repository import DiagnosticoRepository
     from src.diagnostico.dominio.veiculo import Veiculo
 
@@ -47,7 +48,9 @@ class RegistrarSolicitacaoDeDiagnostico:
 
     Idempotente por ordem: reenvio do orquestrador devolve o diagnostico
     existente sem mudar nada. Nao ha resposta no catalogo; o fato seguinte e
-    ``DiagnosticoIniciado``, quando o mecanico comeca.
+    ``DiagnosticoIniciado``, quando o mecanico comeca. Com o diagnostico ja
+    concluido ou descartado (inclusive a lapide de um descarte adiantado), o
+    comando atrasado e descartado com log.
     """
 
     def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
@@ -66,10 +69,23 @@ class RegistrarSolicitacaoDeDiagnostico:
         with self._uow:
             existente = self._repo.obter(ordem_id)
             if existente is not None:
+                if existente.status in _DIAGNOSTICO_ENCERRADO:
+                    _log.info(
+                        "late_command_discarded",
+                        comando="SolicitarDiagnostico",
+                        ordem_id=str(ordem_id),
+                        status=existente.status,
+                    )
                 return existente
             self._repo.salvar(novo)
             self._uow.commit()
         return novo
+
+
+# Superado pela conclusao ou compensado: a solicitacao atrasada nao muda nada.
+_DIAGNOSTICO_ENCERRADO = frozenset(
+    {StatusDiagnostico.CONCLUIDO, StatusDiagnostico.DESCARTADO}
+)
 
 
 class ListarDiagnosticos:
@@ -222,8 +238,10 @@ class DescartarDiagnostico:
     """Comando de compensacao ``DescartarDiagnostico``, idempotente por ordem.
 
     Qualquer estado nao final vira DESCARTADO e a resposta
-    ``DiagnosticoDescartado`` e emitida; repetido, so reemite a resposta. O
-    ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
+    ``DiagnosticoDescartado`` e emitida; repetido, so reemite a resposta. Ordem
+    sem diagnostico (``SolicitarDiagnostico`` ainda em voo): grava a lapide e
+    responde. O ``motivo`` do comando nao e usado aqui: o historico fica no OS
+    Service.
     """
 
     def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
@@ -233,8 +251,16 @@ class DescartarDiagnostico:
     def executar(self, ordem_id: UUID) -> None:
         agora = datetime.now(UTC)
         with self._uow:
-            diagnostico = _obter(self._repo, ordem_id, com_lock=True)
-            diagnostico.descartar(agora)
+            diagnostico = self._repo.obter(ordem_id, com_lock=True)
+            if diagnostico is None:
+                diagnostico = Diagnostico.lapide(ordem_id=ordem_id, agora=agora)
+                _log.info(
+                    "compensation_tombstone_recorded",
+                    comando="DescartarDiagnostico",
+                    ordem_id=str(ordem_id),
+                )
+            else:
+                diagnostico.descartar(agora)
             self._repo.salvar(diagnostico)
             self._uow.registrar_evento(
                 DiagnosticoDescartadoEvent(ordem_id=ordem_id, ocorrido_em=agora)
