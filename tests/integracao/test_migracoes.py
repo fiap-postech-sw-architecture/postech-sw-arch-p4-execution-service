@@ -86,7 +86,11 @@ def test_migracao_desiste_do_lock_de_tabela_em_vez_de_enfileirar(
 
 @pytest.mark.parametrize(
     ("disponivel", "reservada"),
-    [(-1, 0), (1, 2), (1, -1)],
+    [
+        pytest.param(-1, 0, id="saldo-negativo"),
+        pytest.param(1, 2, id="reserva-acima-do-fisico"),
+        pytest.param(1, -1, id="reserva-negativa"),
+    ],
 )
 def test_check_do_banco_impede_saldo_negativo_ou_reserva_acima_do_fisico(
     engine: Engine, disponivel: int, reservada: int

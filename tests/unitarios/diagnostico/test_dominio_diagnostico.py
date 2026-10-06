@@ -49,9 +49,14 @@ def _em_andamento() -> Diagnostico:
 class TestItemDiagnostico:
     def test_tipo_precisa_ser_o_enum(self) -> None:
         with pytest.raises(ValueError, match="servico"):
+            # Tipo errado de proposito: o VO recusa texto no lugar do enum.
             ItemDiagnostico(tipo="peca", codigo="PEC-X", quantidade=1)  # type: ignore[arg-type]
 
-    @pytest.mark.parametrize("codigo", ["", "pec-x", "PEC X", "PEC-X\n", "P" * 51])
+    @pytest.mark.parametrize(
+        "codigo",
+        ["", "pec-x", "PEC X", "PEC-X\n", "P" * 51],
+        ids=["vazio", "minusculas", "espaco", "quebra-de-linha", "51-caracteres"],
+    )
     def test_codigo_invalido(self, codigo: str) -> None:
         with pytest.raises(ValueError, match="Codigo"):
             ItemDiagnostico(tipo=TipoItem.PECA, codigo=codigo, quantidade=1)
@@ -108,7 +113,11 @@ class TestDiagnostico:
         assert diagnostico.solicitado_em == AGORA
         assert (diagnostico.mecanico_id, diagnostico.itens) == (None, ())
 
-    @pytest.mark.parametrize("descricao", ["", "   ", "x" * 2001])
+    @pytest.mark.parametrize(
+        "descricao",
+        ["", "   ", "x" * 2001],
+        ids=["vazia", "espacos", "2001-caracteres"],
+    )
     def test_descricao_obrigatoria(self, descricao: str) -> None:
         ordem_id, veiculo = uuid4(), _veiculo()
         with pytest.raises(ValueError, match="Descricao"):

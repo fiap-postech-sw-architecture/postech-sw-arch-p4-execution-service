@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -8,12 +9,13 @@ import pytest
 import respx
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
+from sqlalchemy import make_url, text
 
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
 )
+from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -41,10 +43,22 @@ def config_alembic(url: str) -> Config:
     return config
 
 
+def _banco_externo() -> str | None:
+    """TEST_DATABASE_URL, recusada se o banco nao for de teste (`*_test`).
+
+    A suite trunca as tabelas a cada teste e derruba o esquema no fim: apontar
+    para um banco de verdade por engano apagaria os dados.
+    """
+    externa = os.environ.get("TEST_DATABASE_URL")
+    if externa and not (make_url(externa).database or "").endswith("_test"):
+        pytest.exit("TEST_DATABASE_URL precisa apontar para um banco *_test", 2)
+    return externa
+
+
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
     """Postgres 16 efemero (testcontainers) ou TEST_DATABASE_URL explicita."""
-    externa = os.environ.get("TEST_DATABASE_URL")
+    externa = _banco_externo()
     if externa:
         yield externa
         return
@@ -62,6 +76,9 @@ def engine(database_url: str) -> Iterator[Engine]:
     eng = criar_engine(database_url)
     yield eng
     eng.dispose()
+    if _banco_externo():
+        # O container efemero some sozinho; o banco externo volta ao vazio.
+        command.downgrade(config_alembic(database_url), "base")
 
 
 @pytest.fixture(autouse=True)
@@ -114,6 +131,12 @@ def api(
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("JWKS_URL", jwks_url)
     monkeypatch.setenv("BILLING_URL", BILLING_URL)
+    # Sem o sono do jitter entre retries do Billing (o intervalo e testado no
+    # adapter): o teste de API so confere as tentativas.
+    monkeypatch.setattr(
+        "src.diagnostico.interfaces.dependencies.ValidadorDeItensBilling",
+        functools.partial(ValidadorDeItensBilling, dormir=lambda _segundos: None),
+    )
     with TestClient(criar_app()) as cliente:
         yield cliente
 

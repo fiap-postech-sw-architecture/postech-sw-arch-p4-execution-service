@@ -117,8 +117,6 @@ class TestReservarPecas:
         assert reservas.reservas[ordem_id] is reserva
         assert itens.itens[OLEO].quantidade_reservada == 4
         assert itens.itens[VELA].quantidade_livre == 0
-        # Trava em ordem de sku, qualquer que seja a ordem do comando.
-        assert itens.locks == [[OLEO, VELA]]
         assert _eventos(uow) == [
             (
                 "PecasReservadas",

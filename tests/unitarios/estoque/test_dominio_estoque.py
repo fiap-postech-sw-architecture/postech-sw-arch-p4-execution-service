@@ -31,7 +31,9 @@ def _item(
 
 class TestSku:
     @pytest.mark.parametrize(
-        "valor", ["PEC-OLEO-5W30", "PEC-VELA", "A", "X1-2-3", "A" * 50]
+        "valor",
+        ["PEC-OLEO-5W30", "PEC-VELA", "A", "X1-2-3", "A" * 50],
+        ids=["oleo", "vela", "uma-letra", "digitos-e-hifens", "50-caracteres"],
     )
     def test_formatos_validos(self, valor: str) -> None:
         assert str(Sku(valor)) == valor
@@ -39,14 +41,15 @@ class TestSku:
     @pytest.mark.parametrize(
         "valor",
         [
-            "",
-            "pec-vela",
-            "PEC VELA",
-            "PEC--VELA",
-            "-PEC",
-            "PEC-",
-            "PEC-VELA\n",
-            "A" * 51,  # o Billing, dono dos codigos, aceita ate 50
+            pytest.param("", id="vazio"),
+            pytest.param("pec-vela", id="minusculas"),
+            pytest.param("PEC VELA", id="espaco"),
+            pytest.param("PEC--VELA", id="hifen-duplo"),
+            pytest.param("-PEC", id="hifen-no-inicio"),
+            pytest.param("PEC-", id="hifen-no-fim"),
+            pytest.param("PEC-VELA\n", id="quebra-de-linha"),
+            # o Billing, dono dos codigos, aceita ate 50
+            pytest.param("A" * 51, id="51-caracteres"),
         ],
     )
     def test_formatos_invalidos(self, valor: str) -> None:
@@ -58,6 +61,7 @@ class TestSku:
         assert um == outro
         assert hash(um) == hash(outro)
         with pytest.raises(FrozenInstanceError):
+            # Atribuicao proibida de proposito: o teste prova o frozen.
             um.valor = "OUTRO"  # type: ignore[misc]
 
 
@@ -108,7 +112,9 @@ class TestItemEstoque:
         )
         assert item.ativo
 
-    @pytest.mark.parametrize("nome", ["", "   ", "x" * 256])
+    @pytest.mark.parametrize(
+        "nome", ["", "   ", "x" * 256], ids=["vazio", "espacos", "256-caracteres"]
+    )
     def test_nome_invalido(self, nome: str) -> None:
         sku = Sku("PEC-X")
         with pytest.raises(ValueError, match="Nome do item"):

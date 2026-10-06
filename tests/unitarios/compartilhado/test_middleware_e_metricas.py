@@ -82,7 +82,11 @@ class TestSecurityHeaders:
         resposta = _app().get("/itens/1", headers={"X-Request-ID": "kong-abc_1.2="})
         assert resposta.headers["X-Request-ID"] == "kong-abc_1.2="
 
-    @pytest.mark.parametrize("recebido", ["", "a b", "x" * 129, "a;b", "<script>"])
+    @pytest.mark.parametrize(
+        "recebido",
+        ["", "a b", "x" * 129, "a;b", "<script>"],
+        ids=["vazio", "espaco", "129-caracteres", "ponto-e-virgula", "html"],
+    )
     def test_request_id_invalido_e_trocado_por_uuid(self, recebido: str) -> None:
         resposta = _app().get("/itens/1", headers={"X-Request-ID": recebido})
         gerado = resposta.headers["X-Request-ID"]

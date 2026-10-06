@@ -17,7 +17,6 @@ from src.diagnostico.aplicacao.use_cases import (
     RegistrarSolicitacaoDeDiagnostico,
 )
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
-from src.diagnostico.infraestrutura.validador_billing import CAMINHO_VALIDACAO
 from src.estoque.infraestrutura.seed import semear
 
 if TYPE_CHECKING:
@@ -28,6 +27,8 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session, sessionmaker
 
 URL = "/api/v1/diagnosticos"
+# Literal, e nao a constante da producao: trocar o caminho tem de quebrar o teste.
+CAMINHO_VALIDACAO = "/api/v1/precos/validacao"
 MECANICO = uuid4()
 ITENS = [
     {"tipo": "servico", "codigo": "SRV-TROCA-PASTILHA", "quantidade": 1},
@@ -482,20 +483,43 @@ def test_conclusao_repetida_devolve_o_mesmo_resultado(
 
 
 @pytest.mark.parametrize(
-    "corpo",
+    ("corpo", "motivo"),
     [
-        {"itens": []},
-        {"itens": [{"tipo": "outro", "codigo": "X-1", "quantidade": 1}]},
-        {"itens": [{"tipo": "peca", "codigo": "pec-1", "quantidade": 1}]},
-        {"itens": [{"tipo": "peca", "codigo": "PEC-1", "quantidade": 0}]},
-        {"itens": [ITENS[0], ITENS[0]]},
+        pytest.param({"itens": []}, ["body", "itens"], id="sem-itens"),
+        pytest.param(
+            {"itens": [{"tipo": "outro", "codigo": "X-1", "quantidade": 1}]},
+            ["body", "itens", 0, "tipo"],
+            id="tipo-desconhecido",
+        ),
+        pytest.param(
+            {"itens": [{"tipo": "peca", "codigo": "pec-1", "quantidade": 1}]},
+            ["body", "itens", 0, "codigo"],
+            id="codigo-minusculo",
+        ),
+        pytest.param(
+            {"itens": [{"tipo": "peca", "codigo": "PEC-1", "quantidade": 0}]},
+            ["body", "itens", 0, "quantidade"],
+            id="quantidade-zero",
+        ),
+        # Bem formado no schema, recusado pelo dominio (envelope `erro`).
+        pytest.param({"itens": [ITENS[0], ITENS[0]]}, "VALOR_INVALIDO", id="repetido"),
     ],
 )
 def test_corpo_invalido(
-    api: TestClient, mecanico: dict[str, str], em_andamento: UUID, corpo: dict[str, Any]
+    api: TestClient,
+    mecanico: dict[str, str],
+    em_andamento: UUID,
+    corpo: dict[str, Any],
+    motivo: list[object] | str,
+    outbox: Callable[[], list[dict[str, Any]]],
 ) -> None:
     resposta = api.post(f"{URL}/{em_andamento}/conclusao", json=corpo, headers=mecanico)
     assert resposta.status_code == 422
+    if isinstance(motivo, str):
+        assert resposta.json()["erro"]["codigo"] == motivo
+    else:
+        assert resposta.json()["detail"][0]["loc"] == motivo
+    assert "DiagnosticoConcluido" not in [linha["tipo"] for linha in outbox()]
 
 
 def test_ordem_sem_diagnostico_e_404(api: TestClient, mecanico: dict[str, str]) -> None:

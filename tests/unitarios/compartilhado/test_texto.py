@@ -52,7 +52,7 @@ def test_texto_livre_aceita_tabulacao_e_quebra_de_linha() -> None:
     assert texto_valido(texto, "Obs", maximo=50, multilinha=True) == texto
 
 
-@pytest.mark.parametrize("quebra", ["\n", "\t", "\r"])
+@pytest.mark.parametrize("quebra", ["\n", "\t", "\r"], ids=["lf", "tab", "cr"])
 def test_nome_de_uma_linha_recusa_quebra_e_tabulacao(quebra: str) -> None:
     with pytest.raises(ValorInvalidoError, match="controle"):
         texto_valido(f"Vela{quebra}NGK", "Nome", maximo=50)

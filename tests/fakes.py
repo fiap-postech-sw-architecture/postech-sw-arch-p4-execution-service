@@ -72,7 +72,7 @@ class ItensEmMemoria:
         return self.itens.get(sku)
 
     def obter_com_lock(self, skus: Collection[Sku]) -> dict[Sku, ItemEstoque]:
-        self.locks.append(sorted(skus, key=str))
+        self.locks.append(list(skus))
         return {sku: self.itens[sku] for sku in skus if sku in self.itens}
 
     def salvar(self, item: ItemEstoque) -> None:

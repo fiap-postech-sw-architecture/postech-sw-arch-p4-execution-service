@@ -246,7 +246,10 @@ def test_finalizacao_recusada_nao_deixa_efeito(
 
 
 def test_pivot_depois_de_iniciar_nao_cancela(
-    api: TestClient, mecanico: dict[str, str], session_factory: sessionmaker[Session]
+    api: TestClient,
+    mecanico: dict[str, str],
+    session_factory: sessionmaker[Session],
+    outbox: Callable[[], list[dict[str, Any]]],
 ) -> None:
     ordem_id = _em_execucao(api, mecanico, session_factory)
     with session_factory() as session:
@@ -255,6 +258,11 @@ def test_pivot_depois_de_iniciar_nao_cancela(
         )
         with pytest.raises(TransicaoStatusInvalidaException):
             uc.executar(ordem_id)
+    with session_factory() as session:
+        execucao = ExecucaoSQLAlchemyRepository(session).obter(ordem_id)
+    assert execucao is not None
+    assert execucao.status == "EM_EXECUCAO"
+    assert "ExecucaoCancelada" not in [linha["tipo"] for linha in outbox()]
 
 
 def test_outro_mecanico_nao_finaliza_mas_o_admin_finaliza_em_nome_dele(

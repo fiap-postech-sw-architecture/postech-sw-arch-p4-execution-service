@@ -238,20 +238,20 @@ class TestConcluir:
         assert uow.eventos == []
 
     @pytest.mark.parametrize(
-        ("preparar", "erro"),
+        ("iniciado_por_outro", "erro"),
         [
-            (lambda d: None, TransicaoStatusInvalidaException),  # ainda AGUARDANDO
-            (
-                lambda d: d.iniciar(uuid4(), datetime.now(UTC)),
-                OperacaoNaoPermitidaException,
+            pytest.param(
+                False, TransicaoStatusInvalidaException, id="ainda-aguardando"
             ),
+            pytest.param(True, OperacaoNaoPermitidaException, id="de-outro-mecanico"),
         ],
     )
     def test_estado_e_responsavel_conferidos_antes_da_rede(
-        self, preparar: object, erro: type[Exception]
+        self, iniciado_por_outro: bool, erro: type[Exception]
     ) -> None:
         diagnostico = _diagnostico()
-        preparar(diagnostico)  # type: ignore[operator]
+        if iniciado_por_outro:
+            diagnostico.iniciar(uuid4(), datetime.now(UTC))
         uc, _, catalogo, validador = self._uc(diagnostico)
         with pytest.raises(erro):
             uc.executar(diagnostico.ordem_id, MECANICO, [SERVICO, OLEO], "")
