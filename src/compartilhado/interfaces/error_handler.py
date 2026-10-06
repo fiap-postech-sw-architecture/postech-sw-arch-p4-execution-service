@@ -17,6 +17,7 @@ from src.compartilhado.dominio.exceptions import (
     EntidadeNaoEncontradaException,
     EstoqueInsuficienteException,
     OperacaoNaoPermitidaException,
+    RespostaInvalidaDaDependenciaException,
     TransicaoStatusInvalidaException,
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
@@ -39,6 +40,7 @@ _EXCEPTION_STATUS_MAP: dict[type[DomainException], int] = {
     OperacaoNaoPermitidaException: 403,
     DadosInvalidosException: 422,
     DependenciaIndisponivelException: 503,
+    RespostaInvalidaDaDependenciaException: 502,
 }
 
 # DomainException fora do mapa e, por definicao, regra de negocio violada.
@@ -199,7 +201,7 @@ def resposta_erro_interno(request: Request, exc: Exception) -> JSONResponse:
 def registrar_error_handlers(app: FastAPI) -> None:
     """Mapeia excecoes para o envelope ``{erro: {codigo, mensagem, id_requisicao}}``.
 
-    DomainException vira 403/404/409/422/503 pelo mapa; HTTPException
+    DomainException vira 403/404/409/422/502/503 pelo mapa; HTTPException
     (autenticacao, rota inexistente) mantem o status e os headers;
     ``ValorInvalidoError`` (invariante de value object) vira 422 VALOR_INVALIDO;
     o resto, inclusive ``ValueError`` de biblioteca, vira 500 com traceback no

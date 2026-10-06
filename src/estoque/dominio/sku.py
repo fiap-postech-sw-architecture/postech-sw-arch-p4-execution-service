@@ -7,9 +7,11 @@ from typing import Final
 from src.compartilhado.dominio.exceptions import ValorInvalidoError
 from src.compartilhado.dominio.value_object import ValueObject
 
-# Mesmo formato dos codigos da tabela de precos do Billing (ex.: PEC-OLEO-5W30).
+# Mesmo formato e tamanho dos codigos da tabela de precos do Billing, dono dos
+# codigos (ex.: PEC-OLEO-5W30): um SKU mais longo passaria aqui e o Billing o
+# recusaria na validacao do diagnostico.
 PADRAO_SKU: Final = r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
-TAMANHO_MAXIMO_SKU: Final = 64
+TAMANHO_MAXIMO_SKU: Final = 50
 _REGEX_SKU = re.compile(PADRAO_SKU)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from sqlalchemy import CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import TypeDecorator
 
@@ -10,6 +11,7 @@ from src.compartilhado.dominio.veiculo import Veiculo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from enum import StrEnum
 
     from sqlalchemy.engine import Dialect
 
@@ -80,3 +82,9 @@ def _veiculo_de_json(dados: dict[str, Any]) -> Veiculo:
 def retrato_do_veiculo() -> JsonDeDominio[Veiculo]:
     """Tipo da coluna JSONB com o retrato do veiculo (diagnostico e execucao)."""
     return JsonDeDominio(_veiculo_para_json, _veiculo_de_json)
+
+
+def check_de_enum(coluna: str, enum: type[StrEnum], nome: str) -> CheckConstraint:
+    """CHECK com os valores do enum: o banco recusa o que o dominio nao conhece."""
+    valores = ", ".join(f"'{membro.value}'" for membro in enum)
+    return CheckConstraint(f"{coluna} IN ({valores})", name=nome)

@@ -17,7 +17,11 @@ from sqlalchemy import (
 from sqlalchemy.types import TypeDecorator
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
-from src.compartilhado.infraestrutura.tipos_sqlalchemy import JsonDeDominio, reidratar
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
+    JsonDeDominio,
+    check_de_enum,
+    reidratar,
+)
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
 from src.estoque.dominio.sku import TAMANHO_MAXIMO_SKU, Sku
@@ -105,6 +109,7 @@ reservas_table = Table(
     Column("criada_em", DateTime(timezone=True), nullable=False),
     Column("encerrada_em", DateTime(timezone=True), nullable=True),
     UniqueConstraint("ordem_id", name="uq_reservas_ordem_id"),
+    check_de_enum("status", StatusReserva, "ck_reservas_status"),
 )
 
 mapper_registry.map_imperatively(

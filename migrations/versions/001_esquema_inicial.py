@@ -25,7 +25,7 @@ def upgrade() -> None:
     op.create_table(
         "itens_estoque",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("sku", sa.String(length=64), nullable=False),
+        sa.Column("sku", sa.String(length=50), nullable=False),
         sa.Column("nome", sa.String(length=255), nullable=False),
         sa.Column("quantidade_disponivel", sa.Integer(), nullable=False),
         sa.Column("quantidade_reservada", sa.Integer(), nullable=False),
@@ -53,6 +53,10 @@ def upgrade() -> None:
         _timestamp("encerrada_em"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("ordem_id", name="uq_reservas_ordem_id"),
+        sa.CheckConstraint(
+            "status IN ('ATIVA', 'LIBERADA', 'CONSUMIDA', 'RECUSADA')",
+            name="ck_reservas_status",
+        ),
     )
     op.create_table(
         "diagnosticos",
@@ -69,6 +73,10 @@ def upgrade() -> None:
         _timestamp("concluido_em"),
         _timestamp("descartado_em"),
         sa.PrimaryKeyConstraint("ordem_id"),
+        sa.CheckConstraint(
+            "status IN ('AGUARDANDO', 'EM_ANDAMENTO', 'CONCLUIDO', 'DESCARTADO')",
+            name="ck_diagnosticos_status",
+        ),
     )
     op.create_index(
         "ix_diagnosticos_status_solicitado_em",
@@ -88,6 +96,14 @@ def upgrade() -> None:
         _timestamp("finalizada_em"),
         _timestamp("cancelada_em"),
         sa.PrimaryKeyConstraint("ordem_id"),
+        sa.CheckConstraint(
+            "status IN ('AGUARDANDO', 'EM_EXECUCAO', 'FINALIZADA', 'CANCELADA')",
+            name="ck_execucoes_status",
+        ),
+        # Enum do contrato AgendarExecucao (platform): so normal ou alta.
+        sa.CheckConstraint(
+            "prioridade IN ('normal', 'alta')", name="ck_execucoes_prioridade"
+        ),
     )
     op.create_index("ix_execucoes_status", "execucoes", ["status"])
     op.create_table(

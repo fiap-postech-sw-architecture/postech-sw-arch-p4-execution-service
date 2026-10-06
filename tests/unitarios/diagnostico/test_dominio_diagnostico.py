@@ -51,10 +51,14 @@ class TestItemDiagnostico:
         with pytest.raises(ValueError, match="servico"):
             ItemDiagnostico(tipo="peca", codigo="PEC-X", quantidade=1)  # type: ignore[arg-type]
 
-    @pytest.mark.parametrize("codigo", ["", "pec-x", "PEC X", "PEC-X\n", "P" * 65])
+    @pytest.mark.parametrize("codigo", ["", "pec-x", "PEC X", "PEC-X\n", "P" * 51])
     def test_codigo_invalido(self, codigo: str) -> None:
         with pytest.raises(ValueError, match="Codigo"):
             ItemDiagnostico(tipo=TipoItem.PECA, codigo=codigo, quantidade=1)
+
+    def test_codigo_no_limite_do_billing(self) -> None:
+        item = ItemDiagnostico(tipo=TipoItem.PECA, codigo="P" * 50, quantidade=1)
+        assert len(item.codigo) == 50
 
     def test_quantidade_positiva(self) -> None:
         with pytest.raises(ValueError, match="positiva"):

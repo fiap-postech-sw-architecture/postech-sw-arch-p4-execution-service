@@ -157,6 +157,7 @@ _VALIDO = {"sku": "PEC-X", "nome": "x", "quantidade_disponivel": 1}
     ("corpo", "campo"),
     [
         pytest.param(_VALIDO | {"sku": "pec-minusculo"}, "sku", id="sku-minusculo"),
+        pytest.param(_VALIDO | {"sku": "P" * 51}, "sku", id="sku-51-caracteres"),
         pytest.param(_VALIDO | {"nome": ""}, "nome", id="nome-vazio"),
         pytest.param(_VALIDO | {"nome": "n" * 256}, "nome", id="nome-256-caracteres"),
         pytest.param(

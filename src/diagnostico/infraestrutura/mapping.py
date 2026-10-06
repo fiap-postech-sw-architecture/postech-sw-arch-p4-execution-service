@@ -7,6 +7,7 @@ from sqlalchemy import Column, DateTime, Enum, Index, Table, Text, Uuid
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
     JsonDeDominio,
+    check_de_enum,
     retrato_do_veiculo,
 )
 from src.diagnostico.dominio.diagnostico import (
@@ -52,6 +53,7 @@ diagnosticos_table = Table(
     Column("iniciado_em", DateTime(timezone=True), nullable=True),
     Column("concluido_em", DateTime(timezone=True), nullable=True),
     Column("descartado_em", DateTime(timezone=True), nullable=True),
+    check_de_enum("status", StatusDiagnostico, "ck_diagnosticos_status"),
 )
 
 # Fila do mecanico: GET /diagnosticos?status=AGUARDANDO por ordem de chegada.

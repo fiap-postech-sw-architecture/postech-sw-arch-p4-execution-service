@@ -60,6 +60,10 @@ def respostas(*status_codes: int) -> dict[int | str, dict[str, Any]]:
             "Dados recusados por regra de negocio (envelope `erro`) ou corpo "
             "invalido no schema (`detail` + `id_requisicao`, formato do p3)"
         ),
+        502: (
+            "O Billing recusou a validacao (4xx) ou respondeu fora do contrato; "
+            "repetir nao resolve"
+        ),
         503: (
             "Dependencia indisponivel (JWKS do OS Service ou Billing); o header "
             "`Retry-After` traz os segundos ate a proxima tentativa"

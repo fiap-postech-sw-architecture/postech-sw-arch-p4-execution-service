@@ -1,10 +1,12 @@
 """Port ``ValidadorDeItens`` sobre o Billing: ``POST /api/v1/precos/validacao``.
 
-Envelope de resiliencia do brief (secao 5): timeout de 2 s (no ``httpx.Client``
-criado no lifespan), 2 retries com jitter em erro transitorio (timeout, conexao,
-5xx) e circuit breaker compartilhado entre requests (5 falhas abrem por 30 s).
-Retry e seguro porque a validacao nao tem efeito colateral. Com o circuito
-aberto a conclusao do diagnostico responde 503 sem tocar a rede.
+Envelope de resiliencia (RFC-004, secao 6.1; ADR-038): timeout de 2 s (no
+``httpx.Client`` criado no lifespan), 2 retries com jitter so em erro
+transitorio (timeout, rede, protocolo, 502/503/504) e circuit breaker
+compartilhado entre requests (5 falhas abrem por 30 s). Retry e seguro porque a
+validacao nao tem efeito colateral. Circuito aberto, 5xx e timeout depois dos
+retries: 503. Um 4xx ou resposta fora do contrato: 502, sem retry (repetir nao
+muda o resultado).
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from typing import TYPE_CHECKING, Final
 import httpx
 import structlog
 
-from src.compartilhado.dominio.exceptions import DependenciaIndisponivelException
+from src.compartilhado.dominio.exceptions import (
+    DependenciaIndisponivelException,
+    RespostaInvalidaDaDependenciaException,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -30,6 +35,16 @@ _TENTATIVAS: Final = 3  # 1 chamada + 2 retries
 _ESPERA_BASE_S: Final = 0.1
 _HTTP_OK: Final = 200
 _HTTP_ERRO_SERVIDOR: Final = 500
+_STATUS_TRANSITORIOS: Final = frozenset({502, 503, 504})
+_ERROS_TRANSITORIOS: Final = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
+_SEM_RESPOSTA: Final = (
+    "O Billing nao respondeu a validacao de precos. Tente concluir o "
+    "diagnostico novamente em instantes."
+)
 _aleatorio = secrets.SystemRandom()
 
 
@@ -69,7 +84,12 @@ class ValidadorDeItensBilling:
         raise DependenciaIndisponivelException(msg)
 
     def _tentar(self, corpo: dict[str, list[str]]) -> httpx.Response | None:
-        """Uma chamada; ``None`` = falha transitoria (conta no breaker)."""
+        """Uma chamada; ``None`` = falha transitoria (conta no breaker e retenta).
+
+        Raises:
+            DependenciaIndisponivelException: circuito aberto ou falha que
+                repetir nao resolve (500, erro de protocolo local).
+        """
         if not self._breaker.permitir():
             segundos = max(1, self._breaker.segundos_para_nova_tentativa())
             msg = (
@@ -83,26 +103,33 @@ class ValidadorDeItensBilling:
                 json=corpo,
                 headers={"Authorization": self._authorization},
             )
-        except httpx.HTTPError as exc:
+        except _ERROS_TRANSITORIOS as exc:
             self._breaker.registrar_falha()
             _log.warning("billing_call_failed", erro=type(exc).__name__)
             return None
+        except httpx.HTTPError as exc:
+            self._breaker.registrar_falha()
+            _log.warning("billing_call_failed", erro=type(exc).__name__)
+            raise DependenciaIndisponivelException(_SEM_RESPOSTA) from exc
         if resposta.status_code >= _HTTP_ERRO_SERVIDOR:
             self._breaker.registrar_falha()
             _log.warning("billing_call_failed", status=resposta.status_code)
-            return None
-        # 2xx e 4xx: o Billing esta de pe (um 4xx e problema do pedido).
+            if resposta.status_code in _STATUS_TRANSITORIOS:
+                return None
+            raise DependenciaIndisponivelException(_SEM_RESPOSTA)
+        # 2xx a 4xx: o Billing esta de pe (um 4xx e problema do pedido).
         self._breaker.registrar_sucesso()
         return resposta
 
 
 def _ler_invalidos(resposta: httpx.Response) -> list[str]:
+    """``invalidos`` de um 200 no contrato; qualquer outra coisa vira 502."""
     if resposta.status_code != _HTTP_OK:
         msg = (
             f"O Billing recusou a validacao de precos (HTTP {resposta.status_code}). "
             "Confira o token e o contrato de /api/v1/precos/validacao."
         )
-        raise DependenciaIndisponivelException(msg)
+        raise RespostaInvalidaDaDependenciaException(msg)
     try:
         invalidos = resposta.json()["invalidos"]
     except (ValueError, KeyError, TypeError):
@@ -111,5 +138,5 @@ def _ler_invalidos(resposta: httpx.Response) -> list[str]:
         isinstance(codigo, str) for codigo in invalidos
     ):
         msg = "Resposta do Billing fora do contrato: esperado {'invalidos': [codigos]}"
-        raise DependenciaIndisponivelException(msg)
+        raise RespostaInvalidaDaDependenciaException(msg)
     return invalidos

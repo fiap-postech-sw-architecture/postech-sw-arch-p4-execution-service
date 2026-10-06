@@ -71,7 +71,7 @@ def iniciar_diagnostico(
 @router.post(
     "/{ordem_id}/conclusao",
     summary="Registra servicos e pecas (emite DiagnosticoConcluido)",
-    responses=respostas(404, 409, 422, 503),
+    responses=respostas(404, 409, 422, 502, 503),
 )
 def concluir_diagnostico(
     ordem_id: UUID,
@@ -83,8 +83,9 @@ def concluir_diagnostico(
     """Valida pecas no estoque local e codigos no Billing antes de concluir.
 
     422 lista os codigos recusados; 503 quando o Billing nao responde (ou o
-    circuito esta aberto). So o mecanico que iniciou conclui (o admin conclui
-    em nome dele). Repetir devolve o diagnostico ja concluido, sem alterar itens.
+    circuito esta aberto); 502 quando ele recusa o pedido (4xx). So o mecanico
+    que iniciou conclui (o admin conclui em nome dele). Repetir devolve o
+    diagnostico ja concluido, sem alterar itens.
     """
     itens = [
         ItemDiagnostico(tipo=item.tipo, codigo=item.codigo, quantidade=item.quantidade)

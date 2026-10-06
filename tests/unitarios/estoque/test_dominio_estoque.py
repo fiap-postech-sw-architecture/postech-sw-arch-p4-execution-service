@@ -30,7 +30,9 @@ def _item(
 
 
 class TestSku:
-    @pytest.mark.parametrize("valor", ["PEC-OLEO-5W30", "PEC-VELA", "A", "X1-2-3"])
+    @pytest.mark.parametrize(
+        "valor", ["PEC-OLEO-5W30", "PEC-VELA", "A", "X1-2-3", "A" * 50]
+    )
     def test_formatos_validos(self, valor: str) -> None:
         assert str(Sku(valor)) == valor
 
@@ -44,7 +46,7 @@ class TestSku:
             "-PEC",
             "PEC-",
             "PEC-VELA\n",
-            "A" * 65,
+            "A" * 51,  # o Billing, dono dos codigos, aceita ate 50
         ],
     )
     def test_formatos_invalidos(self, valor: str) -> None:

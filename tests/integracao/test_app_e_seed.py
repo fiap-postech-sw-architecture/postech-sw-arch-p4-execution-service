@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -206,6 +207,26 @@ def test_paginacao_nas_bordas_validas(
     resposta = api.get(rota, params={"offset": 1_000_000, "limit": 100}, headers=admin)
     assert resposta.status_code == 200
     assert resposta.json()["items"] == []
+
+
+@pytest.mark.parametrize("variavel", ["JWKS_URL", "BILLING_URL"])
+def test_boot_recusa_url_sem_esquema(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, jwks_url: str, variavel: str
+) -> None:
+    # Sem esquema, cada conclusao fazia 3 tentativas com UnsupportedProtocol e
+    # abria o breaker como se o Billing estivesse fora do ar.
+    from src.main import criar_app
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("JWKS_URL", jwks_url)
+    monkeypatch.setenv("BILLING_URL", "http://billing.test")
+    monkeypatch.setenv(variavel, "servico:8000")
+    with pytest.raises(RuntimeError, match=variavel), TestClient(criar_app()):
+        pass
+
+
+def test_cliente_do_billing_com_timeout_de_2s(api: TestClient) -> None:
+    assert api.app.state.billing_client.timeout == httpx.Timeout(2.0)
 
 
 @pytest.mark.parametrize("ausente", ["DATABASE_URL", "JWKS_URL", "BILLING_URL"])

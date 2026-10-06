@@ -4,6 +4,7 @@ import pytest
 
 from src.compartilhado.infraestrutura.ambiente import (
     inteiro_opcional,
+    url_http_obrigatoria,
     variavel_obrigatoria,
 )
 
@@ -41,3 +42,29 @@ def test_inteiro_invalido_para_o_boot(
     monkeypatch.setenv("DB_POOL_SIZE", valor)
     with pytest.raises(RuntimeError, match="DB_POOL_SIZE"):
         inteiro_opcional("DB_POOL_SIZE", 5)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://billing:8000", "https://billing.exemplo.com.br/base"]
+)
+def test_url_http_com_host(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    monkeypatch.setenv("BILLING_URL", url)
+    assert url_http_obrigatoria("BILLING_URL") == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("billing:8000", id="sem-esquema"),
+        pytest.param("ftp://billing", id="esquema-errado"),
+        pytest.param("http://", id="sem-host"),
+        pytest.param("http://usuario:segredo@", id="credencial-sem-host"),
+    ],
+)
+def test_url_mal_formada_para_o_boot_sem_ecoar_o_valor(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setenv("BILLING_URL", url)
+    with pytest.raises(RuntimeError, match="BILLING_URL") as erro:
+        url_http_obrigatoria("BILLING_URL")
+    assert url not in str(erro.value)

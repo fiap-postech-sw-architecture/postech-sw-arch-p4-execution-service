@@ -23,8 +23,9 @@ if TYPE_CHECKING:
     from src.compartilhado.dominio.veiculo import Veiculo
 
 # Codigos da tabela de precos do Billing (servicos e pecas): PEC-VELA, SRV-...
+# O Billing e o dono: mesmo formato e mesmo limite de 50 caracteres.
 PADRAO_CODIGO: Final = r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$"
-TAMANHO_MAXIMO_CODIGO: Final = 64
+TAMANHO_MAXIMO_CODIGO: Final = 50
 TAMANHO_MAXIMO_TEXTO_LIVRE: Final = 2000
 _REGEX_CODIGO = re.compile(PADRAO_CODIGO)
 

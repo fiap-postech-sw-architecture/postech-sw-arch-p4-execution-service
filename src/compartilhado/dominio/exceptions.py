@@ -66,3 +66,14 @@ class DependenciaIndisponivelException(DomainException):
     def __init__(self, mensagem: str, *, retry_after: int | None = None) -> None:
         super().__init__(codigo="DEPENDENCIA_INDISPONIVEL", mensagem=mensagem)
         self.retry_after = retry_after
+
+
+class RespostaInvalidaDaDependenciaException(DomainException):
+    """O servico externo respondeu, mas recusou o pedido (4xx) ou saiu do contrato.
+
+    Diferente da indisponibilidade (503), repetir nao muda o resultado: a API
+    responde 502 e quem opera confere token, contrato ou configuracao.
+    """
+
+    def __init__(self, mensagem: str) -> None:
+        super().__init__(codigo="RESPOSTA_INVALIDA_DA_DEPENDENCIA", mensagem=mensagem)

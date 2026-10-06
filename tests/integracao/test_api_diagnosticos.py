@@ -414,6 +414,23 @@ def test_billing_fora_do_ar_e_503_e_depois_circuito_aberto(
     assert [linha["tipo"] for linha in outbox()] == ["DiagnosticoIniciado"]
 
 
+def test_billing_recusando_o_pedido_e_502_sem_retry(
+    api: TestClient,
+    mecanico: dict[str, str],
+    em_andamento: UUID,
+    billing: respx.MockRouter,
+) -> None:
+    # 4xx do Billing (token ou contrato) nao se resolve repetindo: 502, nao 503.
+    rota = billing.post(CAMINHO_VALIDACAO).respond(401)
+    resposta = api.post(
+        f"{URL}/{em_andamento}/conclusao", json={"itens": ITENS}, headers=mecanico
+    )
+    assert resposta.status_code == 502
+    assert resposta.json()["erro"]["codigo"] == "RESPOSTA_INVALIDA_DA_DEPENDENCIA"
+    assert "HTTP 401" in resposta.json()["erro"]["mensagem"]
+    assert rota.call_count == 1
+
+
 def test_so_quem_iniciou_conclui(
     api: TestClient,
     em_andamento: UUID,

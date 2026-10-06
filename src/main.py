@@ -8,7 +8,10 @@ import httpx
 import structlog
 from fastapi import FastAPI
 
-from src.compartilhado.infraestrutura.ambiente import variavel_obrigatoria
+from src.compartilhado.infraestrutura.ambiente import (
+    url_http_obrigatoria,
+    variavel_obrigatoria,
+)
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
@@ -42,9 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     configurar_logging()
     engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     app.state.session_factory = criar_session_factory(engine)
-    app.state.validador_token = ValidadorDeTokenJWKS(variavel_obrigatoria("JWKS_URL"))
+    app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
     app.state.billing_client = httpx.Client(
-        base_url=variavel_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
+        base_url=url_http_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
     )
     app.state.billing_breaker = CircuitBreaker("billing")
     _log.info("execution_service_started")

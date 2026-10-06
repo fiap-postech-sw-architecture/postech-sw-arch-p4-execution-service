@@ -3,7 +3,10 @@ from __future__ import annotations
 from sqlalchemy import Column, DateTime, Enum, Index, Table, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
-from src.compartilhado.infraestrutura.tipos_sqlalchemy import retrato_do_veiculo
+from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
+    check_de_enum,
+    retrato_do_veiculo,
+)
 from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 
 execucoes_table = Table(
@@ -31,6 +34,8 @@ execucoes_table = Table(
     Column("iniciada_em", DateTime(timezone=True), nullable=True),
     Column("finalizada_em", DateTime(timezone=True), nullable=True),
     Column("cancelada_em", DateTime(timezone=True), nullable=True),
+    check_de_enum("status", StatusExecucao, "ck_execucoes_status"),
+    check_de_enum("prioridade", Prioridade, "ck_execucoes_prioridade"),
 )
 
 # GET /fila e a posicao filtram por status (so AGUARDANDO esta na fila).

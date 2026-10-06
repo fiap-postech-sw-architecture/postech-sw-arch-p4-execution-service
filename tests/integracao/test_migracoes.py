@@ -101,3 +101,54 @@ def test_check_do_banco_impede_saldo_negativo_ou_reserva_acima_do_fisico(
             insert,
             {"disponivel": disponivel, "reservada": reservada},
         )
+
+
+_INSERCOES = {
+    "execucoes": (
+        "INSERT INTO execucoes (ordem_id, status, prioridade, enfileirada_em) "
+        "VALUES (gen_random_uuid(), :status, :prioridade, now())"
+    ),
+    "diagnosticos": (
+        "INSERT INTO diagnosticos (ordem_id, status, itens, observacoes, "
+        "solicitado_em) VALUES (gen_random_uuid(), :status, '[]', '', now())"
+    ),
+    "reservas": (
+        "INSERT INTO reservas (id, ordem_id, status, itens, faltantes, criada_em) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), :status, '[]', '[]', now())"
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("tabela", "valores", "restricao"),
+    [
+        pytest.param(
+            "execucoes",
+            {"status": "AGUARDANDO", "prioridade": "urgente"},
+            "ck_execucoes_prioridade",
+            id="prioridade",
+        ),
+        pytest.param(
+            "execucoes",
+            {"status": "PAUSADA", "prioridade": "normal"},
+            "ck_execucoes_status",
+            id="status-execucao",
+        ),
+        pytest.param(
+            "diagnosticos",
+            {"status": "PERDIDO"},
+            "ck_diagnosticos_status",
+            id="status-diagnostico",
+        ),
+        pytest.param(
+            "reservas", {"status": "PARCIAL"}, "ck_reservas_status", id="status-reserva"
+        ),
+    ],
+)
+def test_check_do_banco_recusa_valor_fora_do_enum(
+    engine: Engine, tabela: str, valores: dict[str, str], restricao: str
+) -> None:
+    # Defesa em profundidade: so os valores do enum do dominio (prioridade do
+    # contrato AgendarExecucao: normal ou alta) entram na coluna.
+    with pytest.raises(IntegrityError, match=restricao), engine.begin() as conexao:
+        conexao.execute(text(_INSERCOES[tabela]), valores)
