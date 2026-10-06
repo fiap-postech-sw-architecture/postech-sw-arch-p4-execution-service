@@ -5,4 +5,4 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ValueObject:
-    pass
+    """Base dos objetos de valor: imutaveis e iguais pelo valor dos campos."""

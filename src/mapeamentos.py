@@ -7,4 +7,4 @@ deste modulo porque os repositorios ja importam os mapeamentos que usam.
 import src.compartilhado.infraestrutura.outbox_mapping
 import src.diagnostico.infraestrutura.mapping
 import src.estoque.infraestrutura.mapping
-import src.execucao.infraestrutura.mapping  # noqa: F401
+import src.execucao.infraestrutura.mapping  # noqa: F401 - import pelo efeito

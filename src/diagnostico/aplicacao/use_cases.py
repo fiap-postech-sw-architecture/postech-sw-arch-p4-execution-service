@@ -196,22 +196,7 @@ class ConcluirDiagnostico:
             )
             if diagnostico.concluir(responsavel, itens, observacoes, agora):
                 self._repo.salvar(diagnostico)
-                self._uow.registrar_evento(
-                    DiagnosticoConcluidoEvent(
-                        ordem_id=ordem_id,
-                        ocorrido_em=agora,
-                        itens=tuple(
-                            ItemDTO(
-                                tipo=item.tipo.value,
-                                codigo=item.codigo,
-                                quantidade=item.quantidade,
-                            )
-                            for item in diagnostico.itens
-                        ),
-                        observacoes=diagnostico.observacoes,
-                        concluido_em=agora,
-                    )
-                )
+                self._uow.registrar_evento(_concluido(diagnostico, agora))
                 self._uow.commit()
                 if pelo_admin:
                     registrar_auditoria(
@@ -243,6 +228,21 @@ class ConcluirDiagnostico:
                 f"{', '.join(invalidos)}. Corrija o codigo ou cadastre o preco."
             )
             raise ItensInvalidosException(msg)
+
+
+def _concluido(diagnostico: Diagnostico, agora: datetime) -> DiagnosticoConcluidoEvent:
+    return DiagnosticoConcluidoEvent(
+        ordem_id=diagnostico.ordem_id,
+        ocorrido_em=agora,
+        itens=tuple(
+            ItemDTO(
+                tipo=item.tipo.value, codigo=item.codigo, quantidade=item.quantidade
+            )
+            for item in diagnostico.itens
+        ),
+        observacoes=diagnostico.observacoes,
+        concluido_em=agora,
+    )
 
 
 class DescartarDiagnostico:

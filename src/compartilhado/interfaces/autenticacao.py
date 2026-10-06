@@ -39,6 +39,8 @@ _JWKS_INDISPONIVEL = (
 
 
 class Papel(StrEnum):
+    """Claim ``papel`` do token; a matriz de permissoes esta no ADR-039."""
+
     ADMIN = "admin"
     ATENDENTE = "atendente"
     MECANICO = "mecanico"
@@ -46,6 +48,8 @@ class Papel(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class UsuarioAutenticado:
+    """Quem fez o request: ``sub`` do token, papel e o header para o Billing."""
+
     id: UUID
     papel: Papel
     # Header recebido, repassado ao Billing na validacao de itens (RFC-004 sec. 6).

@@ -45,6 +45,12 @@ def _obter_item(
 
 
 class CriarItemEstoque:
+    """Cadastro de peca pelo admin.
+
+    SKU ja cadastrado, inclusive por outra transacao ao mesmo tempo (a UNIQUE
+    decide a corrida), e ``EntidadeDuplicadaException`` (409).
+    """
+
     def __init__(self, repo: ItemEstoqueRepository, uow: UnitOfWork) -> None:
         self._repo = repo
         self._uow = uow
@@ -74,6 +80,8 @@ class ListarItensEstoque:
 
 
 class ConsultarItemEstoque:
+    """Peca pelo SKU; ``ItemEstoqueNaoEncontradoException`` (404) se nao existe."""
+
     def __init__(self, repo: ItemEstoqueRepository) -> None:
         self._repo = repo
 
@@ -82,6 +90,11 @@ class ConsultarItemEstoque:
 
 
 class AtualizarItemEstoque:
+    """Nome e situacao da peca, sob lock da linha (serializa com reservas).
+
+    Desativar peca com unidades reservadas e 409: libere ou consuma antes.
+    """
+
     def __init__(self, repo: ItemEstoqueRepository, uow: UnitOfWork) -> None:
         self._repo = repo
         self._uow = uow
@@ -100,6 +113,12 @@ class AtualizarItemEstoque:
 
 
 class AjustarQuantidade:
+    """Saldo fisico absoluto (inventario), sob lock da linha.
+
+    Espera a reserva em curso e rele o reservado: o saldo nunca fica abaixo
+    dele (409), nem vira erro de CHECK no banco.
+    """
+
     def __init__(self, repo: ItemEstoqueRepository, uow: UnitOfWork) -> None:
         self._repo = repo
         self._uow = uow
@@ -115,6 +134,8 @@ class AjustarQuantidade:
 
 
 class DesativarItemEstoque:
+    """Soft delete idempotente; 409 com unidades reservadas."""
+
     def __init__(self, repo: ItemEstoqueRepository, uow: UnitOfWork) -> None:
         self._repo = repo
         self._uow = uow

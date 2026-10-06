@@ -148,7 +148,7 @@ def _chave_sensivel(key: Any) -> bool:  # noqa: ANN401  # chaves podem nao ser s
     return isinstance(key, str) and key.lower() in _CHAVES_SENSIVEIS
 
 
-def _scrub_value(value: Any, depth: int) -> Any:  # noqa: ANN401
+def _scrub_value(value: Any, depth: int) -> Any:  # noqa: ANN401 - qualquer JSON
     # Recursivamente normaliza qualquer estrutura JSON-like; o tipo de entrada
     # nao e conhecivel a priori, dai o Any.
     if depth >= _MAX_SCRUB_DEPTH:
@@ -231,18 +231,14 @@ def _cadeia_compartilhada() -> list[Any]:
 
 
 def configurar_logging(stream: TextIO | None = None) -> None:
-    """Configura structlog + roteia o logging stdlib pelo mesmo scrubber de PII.
+    """Configura structlog e roteia o logging stdlib pelo mesmo scrubber de PII.
 
-    JSON output, timestamps ISO e scrub automatico de PII/segredos. O
-    ``ProcessorFormatter`` instalado no root logger faz com que TODO log stdlib
-    (handler 500 em ``error_handler.py``, ``exc_info`` do ValueError handler,
-    access/error logs do uvicorn, logs de bibliotecas) passe pela
-    ``_cadeia_compartilhada`` -- inclusive ``scrub_pii`` -- via ``foreign_pre_chain``,
-    sem reprocessar os logs ja-structlog (estes pulam o pre-chain). Fecha a brecha
-    LGPD da issue #86 do p2: traceback cru com PII fora do pipeline do structlog.
-
-    ``stream`` permite direcionar a saida (default ``sys.stdout``); usado em testes
-    para capturar o output renderizado.
+    Saida JSON com timestamp ISO. O ``ProcessorFormatter`` do root faz TODO log
+    stdlib (handler 500, uvicorn, bibliotecas) passar pela
+    ``_cadeia_compartilhada``, ``scrub_pii`` incluso, via ``foreign_pre_chain``,
+    sem reprocessar o que ja veio do structlog: fecha a brecha da issue #86 do
+    p2 (traceback cru com PII fora do pipeline). ``stream`` redireciona a saida
+    (padrao ``sys.stdout``); os testes capturam por ele.
     """
     compartilhada = _cadeia_compartilhada()
     structlog.configure(
@@ -256,7 +252,6 @@ def configurar_logging(stream: TextIO | None = None) -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
     formatter = structlog.stdlib.ProcessorFormatter(
         # Logs estrangeiros (stdlib) passam por esta cadeia ANTES da renderizacao;
         # logs ja-structlog ja a percorreram e a pulam (sem duplo processamento).
@@ -266,25 +261,22 @@ def configurar_logging(stream: TextIO | None = None) -> None:
             structlog.processors.JSONRenderer(),
         ],
     )
-
     handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(formatter)
-
     root = logging.getLogger()
-    # Substitui handlers existentes (ex.: o basicConfig do relay ou um handler
-    # de uma chamada anterior) para garantir que o scrubber seja o unico caminho
-    # de saida -- idempotente em warm restarts/testes e sem handler cru remanescente.
+    # Substitui handlers existentes (de uma chamada anterior, por exemplo): o
+    # scrubber fica sendo o unico caminho de saida, idempotente em restart/teste.
     root.handlers = [handler]
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
+    _religar_loggers_do_uvicorn()
 
-    # uvicorn (lancado por CLI no container) instala os PROPRIOS handlers nos
-    # loggers `uvicorn`/`uvicorn.access` com `propagate=False` -- seus logs (inclui
-    # access logs, que podem trazer PII em path/query) NAO chegariam ao handler de
-    # scrub do root. `configurar_logging` roda no lifespan startup, DEPOIS de
-    # uvicorn montar seus loggers; aqui removemos os handlers crus de uvicorn e
-    # religamos `propagate=True` para que tudo flua pelo ProcessorFormatter do root
-    # (scrubado, JSON unico). Idempotente. Issue #86 do p2.
+
+def _religar_loggers_do_uvicorn() -> None:
+    # O uvicorn (lancado por CLI no container) instala handlers proprios com
+    # `propagate=False`: seus logs nao passariam pelo scrub do root. Isto roda
+    # no lifespan, depois de o uvicorn montar os loggers: tira os handlers crus
+    # e religa a propagacao (JSON unico e scrubado). Issue #86 do p2.
     for nome in _LOGGERS_UVICORN:
         uvlog = logging.getLogger(nome)
         uvlog.handlers = []

@@ -54,6 +54,12 @@ def espera_com_jitter(retry: int) -> float:
 
 
 class ValidadorDeItensBilling:
+    """Uma instancia por request (leva o token do mecanico ao Billing).
+
+    Cliente HTTP e circuit breaker sao do processo (lifespan), compartilhados
+    entre requests; ``dormir`` e injetavel para os testes nao esperarem o jitter.
+    """
+
     def __init__(
         self,
         *,

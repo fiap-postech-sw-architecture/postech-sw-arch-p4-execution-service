@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 import jwt
 import structlog
@@ -99,7 +99,7 @@ class ValidadorDeTokenJWKS:
         self._copia: _Copia | None = None  # trocada inteira: leitura sem lock
         self._falhou_em: float | None = None
 
-    def validar(self, token: str) -> dict[str, Any]:
+    def validar(self, token: str) -> dict[str, object]:
         """Devolve as claims de um token valido.
 
         Raises:
@@ -114,7 +114,7 @@ class ValidadorDeTokenJWKS:
             raise TokenInvalidoError(str(exc)) from exc
         chave = self._chave(kid)
         try:
-            claims: dict[str, Any] = jwt.decode(
+            claims: dict[str, object] = jwt.decode(
                 token,
                 chave,
                 algorithms=["RS256"],

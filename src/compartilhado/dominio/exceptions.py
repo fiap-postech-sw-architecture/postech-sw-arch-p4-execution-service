@@ -11,6 +11,12 @@ class ValorInvalidoError(ValueError):
 
 
 class DomainException(Exception):
+    """Erro esperado de regra de negocio, traduzido pela API para o envelope.
+
+    ``codigo`` e estavel (vai para o log e para o cliente); ``mensagem`` e
+    acionavel para o cliente e nunca vai para o log (pode ter dado do pedido).
+    """
+
     def __init__(self, codigo: str, mensagem: str) -> None:
         self.codigo = codigo
         self.mensagem = mensagem

@@ -51,10 +51,10 @@ class JsonDeDominio[T](TypeDecorator[T]):
         self._de_json = de_json
 
     # Any nos dois metodos: e a assinatura do TypeDecorator (valor JSON do driver).
-    def process_bind_param(self, value: T | None, dialect: Dialect) -> Any:  # noqa: ANN401
+    def process_bind_param(self, value: T | None, dialect: Dialect) -> Any:  # noqa: ANN401 - idem
         return None if value is None else self._para_json(value)
 
-    def process_result_value(self, value: Any, dialect: Dialect) -> T | None:  # noqa: ANN401
+    def process_result_value(self, value: Any, dialect: Dialect) -> T | None:  # noqa: ANN401 - idem
         return None if value is None else reidratar(self._de_json, value)
 
 

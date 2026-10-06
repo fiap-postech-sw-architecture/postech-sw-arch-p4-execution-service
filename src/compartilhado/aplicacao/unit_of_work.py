@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 
 class UnitOfWork(Protocol):
+    """Transacao de um caso de uso: estado e eventos da outbox juntos ou nada."""
+
     def __enter__(self) -> Self:
         """Abre a unidade de trabalho e devolve a si mesma."""
 

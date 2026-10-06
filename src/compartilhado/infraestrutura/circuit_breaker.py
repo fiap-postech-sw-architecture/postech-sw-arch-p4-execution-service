@@ -80,6 +80,11 @@ class CircuitBreaker:
             return max(0, math.ceil(self._aberto_ate - self._relogio()))
 
     def permitir(self) -> bool:
+        """Se a chamada pode sair; vencido o prazo, libera UMA prova por vez.
+
+        Diferente de ``barrado``, tem efeito: liberar a prova empurra o prazo,
+        e as chamadas seguintes ficam barradas ate o resultado dela.
+        """
         with self._lock:
             if self._aberto_ate is None:
                 return True
@@ -90,6 +95,7 @@ class CircuitBreaker:
             return True
 
     def registrar_sucesso(self) -> None:
+        """Dependencia respondeu: zera as falhas e fecha o circuito."""
         with self._lock:
             if self._aberto_ate is not None:
                 _log.info("circuit_breaker_closed", dependencia=self._dependencia)
@@ -97,6 +103,7 @@ class CircuitBreaker:
             self._aberto_ate = None
 
     def registrar_falha(self) -> None:
+        """Conta a falha; no limite (ou na prova da meia-abertura) abre o circuito."""
         with self._lock:
             self._falhas += 1
             # Com o circuito aberto, so a prova chega aqui: falha nela reabre.

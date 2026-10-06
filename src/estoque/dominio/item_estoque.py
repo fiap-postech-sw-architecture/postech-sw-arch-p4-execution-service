@@ -110,6 +110,12 @@ class ItemEstoque(AggregateRoot):
         self._ativo = True
 
     def reservar(self, quantidade: int) -> None:
+        """Separa unidades do saldo livre.
+
+        Raises:
+            ViolacaoRegraDeNegocioException: peca inativa.
+            EstoqueInsuficienteException: saldo livre menor que o pedido.
+        """
         _exigir_positiva(quantidade, "reserva")
         if not self._ativo:
             msg = f"Item {self._sku} esta inativo e nao pode ser reservado"

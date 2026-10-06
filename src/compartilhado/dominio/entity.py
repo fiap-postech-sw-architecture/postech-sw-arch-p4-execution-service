@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 
 @dataclass(eq=False)
 class Entity:
+    """Objeto com identidade: igualdade e hash pelo ``id``, que nao muda."""
+
     id: UUID = field(default_factory=uuid4)
 
     def __setattr__(self, name: str, value: object) -> None:

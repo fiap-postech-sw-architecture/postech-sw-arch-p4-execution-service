@@ -27,6 +27,13 @@ def _linha_da_outbox(evento: IntegrationEvent) -> dict[str, Any]:
 
 
 class SQLAlchemyUnitOfWork:
+    """``UnitOfWork`` sobre uma ``Session``, uma por caso de uso.
+
+    ``commit`` grava estado, outbox e ``NOTIFY`` na mesma transacao; saida do
+    bloco com excecao desfaz tudo e descarta os eventos; a sessao fecha sempre
+    na saida (a do request pode ser reaberta pelo proximo bloco).
+    """
+
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self._session_factory = session_factory
         self._session: Session | None = None
@@ -75,5 +82,6 @@ class SQLAlchemyUnitOfWork:
         self._eventos = []
 
     def rollback(self) -> None:
+        """Desfaz a transacao e descarta os eventos registrados."""
         self._sessao().rollback()
         self._eventos = []
