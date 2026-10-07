@@ -1079,6 +1079,115 @@ def test_dead_de_envelope_invalido_tambem_respeita_o_fencing(
     assert "message_dead" not in log_capturado.getvalue()
 
 
+def _outra_replica_reivindica(engine: Engine, ids: list[int]) -> None:
+    """Outra replica pega as linhas: lease (token) novo, ainda pendentes."""
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                "UPDATE outbox SET proxima_tentativa_em = now() + interval '1 hour' "
+                "WHERE id = ANY(:ids)"
+            ),
+            {"ids": ids},
+        )
+
+
+def test_confirm_que_chega_depois_de_outra_replica_reivindicar_nao_marca_entregue(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # O publish passa do lease e outra replica reivindica a linha antes do
+    # confirm: a linha segue pendente e com o lease dela, sem `entregue` por cima.
+    broker_falso.conexoes = 1
+    _gravar(engine)
+    publicar = _BrokerFalso.publicar
+
+    def outra_replica_pega_no_meio(
+        self: _BrokerFalso, linha: LinhaDaOutbox
+    ) -> str | None:
+        _outra_replica_reivindica(engine, [linha.id])
+        return publicar(self, linha)
+
+    monkeypatch.setattr(_BrokerFalso, "publicar", outra_replica_pega_no_meio)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(
+            lambda: (
+                "message_published_after_losing_the_lease" in log_capturado.getvalue()
+            )
+        )
+    (linha,) = outbox()
+    assert (linha["status"], linha["tentativas"]) == ("pendente", 0)
+
+
+def test_linha_que_outra_replica_reivindicou_antes_da_renovacao_nao_e_publicada(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Entre o claim e a renovacao o lease venceu e outra replica pegou a linha:
+    # a renovacao confere o token e esta replica nao publica.
+    broker_falso.conexoes = 1
+    _gravar(engine)
+    reivindicar = Outbox.reivindicar
+
+    def outra_replica_pega_logo_depois(
+        self: Outbox, lote: int, lease: timedelta
+    ) -> list[LinhaDaOutbox]:
+        linhas = reivindicar(self, lote, lease)
+        _outra_replica_reivindica(engine, [linha.id for linha in linhas])
+        return linhas
+
+    monkeypatch.setattr(Outbox, "reivindicar", outra_replica_pega_logo_depois)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(
+            lambda: "outbox_row_taken_by_another_replica" in log_capturado.getvalue()
+        )
+    assert broker_falso.publicadas == []
+    assert outbox()[0]["status"] == "pendente"
+
+
+def test_devolucao_do_lote_nao_toca_a_linha_que_outra_replica_reivindicou(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    broker_falso: type[_BrokerFalso],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # O broker cai no primeiro publish e o relay devolve o lote, mas so as
+    # linhas que ainda tem o lease dele: as duas que outra replica pegou no
+    # meio seguem com o lease dela.
+    for _ in range(3):
+        _gravar(engine)
+    reivindicar = Outbox.reivindicar
+
+    def outra_replica_pega_as_duas_ultimas(
+        self: Outbox, lote: int, lease: timedelta
+    ) -> list[LinhaDaOutbox]:
+        linhas = reivindicar(self, lote, lease)
+        _outra_replica_reivindica(engine, [linha.id for linha in linhas[1:]])
+        return linhas
+
+    monkeypatch.setattr(Outbox, "reivindicar", outra_replica_pega_as_duas_ultimas)
+    backoff = _BackoffAteLiberar()
+    relay = Relay(engine, _URL_FALSA, sinais("relay"), poll_s=0.1, backoff=backoff)
+    with EmSegundoPlano(relay):
+        esperar_ate(backoff.esperando.is_set)
+        assert broker_falso.conexoes == 1
+        with engine.connect() as conexao:
+            com_lease_da_outra = conexao.execute(
+                text(
+                    "SELECT proxima_tentativa_em > now() + interval '30 minutes' "
+                    "FROM outbox ORDER BY id"
+                )
+            ).scalars()
+            assert list(com_lease_da_outra) == [False, True, True]
+
+
 def _contar_claims(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     reivindicar = Outbox.reivindicar
     voltas: list[int] = []
