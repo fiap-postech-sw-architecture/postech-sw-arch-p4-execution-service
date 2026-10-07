@@ -48,7 +48,8 @@ check: lock-check lint lint-arch typecheck security test
 # `server`, que as linhas de boot do uvicorn saem em JSON e que ele nao escreve
 # access log (so o `http_request` estruturado do middleware); que relay e
 # consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
-# o relay conectou ao broker e que o consumidor assinou a execucao.comandos; e
+# os contratos de mensageria estao na imagem, que o relay conectou ao broker e
+# que o consumidor assinou a execucao.comandos; e
 # derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
 # Projeto e portas proprios para nao derrubar a stack do compose-up.
 API_IMAGE ?= pytstop-execution-service:dev
@@ -57,6 +58,8 @@ SMOKE_DB_PORT ?= 15433
 SMOKE_RABBITMQ_PORT ?= 15674
 SMOKE_RABBITMQ_UI_PORT ?= 15675
 SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
+# Schemas e AsyncAPI dentro da imagem: sem eles a API recusa gravar a outbox.
+SMOKE_CONTRATOS := from src.compartilhado.infraestrutura.mensageria.contratos import produtor, tipos_com_contrato; assert tipos_com_contrato() and produtor('ReservarPecas') == 'os'
 SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) \
 	RABBITMQ_PORT=$(SMOKE_RABBITMQ_PORT) RABBITMQ_UI_PORT=$(SMOKE_RABBITMQ_UI_PORT) \
 	API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
@@ -85,10 +88,12 @@ smoke:
 		|| { echo "smoke: o consumidor nao esta pronto" >&2; false; }; } \
 	&& { $(SMOKE_COMPOSE) logs --no-color relay | grep -q '"event": "relay_broker_connected"' \
 		|| { echo "smoke: o relay nao conectou ao broker" >&2; false; }; } \
-	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_queues name consumers \
-		| grep -Eq '^execucao\.comandos[[:space:]]+1$$' \
+	&& { $(SMOKE_COMPOSE) exec -T api python -c "$(SMOKE_CONTRATOS)" \
+		|| { echo "smoke: a imagem nao traz os contratos de mensageria" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_consumers queue_name \
+		| grep -qx 'execucao.comandos' \
 		|| { echo "smoke: o consumidor nao assinou a execucao.comandos" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, relay e consumidor prontos" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, contratos na imagem, relay e consumidor prontos" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
