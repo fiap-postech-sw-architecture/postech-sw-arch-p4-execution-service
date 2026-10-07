@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request  # noqa: TC002
 
 from src.compartilhado.aplicacao.responsavel import registrar_auditoria
+from src.compartilhado.infraestrutura.rastreamento import retomando
 from src.compartilhado.interfaces.autenticacao import (
     Papel,
     UsuarioAutenticado,
@@ -18,6 +19,7 @@ from src.compartilhado.interfaces.autenticacao import (
 from src.compartilhado.interfaces.dependencies import obter_session
 from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
 from src.diagnostico.dominio.diagnostico import ItemDiagnostico, StatusDiagnostico
+from src.diagnostico.infraestrutura.mapping import diagnosticos_table
 from src.diagnostico.interfaces.dependencies import (
     obter_concluir_diagnostico,
     obter_iniciar_diagnostico,
@@ -68,7 +70,8 @@ def iniciar_diagnostico(
 
     O admin tambem pode assumir (vira o responsavel), com log de auditoria.
     """
-    diagnostico = obter_iniciar_diagnostico(session).executar(ordem_id, usuario.id)
+    with retomando(session, diagnosticos_table, ordem_id, "iniciar diagnostico"):
+        diagnostico = obter_iniciar_diagnostico(session).executar(ordem_id, usuario.id)
     if usuario.papel is Papel.ADMIN:
         registrar_auditoria(
             "iniciar_diagnostico", ator_id=usuario.id, alvo=str(ordem_id)
@@ -99,11 +102,12 @@ def concluir_diagnostico(
         ItemDiagnostico(tipo=item.tipo, codigo=item.codigo, quantidade=item.quantidade)
         for item in body.itens
     ]
-    diagnostico = obter_concluir_diagnostico(session, request, usuario).executar(
-        ordem_id,
-        usuario.id,
-        itens,
-        body.observacoes,
-        pelo_admin=usuario.papel is Papel.ADMIN,
-    )
+    with retomando(session, diagnosticos_table, ordem_id, "concluir diagnostico"):
+        diagnostico = obter_concluir_diagnostico(session, request, usuario).executar(
+            ordem_id,
+            usuario.id,
+            itens,
+            body.observacoes,
+            pelo_admin=usuario.papel is Papel.ADMIN,
+        )
     return DiagnosticoResponse.model_validate(diagnostico)

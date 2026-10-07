@@ -57,8 +57,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTSTOP_GIT_SHA="${GIT_SHA}" \
     PYTSTOP_GIT_DATE="${GIT_DATE}"
 
-# Unico healthcheck (o compose usa este): liveness, sem dependencias. A imagem
-# slim nao tem curl, entao a probe e em Python. O k8s usa as proprias probes
+# Healthcheck da API (o compose usa este para ela): liveness, sem dependencias.
+# A imagem slim nao tem curl, entao a probe e em Python. Relay e consumidor
+# rodam a mesma imagem com outro comando: as sondas deles (arquivos de heartbeat
+# e de prontidao) vem do compose e dos manifests. O k8s usa as proprias probes
 # (liveness em /api/v1/saude, readiness em /api/v1/saude/pronto).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --start-interval=2s --retries=3 \
   CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/saude', timeout=2).status==200 else 1)"]

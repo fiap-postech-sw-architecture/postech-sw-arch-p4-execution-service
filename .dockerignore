@@ -1,4 +1,9 @@
 # So o necessario para rodar entra na imagem (o COPY . . leva o resto).
+# Dos contratos, so os schemas e o AsyncAPI: os exemplos e a topologia do
+# RabbitMQ (com a senha de demonstracao do admin do broker) ficam de fora.
+contratos/exemplos/
+contratos/rabbitmq/
+contratos/ORIGEM
 .git
 .github/
 .claude/

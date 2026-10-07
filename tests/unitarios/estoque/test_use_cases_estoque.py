@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
+import src.estoque.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     EntidadeDuplicadaException,
@@ -24,9 +27,14 @@ from src.estoque.aplicacao.use_cases import (
 )
 from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
 from src.estoque.dominio.item_estoque import ItemEstoque
-from src.estoque.dominio.reserva import ItemReserva, Reserva, StatusReserva
+from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
 from src.estoque.dominio.sku import Sku
-from tests.fakes import FakeUnitOfWork, ItensEmMemoria, ReservasEmMemoria
+from tests.fakes import (
+    FakeTransacaoDoComando,
+    FakeUnitOfWork,
+    ItensEmMemoria,
+    ReservasEmMemoria,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,7 +46,9 @@ def _item(sku: Sku, quantidade: int) -> ItemEstoque:
     return ItemEstoque.criar(sku=sku, nome=str(sku), quantidade_disponivel=quantidade)
 
 
-def _eventos(uow: FakeUnitOfWork) -> list[tuple[str, dict[str, object]]]:
+def _eventos(
+    uow: FakeUnitOfWork | FakeTransacaoDoComando,
+) -> list[tuple[str, dict[str, object]]]:
     return [(e.tipo, dados_do_evento(e)) for e in uow.eventos]
 
 
@@ -95,11 +105,13 @@ class TestCadastro:
 class TestReservarPecas:
     def _cenario(
         self, *itens: ItemEstoque
-    ) -> tuple[ReservarPecas, ItensEmMemoria, ReservasEmMemoria, FakeUnitOfWork]:
+    ) -> tuple[
+        ReservarPecas, ItensEmMemoria, ReservasEmMemoria, FakeTransacaoDoComando
+    ]:
         repo_itens, repo_reservas, uow = (
             ItensEmMemoria(*itens),
             ReservasEmMemoria(),
-            FakeUnitOfWork(),
+            FakeTransacaoDoComando(),
         )
         return (
             ReservarPecas(repo_itens, repo_reservas, uow),
@@ -121,6 +133,28 @@ class TestReservarPecas:
             (
                 "PecasReservadas",
                 {"ordem_id": str(ordem_id), "reserva_id": str(reserva.id)},
+            )
+        ]
+
+    def test_codigo_fora_do_catalogo_falta_inteiro_e_recusa_a_reserva(self) -> None:
+        uc, itens, reservas, uow = self._cenario(_item(VELA, 5))
+        ordem_id = uuid4()
+        fora = Faltante(sku="pec-vela", solicitado=2, disponivel=0)
+
+        resultado = uc.executar(ordem_id, [ItemReserva(VELA, 1)], [fora])
+
+        assert resultado.status is StatusReserva.RECUSADA
+        assert reservas.reservas[ordem_id].faltantes == (fora,)
+        assert itens.itens[VELA].quantidade_reservada == 0  # tudo ou nada
+        assert _eventos(uow) == [
+            (
+                "ReservaDePecasFalhou",
+                {
+                    "ordem_id": str(ordem_id),
+                    "faltantes": [
+                        {"sku": "pec-vela", "solicitado": 2, "disponivel": 0}
+                    ],
+                },
             )
         ]
 
@@ -200,17 +234,24 @@ class TestReservarPecas:
         ],
     )
     def test_comando_atrasado_apos_compensacao_ou_baixa_e_descartado(
-        self, encerrar: Callable[[Reserva, datetime], object]
+        self,
+        encerrar: Callable[[Reserva, datetime], object],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         uc, itens, reservas, uow = self._cenario(_item(VELA, 5))
         ordem_id = uuid4()
         reserva = Reserva.criar(ordem_id=ordem_id, itens=[], agora=datetime.now(UTC))
         encerrar(reserva, datetime.now(UTC))
         reservas.salvar(reserva)
 
-        assert uc.executar(ordem_id, [ItemReserva(VELA, 2)]) is reserva
+        with capture_logs() as logs:
+            assert uc.executar(ordem_id, [ItemReserva(VELA, 2)]) is reserva
         assert itens.itens[VELA].quantidade_reservada == 0
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "ReservarPecas")
+        ]
 
     def test_comando_invalido_falha_antes_de_travar(self) -> None:
         uc, itens, _, uow = self._cenario(_item(VELA, 5))
@@ -226,10 +267,10 @@ class TestLiberarReserva:
         itens, reservas, uow = (
             ItensEmMemoria(_item(VELA, 5)),
             ReservasEmMemoria(),
-            FakeUnitOfWork(),
+            FakeTransacaoDoComando(),
         )
         ordem_id = uuid4()
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             ordem_id, [ItemReserva(VELA, 3)]
         )
 
@@ -242,14 +283,14 @@ class TestLiberarReserva:
     def test_repetida_reemite_resposta_sem_devolver_de_novo(self) -> None:
         itens, reservas = ItensEmMemoria(_item(VELA, 5)), ReservasEmMemoria()
         ordem_id = uuid4()
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             ordem_id, [ItemReserva(VELA, 3)]
         )
         # Outra ordem segura 2 unidades: a segunda liberacao nao pode mexer nelas.
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             uuid4(), [ItemReserva(VELA, 2)]
         )
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         uc = LiberarReserva(itens, reservas, uow)
 
         uc.executar(ordem_id)
@@ -261,10 +302,10 @@ class TestLiberarReserva:
     def test_reserva_recusada_so_responde(self) -> None:
         itens, reservas = ItensEmMemoria(_item(VELA, 0)), ReservasEmMemoria()
         ordem_id = uuid4()
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             ordem_id, [ItemReserva(VELA, 1)]
         )
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         LiberarReserva(itens, reservas, uow).executar(ordem_id)
         assert reservas.reservas[ordem_id].status is StatusReserva.RECUSADA
         assert [e.tipo for e in uow.eventos] == ["ReservaLiberada"]
@@ -273,14 +314,14 @@ class TestLiberarReserva:
         ordem_id = uuid4()
         reserva = Reserva.criar(ordem_id=ordem_id, itens=[], agora=datetime.now(UTC))
         reserva.consumir(datetime.now(UTC))
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         uc = LiberarReserva(ItensEmMemoria(), ReservasEmMemoria(reserva), uow)
         with pytest.raises(TransicaoStatusInvalidaException):
             uc.executar(ordem_id)
         assert uow.eventos == []
 
     def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
-        reservas, uow = ReservasEmMemoria(), FakeUnitOfWork()
+        reservas, uow = ReservasEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
 
         LiberarReserva(ItensEmMemoria(), reservas, uow).executar(ordem_id)
@@ -292,9 +333,9 @@ class TestLiberarReserva:
     def test_original_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
         itens, reservas = ItensEmMemoria(_item(VELA, 5)), ReservasEmMemoria()
         ordem_id = uuid4()
-        LiberarReserva(itens, reservas, FakeUnitOfWork()).executar(ordem_id)
+        LiberarReserva(itens, reservas, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = reservas.reservas[ordem_id]
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
 
         resultado = ReservarPecas(itens, reservas, uow).executar(
             ordem_id, [ItemReserva(VELA, 2)]
@@ -303,10 +344,10 @@ class TestLiberarReserva:
         assert resultado is lapide
         assert resultado.status is StatusReserva.LIBERADA
         assert itens.itens[VELA].quantidade_reservada == 0
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
     def test_compensacao_repetida_sobre_a_lapide_so_responde(self) -> None:
-        reservas, uow = ReservasEmMemoria(), FakeUnitOfWork()
+        reservas, uow = ReservasEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         uc = LiberarReserva(ItensEmMemoria(), reservas, uow)
         uc.executar(ordem_id)

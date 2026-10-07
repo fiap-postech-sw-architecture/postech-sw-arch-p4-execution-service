@@ -15,7 +15,7 @@ from src.estoque.aplicacao.events import (
 )
 from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
 from src.estoque.dominio.item_estoque import ItemEstoque
-from src.estoque.dominio.reserva import Reserva, StatusReserva
+from src.estoque.dominio.reserva import Faltante, Reserva, StatusReserva
 from src.estoque.dominio.services import (
     calcular_faltantes,
     consumir,
@@ -27,7 +27,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import (
+        UnitOfWork,
+        UnitOfWorkDoComando,
+    )
     from src.estoque.dominio.repository import ItemEstoqueRepository, ReservaRepository
     from src.estoque.dominio.reserva import ItemReserva
     from src.estoque.dominio.sku import Sku
@@ -163,21 +166,31 @@ class ReservarPecas:
     DEPOIS de travar os itens, entao a segunda copia ve a decisao da primeira;
     sem itens para travar (lista vazia), a UNIQUE(ordem_id) barra a segunda,
     que roda de novo e cai na regra de repeticao (``releitura_em_corrida``).
+    Quem comita e o consumidor, na transacao da mensagem.
     """
 
     def __init__(
         self,
         itens: ItemEstoqueRepository,
         reservas: ReservaRepository,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._itens = itens
         self._reservas = reservas
         self._uow = uow
 
     @releitura_em_corrida
-    def executar(self, ordem_id: UUID, pecas: Sequence[ItemReserva]) -> Reserva:
-        """Devolve a decisao da ordem: reserva ATIVA, RECUSADA ou ja existente."""
+    def executar(
+        self,
+        ordem_id: UUID,
+        pecas: Sequence[ItemReserva],
+        fora_do_catalogo: Sequence[Faltante] = (),
+    ) -> Reserva:
+        """Devolve a decisao da ordem: reserva ATIVA, RECUSADA ou ja existente.
+
+        ``fora_do_catalogo``: pecas com codigo fora do formato do Billing, que o
+        contrato aceita mas nenhum item do estoque tem; faltam inteiras.
+        """
         agora = datetime.now(UTC)
         # Valida o comando (sku repetido, quantidade) antes de travar linhas.
         nova = Reserva.criar(ordem_id=ordem_id, itens=pecas, agora=agora)
@@ -187,7 +200,7 @@ class ReservarPecas:
             if existente is not None:
                 self._responder_de_novo(existente)
                 return existente
-            faltantes = calcular_faltantes(nova.itens, itens)
+            faltantes = [*fora_do_catalogo, *calcular_faltantes(nova.itens, itens)]
             if faltantes:
                 recusada = Reserva.recusar(
                     ordem_id=ordem_id,
@@ -197,11 +210,10 @@ class ReservarPecas:
                 )
                 self._reservas.salvar(recusada)
                 self._uow.registrar_evento(_falha(recusada, agora))
-                self._uow.commit()
                 _log.info(
                     "parts_reservation_refused",
                     correlation_id=str(ordem_id),
-                    skus_em_falta=[str(f.sku) for f in faltantes],
+                    skus_em_falta=[f.sku for f in faltantes],
                 )
                 return recusada
             reservar(nova, itens)
@@ -211,17 +223,18 @@ class ReservarPecas:
                     ordem_id=ordem_id, ocorrido_em=agora, reserva_id=nova.id
                 )
             )
-            self._uow.commit()
         return nova
 
     def _responder_de_novo(self, existente: Reserva) -> None:
         if existente.status in _RESERVA_ENCERRADA:
             _log.info(
-                "late_command_discarded",
+                "command_ignored",
+                codigo="COMANDO_ATRASADO",
                 comando="ReservarPecas",
                 correlation_id=str(existente.ordem_id),
                 status=existente.status,
             )
+            self._uow.descartar()
             return
         if existente.status is StatusReserva.RECUSADA:
             self._uow.registrar_evento(_falha(existente, datetime.now(UTC)))
@@ -231,7 +244,6 @@ class ReservarPecas:
                     ordem_id=existente.ordem_id, reserva_id=existente.id
                 )
             )
-        self._uow.commit()
 
 
 # Compensada (inclusive a lapide) ou superada pela baixa: o comando atrasado
@@ -244,9 +256,7 @@ def _falha(recusada: Reserva, agora: datetime) -> ReservaDePecasFalhouEvent:
         ordem_id=recusada.ordem_id,
         ocorrido_em=agora,
         faltantes=tuple(
-            FaltanteDTO(
-                sku=str(f.sku), solicitado=f.solicitado, disponivel=f.disponivel
-            )
+            FaltanteDTO(sku=f.sku, solicitado=f.solicitado, disponivel=f.disponivel)
             for f in recusada.faltantes
         ),
     )
@@ -267,7 +277,7 @@ class LiberarReserva:
         self,
         itens: ItemEstoqueRepository,
         reservas: ReservaRepository,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._itens = itens
         self._reservas = reservas
@@ -289,8 +299,7 @@ class LiberarReserva:
             self._uow.registrar_evento(
                 ReservaLiberadaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
-            self._uow.commit()
-        # Depois do commit: a copia que perde a corrida pela lapide roda de novo
+        # Depois do bloco: a copia que perde a corrida pela lapide roda de novo
         # e nao registra uma lapide que nao gravou.
         _log.info(
             "reservation_released", correlation_id=str(ordem_id), tombstone=lapide

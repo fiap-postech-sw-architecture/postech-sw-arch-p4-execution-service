@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -9,6 +10,7 @@ import structlog
 from structlog.testing import capture_logs
 
 import src.compartilhado.aplicacao.responsavel as responsavel
+import src.execucao.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
@@ -20,9 +22,10 @@ from src.estoque.aplicacao.use_cases import ReservarPecas
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import ItemReserva, StatusReserva
 from src.estoque.dominio.sku import Sku
-from src.execucao.aplicacao.ports import ItemDaFila
+from src.execucao.aplicacao.ports import DiagnosticoAnonimizado, ItemDaFila
 from src.execucao.aplicacao.use_cases import (
     AgendarExecucao,
+    AnonimizarVeiculo,
     CancelarExecucao,
     FinalizarExecucao,
     IniciarExecucao,
@@ -33,6 +36,7 @@ from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 from tests.fakes import (
     EstoqueEmMemoria,
     ExecucoesEmMemoria,
+    FakeTransacaoDoComando,
     FakeUnitOfWork,
     FilaFixa,
     ItensEmMemoria,
@@ -53,6 +57,7 @@ def _agendada(ordem_id: UUID | None = None) -> Execucao:
         prioridade=Prioridade.NORMAL,
         veiculo=None,
         agora=datetime.now(UTC),
+        agendamento_id=uuid4(),
     )
 
 
@@ -60,11 +65,13 @@ def _estoque_com_reserva(*ordens: UUID) -> EstoqueEmMemoria:
     """Estoque em memoria com uma reserva ATIVA (sem pecas) para cada ordem."""
     itens, reservas = ItensEmMemoria(), ReservasEmMemoria()
     for ordem_id in ordens:
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(ordem_id, [])
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(ordem_id, [])
     return EstoqueEmMemoria(itens, reservas)
 
 
-def _eventos(uow: FakeUnitOfWork) -> list[tuple[str, dict[str, object]]]:
+def _eventos(
+    uow: FakeUnitOfWork | FakeTransacaoDoComando,
+) -> list[tuple[str, dict[str, object]]]:
     return [(e.tipo, dados_do_evento(e)) for e in uow.eventos]
 
 
@@ -88,7 +95,7 @@ def _oficina(*, reservar: bool = True) -> _Oficina:
     )
     reservas = ReservasEmMemoria()
     if reservar:
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             execucao.ordem_id, [ItemReserva(VELA, 4)]
         )
     estoque, uow = EstoqueEmMemoria(itens, reservas), FakeUnitOfWork()
@@ -112,12 +119,12 @@ def _em_execucao(*, reservar: bool = True) -> _Oficina:
 
 class TestAgendar:
     def test_enfileira_com_o_retrato_e_responde_com_a_posicao(self) -> None:
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         veiculos = VeiculosEmMemoria({ordem_id: VEICULO})
         execucao = AgendarExecucao(
             repo, FilaFixa(posicao=3), veiculos, _estoque_com_reserva(ordem_id), uow
-        ).executar(ordem_id, Prioridade.ALTA)
+        ).executar(ordem_id, Prioridade.ALTA, agendamento_id=uuid4())
 
         assert repo.execucoes[ordem_id] is execucao
         assert (execucao.status, execucao.prioridade) == (
@@ -131,14 +138,14 @@ class TestAgendar:
 
     def test_reenvio_com_execucao_na_fila_reemite_e_mantem_prioridade(self) -> None:
         existente = _agendada()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         resultado = AgendarExecucao(
             ExecucoesEmMemoria(existente),
             FilaFixa(posicao=2),
             VeiculosEmMemoria(),
             _estoque_com_reserva(existente.ordem_id),
             uow,
-        ).executar(existente.ordem_id, Prioridade.ALTA)
+        ).executar(existente.ordem_id, Prioridade.ALTA, agendamento_id=uuid4())
         assert resultado is existente
         assert resultado.prioridade is Prioridade.NORMAL
         assert _eventos(uow) == [
@@ -148,33 +155,41 @@ class TestAgendar:
             )
         ]
 
-    def test_reenvio_atrasado_apos_inicio_e_ignorado(self) -> None:
+    def test_reenvio_atrasado_apos_inicio_e_ignorado(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Descompasso de estado (ADR-036): ack com command_ignored e o codigo.
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         existente = _agendada()
         existente.iniciar(MECANICO, datetime.now(UTC))
-        uow = FakeUnitOfWork()
-        AgendarExecucao(
-            ExecucoesEmMemoria(existente),
-            FilaFixa(),
-            VeiculosEmMemoria(),
-            _estoque_com_reserva(existente.ordem_id),
-            uow,
-        ).executar(existente.ordem_id, Prioridade.NORMAL)
-        assert (uow.eventos, uow.commits) == ([], 0)
+        uow = FakeTransacaoDoComando()
+        with capture_logs() as logs:
+            AgendarExecucao(
+                ExecucoesEmMemoria(existente),
+                FilaFixa(),
+                VeiculosEmMemoria(),
+                _estoque_com_reserva(existente.ordem_id),
+                uow,
+            ).executar(existente.ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
+        assert (uow.eventos, uow.descartado) == ([], True)
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "AgendarExecucao")
+        ]
 
     def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
         repo = ExecucoesEmMemoria()
         ordem_id = uuid4()
-        CancelarExecucao(repo, FakeUnitOfWork()).executar(ordem_id)
+        CancelarExecucao(repo, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = repo.execucoes[ordem_id]
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
 
         resultado = AgendarExecucao(
             repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
-        ).executar(ordem_id, Prioridade.NORMAL)
+        ).executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
         assert resultado is lapide
         assert resultado.status is StatusExecucao.CANCELADA
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
     def test_prioridade_fora_do_contrato(self) -> None:
         ordem_id, urgente = uuid4(), "urgente"
@@ -183,10 +198,10 @@ class TestAgendar:
             FilaFixa(),
             VeiculosEmMemoria(),
             _estoque_com_reserva(ordem_id),
-            FakeUnitOfWork(),
+            FakeTransacaoDoComando(),
         )
         with pytest.raises(ValueError, match="Prioridade"):
-            uc.executar(ordem_id, urgente)
+            uc.executar(ordem_id, urgente, agendamento_id=uuid4())
 
     @pytest.mark.parametrize(
         "reserva",
@@ -205,12 +220,12 @@ class TestAgendar:
         reservas = ReservasEmMemoria()
         if reserva != "nenhuma":
             quantidade = 9 if reserva == "recusada" else 1
-            ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+            ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
                 ordem_id, [ItemReserva(VELA, quantidade)]
             )
         if reserva == "liberada":
             reservas.reservas[ordem_id].liberar(datetime.now(UTC))
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         uc = AgendarExecucao(
             repo,
             FilaFixa(),
@@ -220,10 +235,10 @@ class TestAgendar:
         )
 
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
-            uc.executar(ordem_id, Prioridade.NORMAL)
+            uc.executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
         assert repo.execucoes == {}
-        assert (uow.eventos, uow.rollbacks) == ([], 1)
+        assert (uow.eventos, uow.desfeitas) == ([], 1)
 
 
 class TestListarFila:
@@ -246,7 +261,7 @@ class TestListarFila:
 class TestCancelar:
     def test_cancela_e_responde(self) -> None:
         execucao = _agendada()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         CancelarExecucao(ExecucoesEmMemoria(execucao), uow).executar(execucao.ordem_id)
         assert execucao.status is StatusExecucao.CANCELADA
         assert _eventos(uow) == [
@@ -255,7 +270,7 @@ class TestCancelar:
 
     def test_repetido_reemite_a_resposta(self) -> None:
         execucao = _agendada()
-        repo, uow = ExecucoesEmMemoria(execucao), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(execucao), FakeTransacaoDoComando()
         CancelarExecucao(repo, uow).executar(execucao.ordem_id)
         CancelarExecucao(repo, uow).executar(execucao.ordem_id)
         assert [e.tipo for e in uow.eventos] == 2 * ["ExecucaoCancelada"]
@@ -263,14 +278,14 @@ class TestCancelar:
     def test_depois_do_pivot_nao_cancela(self) -> None:
         execucao = _agendada()
         execucao.iniciar(MECANICO, datetime.now(UTC))
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         uc = CancelarExecucao(ExecucoesEmMemoria(execucao), uow)
         with pytest.raises(TransicaoStatusInvalidaException):
             uc.executar(execucao.ordem_id)
         assert uow.eventos == []
 
     def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
 
         CancelarExecucao(repo, uow).executar(ordem_id)
@@ -396,3 +411,137 @@ class TestFinalizar:
         o = _oficina()
         with pytest.raises(TransicaoStatusInvalidaException):
             o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
+
+
+class TestCausaDosFatosDoMecanico:
+    """Os fatos do mecanico respondem ao AgendarExecucao que abriu a execucao."""
+
+    def test_agendamento_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
+        ordem_id, comando, reenvio = uuid4(), uuid4(), uuid4()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
+        caso = AgendarExecucao(
+            repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
+        )
+        caso.executar(ordem_id, Prioridade.NORMAL, agendamento_id=comando)
+        caso.executar(ordem_id, Prioridade.ALTA, agendamento_id=reenvio)
+        assert repo.execucoes[ordem_id].agendamento_id == comando
+        # A resposta republicada fica sem causa propria: a outbox usa a do reenvio.
+        assert [e.causation_id for e in uow.eventos] == [None, None]
+
+    def test_inicio_e_finalizacao_levam_o_id_do_agendamento(self) -> None:
+        ordem_id, comando = uuid4(), uuid4()
+        execucao = Execucao.agendar(
+            ordem_id=ordem_id,
+            prioridade=Prioridade.NORMAL,
+            veiculo=None,
+            agora=datetime.now(UTC),
+            agendamento_id=comando,
+        )
+        repo, estoque = ExecucoesEmMemoria(execucao), _estoque_com_reserva(ordem_id)
+        uow = FakeUnitOfWork()
+        IniciarExecucao(repo, estoque, uow).executar(ordem_id, MECANICO)
+        FinalizarExecucao(repo, estoque, uow).executar(ordem_id, MECANICO)
+        assert [(e.tipo, e.causation_id) for e in uow.eventos] == [
+            ("ExecucaoIniciada", comando),
+            ("ExecucaoFinalizada", comando),
+        ]
+
+
+class _DiagnosticosDoVeiculo:
+    """Port do contexto vizinho: devolve os anonimizados e registra os pedidos."""
+
+    def __init__(self, *anonimizados: DiagnosticoAnonimizado) -> None:
+        self._anonimizados = list(anonimizados)
+        self.pedidos: list[UUID] = []
+
+    def anonimizar(self, veiculo_id: UUID) -> list[DiagnosticoAnonimizado]:
+        self.pedidos.append(veiculo_id)
+        anonimizados, self._anonimizados = self._anonimizados, []
+        return anonimizados
+
+
+class _MensagensGuardadas:
+    def __init__(self) -> None:
+        self.ordens: list[list[UUID]] = []
+
+    def anonimizar(self, ordens: Sequence[UUID]) -> int:
+        self.ordens.append(list(ordens))
+        return len(ordens)
+
+
+def _com_retrato(veiculo: Veiculo, status: str = "cancelada") -> Execucao:
+    execucao = Execucao.agendar(
+        ordem_id=uuid4(),
+        prioridade=Prioridade.NORMAL,
+        veiculo=veiculo,
+        agora=datetime.now(UTC),
+        agendamento_id=uuid4(),
+    )
+    if status == "cancelada":
+        execucao.cancelar(datetime.now(UTC))
+    return execucao
+
+
+class TestAnonimizarVeiculo:
+    def test_troca_as_copias_do_veiculo_e_os_textos_das_mensagens(self) -> None:
+        outro = Veiculo(
+            veiculo_id=uuid4(), placa="RIO2A18", marca="VW", modelo="Gol", ano=2019
+        )
+        alvo, vizinha = _com_retrato(VEICULO), _com_retrato(outro)
+        execucoes = ExecucoesEmMemoria(alvo, vizinha)
+        diagnostico = DiagnosticoAnonimizado(ordem_id=uuid4(), em_andamento=False)
+        diagnosticos, mensagens = (
+            _DiagnosticosDoVeiculo(diagnostico),
+            _MensagensGuardadas(),
+        )
+        uow = FakeTransacaoDoComando()
+
+        trocados = AnonimizarVeiculo(execucoes, diagnosticos, mensagens, uow).executar(
+            VEICULO.veiculo_id
+        )
+
+        assert trocados == 2
+        assert alvo.veiculo is not None
+        assert alvo.veiculo.placa == f"ANONIMIZADO:{VEICULO.veiculo_id}"
+        assert vizinha.veiculo == outro
+        assert execucoes.salvas == [alvo.ordem_id]
+        assert diagnosticos.pedidos == [VEICULO.veiculo_id]
+        assert mensagens.ordens == [[diagnostico.ordem_id]]
+        assert (uow.eventos, uow.descartado) == ([], False)
+
+    def test_repetido_nao_muda_nada_e_descarta_o_comando(self) -> None:
+        execucoes = ExecucoesEmMemoria(_com_retrato(VEICULO))
+        uow = FakeTransacaoDoComando()
+        caso = AnonimizarVeiculo(
+            execucoes, _DiagnosticosDoVeiculo(), _MensagensGuardadas(), uow
+        )
+        assert caso.executar(VEICULO.veiculo_id) == 1
+        assert caso.executar(VEICULO.veiculo_id) == 0
+        assert uow.descartado
+        assert len(execucoes.salvas) == 1
+
+    def test_registro_ainda_em_andamento_e_anonimizado_com_aviso(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # O OS so elimina cliente sem OS ativa: se a premissa falhar, a placa
+        # sai do mesmo jeito, e o log diz quais ordens estavam em andamento.
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
+        na_fila = _com_retrato(VEICULO, status="aguardando")
+        diagnostico = DiagnosticoAnonimizado(ordem_id=uuid4(), em_andamento=True)
+        with capture_logs() as logs:
+            AnonimizarVeiculo(
+                ExecucoesEmMemoria(na_fila),
+                _DiagnosticosDoVeiculo(diagnostico),
+                _MensagensGuardadas(),
+                FakeTransacaoDoComando(),
+            ).executar(VEICULO.veiculo_id)
+        (aviso,) = [
+            log
+            for log in logs
+            if log["event"] == "vehicle_anonymized_while_in_progress"
+        ]
+        assert aviso["log_level"] == "warning"
+        assert set(aviso["ordens"]) == {
+            str(diagnostico.ordem_id),
+            str(na_fila.ordem_id),
+        }

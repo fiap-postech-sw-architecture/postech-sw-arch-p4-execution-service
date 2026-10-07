@@ -11,13 +11,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from src.compartilhado.dominio.veiculo import Veiculo
-from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import (
     DescartarDiagnostico,
     RegistrarSolicitacaoDeDiagnostico,
 )
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.infraestrutura.seed import semear
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -43,7 +43,7 @@ def _solicitar(
     with session_factory() as session:
         RegistrarSolicitacaoDeDiagnostico(
             DiagnosticoSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(
             ordem_id,
             Veiculo(
@@ -54,6 +54,7 @@ def _solicitar(
                 ano=2022,
             ),
             descricao,
+            solicitacao_id=uuid4(),
         )
     return ordem_id
 
@@ -146,7 +147,7 @@ def test_lapide_aparece_descartada_sem_retrato(
     with session_factory() as session:
         DescartarDiagnostico(
             DiagnosticoSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(ordem_id)
 
     resposta = api.get(URL, params={"status": "DESCARTADO"}, headers=mecanico)

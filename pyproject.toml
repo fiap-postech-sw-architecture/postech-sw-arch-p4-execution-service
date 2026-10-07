@@ -18,6 +18,12 @@ dependencies = [
     "cryptography>=50.0.1",  # PYSEC-2026-3552 / CVE-2026-69247 antes da 50.0.1
     "anyio>=4.15.1",  # advisory de out/2026 nas versoes anteriores
     "prometheus-client>=0.26.0",
+    "pika>=1.4.4",
+    "jsonschema>=4.26.0",
+    "rfc3339-validator>=0.1.4",
+    "opentelemetry-sdk>=1.45.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -31,6 +37,8 @@ dev = [
     "mypy>=2.3.1",
     "bandit>=1.9.4",
     "import-linter>=2.14",
+    "types-jsonschema>=4.26.0",
+    "types-pyyaml>=6.0.12",
 ]
 
 [tool.uv]
@@ -79,6 +87,8 @@ known-first-party = ["src"]
 # importa interfaces). Entre contextos, o contrato forbidden abaixo.
 [tool.importlinter]
 root_packages = ["src"]
+# Os contratos tambem olham pacotes de terceiros (o de frameworks abaixo).
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Camadas por contexto (interfaces -> infraestrutura -> aplicacao -> dominio)"
@@ -109,6 +119,36 @@ forbidden_modules = [
     "src.estoque.infraestrutura",
     "src.diagnostico.infraestrutura",
     "src.execucao.infraestrutura",
+]
+
+# Mensageria, persistencia, HTTP e telemetria ficam fora do nucleo por gate, nao
+# por convencao. structlog fica permitido: os casos de uso logam decisoes.
+[[tool.importlinter.contracts]]
+name = "Dominio e aplicacao nao dependem de frameworks nem de drivers"
+type = "forbidden"
+source_modules = [
+    "src.compartilhado.dominio",
+    "src.compartilhado.aplicacao",
+    "src.estoque.dominio",
+    "src.estoque.aplicacao",
+    "src.diagnostico.dominio",
+    "src.diagnostico.aplicacao",
+    "src.execucao.dominio",
+    "src.execucao.aplicacao",
+]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "sqlalchemy",
+    "psycopg2",
+    "httpx",
+    "jwt",
+    "prometheus_client",
+    "pika",
+    "jsonschema",
+    "yaml",
+    "opentelemetry",
 ]
 
 [[tool.importlinter.contracts]]
@@ -160,9 +200,15 @@ python_version = "3.14"
 warn_return_any = true
 warn_unused_ignores = true
 
+# pika nao publica tipos (sem py.typed nem stubs mantidos).
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 markers = [
     "integracao: testes que sobem PostgreSQL real via testcontainers",
+    "rede: precisa de internet (checksum dos contratos contra o platform); offline: -m 'not rede'",
 ]
 addopts = "--strict-markers --cov --cov-report=term-missing:skip-covered"
 testpaths = ["tests"]

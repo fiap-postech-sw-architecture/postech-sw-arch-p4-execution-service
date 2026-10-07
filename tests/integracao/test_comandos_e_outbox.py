@@ -41,6 +41,7 @@ from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
 )
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,7 +74,7 @@ def _reservar(
         return ReservarPecas(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
-            _uow(session),
+            transacao_do_comando(session),
         ).executar(ordem_id, pecas)
 
 
@@ -85,7 +86,7 @@ def _agendador(
         fila or FilaDeExecucaoSQLAlchemy(session),
         VeiculosSQLAlchemy(session),
         EstoqueSQLAlchemyAdapter(session),
-        _uow(session),
+        transacao_do_comando(session),
     )
 
 
@@ -94,7 +95,7 @@ def _liberar(session_factory: sessionmaker[Session], ordem_id: Any) -> None:
         LiberarReserva(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
-            _uow(session),
+            transacao_do_comando(session),
         ).executar(ordem_id)
 
 
@@ -163,7 +164,7 @@ def test_erro_no_meio_do_caso_de_uso_nao_deixa_rastro(
     with session_factory() as session:
         uc = _agendador(session, _FilaQueQuebra(session))
         with pytest.raises(RuntimeError):
-            uc.executar(ordem_id, Prioridade.NORMAL)
+            uc.executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
     with session_factory() as session:
         assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
     assert outbox() == respostas  # so a PecasReservadas de antes
@@ -177,7 +178,7 @@ def test_agendamento_sem_reserva_ativa_nao_entra_na_fila(
     with session_factory() as session:
         uc = _agendador(session)
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
-            uc.executar(ordem_id, Prioridade.NORMAL)
+            uc.executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
     with session_factory() as session:
         assert ExecucaoSQLAlchemyRepository(session).obter(ordem_id) is None
     assert outbox() == []
@@ -198,11 +199,11 @@ def test_agendamento_e_cancelamento(
     ]:
         _reservar(session_factory, ordem_id, 0)
         with session_factory() as session:
-            _agendador(session).executar(ordem_id, prioridade)
+            _agendador(session).executar(ordem_id, prioridade, agendamento_id=uuid4())
     with session_factory() as session:
-        CancelarExecucao(ExecucaoSQLAlchemyRepository(session), _uow(session)).executar(
-            segunda
-        )
+        CancelarExecucao(
+            ExecucaoSQLAlchemyRepository(session), transacao_do_comando(session)
+        ).executar(segunda)
 
     agendamentos = [
         (linha["tipo"], linha["dados"])
@@ -227,11 +228,11 @@ def test_solicitacao_e_descarte_de_diagnostico(
     for _ in range(2):  # reenvio do comando nao duplica
         with session_factory() as session:
             RegistrarSolicitacaoDeDiagnostico(
-                DiagnosticoSQLAlchemyRepository(session), _uow(session)
-            ).executar(ordem_id, veiculo, "Nao liga")
+                DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
+            ).executar(ordem_id, veiculo, "Nao liga", solicitacao_id=uuid4())
     with session_factory() as session:
         DescartarDiagnostico(
-            DiagnosticoSQLAlchemyRepository(session), _uow(session)
+            DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
         ).executar(ordem_id)
     assert [linha["tipo"] for linha in outbox()] == ["DiagnosticoDescartado"]
 
@@ -244,28 +245,31 @@ def test_compensacoes_antes_dos_originais_gravam_lapides_e_descartam_os_atrasado
     ordem_id = uuid4()
     with session_factory() as session:
         DescartarDiagnostico(
-            DiagnosticoSQLAlchemyRepository(session), _uow(session)
+            DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
         ).executar(ordem_id)
     with session_factory() as session:
-        CancelarExecucao(ExecucaoSQLAlchemyRepository(session), _uow(session)).executar(
-            ordem_id
-        )
+        CancelarExecucao(
+            ExecucaoSQLAlchemyRepository(session), transacao_do_comando(session)
+        ).executar(ordem_id)
     _liberar(session_factory, ordem_id)
     respostas = [(linha["tipo"], linha["dados"]) for linha in outbox()]
 
     with session_factory() as session:
         RegistrarSolicitacaoDeDiagnostico(
-            DiagnosticoSQLAlchemyRepository(session), _uow(session)
+            DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
         ).executar(
             ordem_id,
             Veiculo(
                 veiculo_id=uuid4(), placa="ABC1234", marca="VW", modelo="Gol", ano=2010
             ),
             "Nao liga",
+            solicitacao_id=uuid4(),
         )
     reserva = _reservar(session_factory, ordem_id, 2)
     with session_factory() as session:
-        _agendador(session).executar(ordem_id, Prioridade.NORMAL)
+        _agendador(session).executar(
+            ordem_id, Prioridade.NORMAL, agendamento_id=uuid4()
+        )
 
     assert respostas == [
         ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)}),

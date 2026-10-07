@@ -5,6 +5,9 @@ from typing import Any
 from sqlalchemy import Column, DateTime, Enum, Index, Table, Text, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
+from src.compartilhado.infraestrutura.rastreamento import (
+    colunas_do_contexto_de_espera,
+)
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
     JsonDeDominio,
     check_de_enum,
@@ -53,9 +56,18 @@ diagnosticos_table = Table(
     Column("iniciado_em", DateTime(timezone=True), nullable=True),
     Column("concluido_em", DateTime(timezone=True), nullable=True),
     Column("descartado_em", DateTime(timezone=True), nullable=True),
+    # Id do SolicitarDiagnostico; nulo na lapide.
+    Column("solicitacao_id", Uuid, nullable=True),
+    # Contexto de trace do comando que pos o diagnostico na fila do mecanico.
+    *colunas_do_contexto_de_espera(),
     check_de_enum("status", StatusDiagnostico, "ck_diagnosticos_status"),
 )
 
+# AnonimizarVeiculo acha os retratos do veiculo sem varrer a tabela.
+Index(
+    "ix_diagnosticos_veiculo_id",
+    diagnosticos_table.c.veiculo["veiculo_id"].astext,
+)
 # Fila do mecanico: GET /diagnosticos?status=AGUARDANDO por ordem de chegada.
 Index(
     "ix_diagnosticos_status_solicitado_em",
@@ -66,6 +78,8 @@ Index(
 mapper_registry.map_imperatively(
     Diagnostico,
     diagnosticos_table,
+    # O contexto de trace nao e do agregado: so a tabela o guarda.
+    exclude_properties=["traceparent", "tracestate"],
     properties={
         "id": diagnosticos_table.c.ordem_id,
         "_status": diagnosticos_table.c.status,
@@ -78,5 +92,6 @@ mapper_registry.map_imperatively(
         "_iniciado_em": diagnosticos_table.c.iniciado_em,
         "_concluido_em": diagnosticos_table.c.concluido_em,
         "_descartado_em": diagnosticos_table.c.descartado_em,
+        "_solicitacao_id": diagnosticos_table.c.solicitacao_id,
     },
 )

@@ -38,6 +38,15 @@ class DiagnosticoSQLAlchemyRepository:
         ):
             self._session.flush()
 
+    def do_veiculo(self, veiculo_id: UUID) -> list[Diagnostico]:
+        stmt = (
+            select(Diagnostico)
+            .where(diagnosticos_table.c.veiculo["veiculo_id"].astext == str(veiculo_id))
+            .order_by(diagnosticos_table.c.ordem_id)
+            .with_for_update()
+        )
+        return list(self._session.scalars(stmt))
+
     def listar(
         self, status: StatusDiagnostico | None, offset: int, limit: int
     ) -> list[Diagnostico]:

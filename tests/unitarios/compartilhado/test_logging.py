@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -18,7 +19,7 @@ from src.compartilhado.infraestrutura.logging import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
 
 class TestLogging:
@@ -213,6 +214,33 @@ class TestScrubTelefone:
         assert "***" in str(result["event"])
 
 
+class TestScrubEntradaHostil:
+    """O scrub roda sobre valores vindos de mensagem: custo linear no tamanho."""
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("a." * 40_000, id="local-part-sem-arroba"),
+            pytest.param("a." * 40_000 + "@", id="local-part-gigante"),
+            pytest.param("a@" + "a." * 40_000, id="dominio-sem-tld"),
+            pytest.param("x-" * 40_000, id="hifens"),
+            pytest.param("a@a." * 20_000, id="arrobas"),
+        ],
+    )
+    def test_scrub_de_80_kb_hostis_fica_abaixo_de_100_ms(self, texto: str) -> None:
+        inicio = time.perf_counter()
+        scrub_pii(None, "info", {"id": texto})
+        assert time.perf_counter() - inicio < 0.1
+
+    @pytest.mark.parametrize(
+        "email", ["joao.silva@exemplo.com.br", "a+b@sub.dominio.io", "x@y.co"]
+    )
+    def test_email_comum_continua_mascarado(self, email: str) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": f"de {email}"})["event"])
+        assert email not in resultado
+        assert "***@" in resultado
+
+
 # UUID v4 de verdade cujo grupo "02-3465-4237" (dd-dddd-dddd) casava com o telefone.
 _UUID_COM_SPLIT_DE_TELEFONE = "732ffc02-3465-4237-a5f6-12fd4a2b3be0"
 
@@ -224,15 +252,54 @@ class TestScrubUuid:
         texto = f"ordem {_UUID_COM_SPLIT_DE_TELEFONE}"
         assert scrub_pii(None, "info", {"event": texto})["event"] == texto
 
-    def test_dez_mil_uuid4_ficam_intactos(self) -> None:
+    @pytest.mark.parametrize(
+        "caixa", [str.lower, str.upper], ids=["minusculas", "maiusculas"]
+    )
+    def test_dez_mil_uuid4_ficam_intactos(self, caixa: Callable[[str], str]) -> None:
         # Antes da correcao cerca de 1,4% dos UUID v4 saiam mascarados.
-        ids = [str(uuid4()) for _ in range(10_000)]
+        ids = [caixa(str(uuid4())) for _ in range(10_000)]
         mascarados = [
             valor
             for valor in ids
             if scrub_pii(None, "info", {"id": valor})["id"] != valor
         ]
         assert mascarados == []
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("tel-11 99999-0000", id="colado-a-hifen"),
+            pytest.param("tel(11)99999-0000", id="colado-a-letra"),
+            pytest.param("ligar+5511999990000", id="mais-55-colado-a-letra"),
+            pytest.param("+5511999990000", id="mais-55-corrido"),
+        ],
+    )
+    def test_telefone_colado_a_letra_ou_hifen_continua_mascarado(
+        self, texto: str
+    ) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": texto})["event"])
+        assert "9999" not in resultado
+        assert "***" in resultado
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("tel 11 99999-0000x", id="colado-a-letra-depois"),
+            pytest.param("tel 11 99999-0000-ramal", id="colado-a-hifen-depois"),
+            pytest.param("fone(11)99999-0000", id="hexa-colado-ao-parentese"),
+            pytest.param("cafe+5511999990000", id="hexa-colado-ao-mais"),
+        ],
+    )
+    def test_telefone_colado_depois_ou_aberto_por_parentese_ou_mais_e_mascarado(
+        self, texto: str
+    ) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": texto})["event"])
+        assert "9999" not in resultado
+        assert "***" in resultado
+
+    def test_numero_que_continua_em_digito_nao_e_telefone(self) -> None:
+        texto = "protocolo 11 99999-00001"
+        assert scrub_pii(None, "info", {"event": texto})["event"] == texto
 
     def test_correlation_id_sai_intacto_no_log_json(
         self, log_capturado: io.StringIO

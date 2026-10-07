@@ -9,7 +9,7 @@ from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
 )
-from src.compartilhado.dominio.veiculo import Veiculo
+from src.compartilhado.dominio.veiculo import TEXTO_ELIMINADO, Veiculo
 from src.diagnostico.dominio.diagnostico import (
     Diagnostico,
     ItemDiagnostico,
@@ -37,6 +37,7 @@ def _diagnostico() -> Diagnostico:
         veiculo=_veiculo(),
         descricao_problema=" Barulho ao frear ",
         agora=AGORA,
+        solicitacao_id=uuid4(),
     )
 
 
@@ -77,13 +78,18 @@ class TestDiagnostico:
             veiculo=_veiculo(placa="abc-1234"),
             descricao_problema="x",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         assert diagnostico.veiculo is not None
         assert diagnostico.veiculo.placa == "ABC1234"
         ordem_id, invalido = uuid4(), _veiculo(placa="ABC")
         with pytest.raises(ValueError, match="Placa invalida"):
             Diagnostico.solicitar(
-                ordem_id=ordem_id, veiculo=invalido, descricao_problema="x", agora=AGORA
+                ordem_id=ordem_id,
+                veiculo=invalido,
+                descricao_problema="x",
+                agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_descricao_com_caractere_de_controle_e_recusada(self) -> None:
@@ -94,6 +100,7 @@ class TestDiagnostico:
                 veiculo=veiculo,
                 descricao_problema="freio\x00chiando",
                 agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_descricao_multilinha_e_aceita(self) -> None:
@@ -102,6 +109,7 @@ class TestDiagnostico:
             veiculo=_veiculo(),
             descricao_problema="freio chiando\r\nao frear",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         assert diagnostico.descricao_problema == "freio chiando\r\nao frear"
 
@@ -126,6 +134,7 @@ class TestDiagnostico:
                 veiculo=veiculo,
                 descricao_problema=descricao,
                 agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_iniciar_registra_mecanico(self) -> None:
@@ -236,6 +245,7 @@ class TestDiagnostico:
             veiculo=_veiculo(placa="ABC1D23"),
             descricao_problema="cliente Joao reclamou",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         diagnostico.iniciar(MECANICO, AGORA)
         diagnostico.concluir(MECANICO, ITENS, "falar com Maria", AGORA)
@@ -291,3 +301,61 @@ class TestCoerenciaNaConstrucao:
                 _itens=itens,
                 _solicitado_em=AGORA,
             )
+
+
+class TestAnonimizarTitular:
+    def test_troca_a_placa_e_os_textos_livres_pelos_marcadores(self) -> None:
+        diagnostico = _concluido_com_observacoes("Cliente Maria Souza, rua das Flores")
+        assert diagnostico.anonimizar_titular()
+        assert diagnostico.veiculo is not None
+        assert diagnostico.veiculo.placa.startswith("ANONIMIZADO:")
+        assert diagnostico.veiculo.marca == "Fiat"  # nao identifica o titular
+        assert diagnostico.descricao_problema == TEXTO_ELIMINADO
+        assert diagnostico.observacoes == TEXTO_ELIMINADO
+        assert not diagnostico.em_andamento
+
+    def test_repetido_nao_muda_nada(self) -> None:
+        diagnostico = _concluido_com_observacoes("")
+        assert diagnostico.anonimizar_titular()
+        assert not diagnostico.anonimizar_titular()
+        assert diagnostico.observacoes == ""  # vazio fica vazio
+
+    def test_lapide_sem_retrato_nao_muda(self) -> None:
+        lapide = Diagnostico.lapide(ordem_id=uuid4(), agora=datetime.now(UTC))
+        assert not lapide.anonimizar_titular()
+
+    def test_em_andamento_ate_a_conclusao(self) -> None:
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=_VEICULO_LGPD,
+            descricao_problema="Barulho",
+            agora=datetime.now(UTC),
+            solicitacao_id=uuid4(),
+        )
+        assert diagnostico.em_andamento
+        diagnostico.iniciar(uuid4(), datetime.now(UTC))
+        assert diagnostico.em_andamento
+
+
+_VEICULO_LGPD = Veiculo(
+    veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
+)
+
+
+def _concluido_com_observacoes(observacoes: str) -> Diagnostico:
+    diagnostico = Diagnostico.solicitar(
+        ordem_id=uuid4(),
+        veiculo=_VEICULO_LGPD,
+        descricao_problema="Barulho; ligar para Maria (11) 99999-0000",
+        agora=datetime.now(UTC),
+        solicitacao_id=uuid4(),
+    )
+    mecanico = uuid4()
+    diagnostico.iniciar(mecanico, datetime.now(UTC))
+    diagnostico.concluir(
+        mecanico,
+        [ItemDiagnostico(tipo=TipoItem.SERVICO, codigo="SRV-REVISAO", quantidade=1)],
+        observacoes,
+        datetime.now(UTC),
+    )
+    return diagnostico

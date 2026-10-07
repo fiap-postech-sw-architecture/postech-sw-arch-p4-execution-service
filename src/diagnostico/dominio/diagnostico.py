@@ -15,6 +15,7 @@ from src.compartilhado.dominio.maquina_de_estados import validar_transicao
 from src.compartilhado.dominio.quantidade import quantidade_valida
 from src.compartilhado.dominio.texto import texto_valido
 from src.compartilhado.dominio.value_object import ValueObject
+from src.compartilhado.dominio.veiculo import TEXTO_ELIMINADO
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -138,6 +139,8 @@ class Diagnostico(AggregateRoot):
     _iniciado_em: datetime | None = None
     _concluido_em: datetime | None = None
     _descartado_em: datetime | None = None
+    # Id do SolicitarDiagnostico que abriu o fluxo: causa dos fatos do mecanico.
+    _solicitacao_id: UUID | None = None
 
     def __post_init__(self) -> None:
         _exigir_coerencia(self._status, self._mecanico_id, self._itens)
@@ -158,12 +161,16 @@ class Diagnostico(AggregateRoot):
         veiculo: Veiculo,
         descricao_problema: str,
         agora: datetime,
+        solicitacao_id: UUID,
     ) -> Diagnostico:
+        """Diagnostico AGUARDANDO; ``solicitacao_id`` e o id do comando, causa dos
+        fatos que o mecanico gera (so a lapide e a reidratacao ficam sem ele)."""
         return cls(
             id=ordem_id,
             _veiculo=veiculo.validado(agora),
             _descricao_problema=descricao_problema,
             _solicitado_em=agora,
+            _solicitacao_id=solicitacao_id,
         )
 
     @classmethod
@@ -227,6 +234,10 @@ class Diagnostico(AggregateRoot):
     def descartado_em(self) -> datetime | None:
         return self._descartado_em
 
+    @property
+    def solicitacao_id(self) -> UUID | None:
+        return self._solicitacao_id
+
     def iniciar(self, mecanico_id: UUID, agora: datetime) -> bool:
         """AGUARDANDO -> EM_ANDAMENTO; repetir pelo mesmo mecanico e no-op (False)."""
         if self._status is StatusDiagnostico.EM_ANDAMENTO:
@@ -288,6 +299,26 @@ class Diagnostico(AggregateRoot):
             return
         self._transicionar(StatusDiagnostico.DESCARTADO)
         self._descartado_em = agora
+
+    @property
+    def em_andamento(self) -> bool:
+        """Ainda espera o mecanico (AGUARDANDO ou EM_ANDAMENTO)."""
+        return self._status in _ANTES_DA_CONCLUSAO
+
+    def anonimizar_titular(self) -> bool:
+        """Eliminacao LGPD: placa do retrato e textos livres pelos marcadores.
+
+        Descricao do problema e observacoes podem trazer nome, endereco ou a
+        placa do titular. Idempotente: False quando nada muda (ja anonimizado,
+        ou a lapide, sem retrato).
+        """
+        if self._veiculo is None or self._veiculo.anonimizado:
+            return False
+        self._veiculo = self._veiculo.anonimizar()
+        self._descricao_problema = TEXTO_ELIMINADO
+        if self._observacoes:
+            self._observacoes = TEXTO_ELIMINADO
+        return True
 
     def _transicionar(self, para: StatusDiagnostico) -> None:
         validar_transicao(_TRANSICOES, self._status, para, agregado="Diagnostico")

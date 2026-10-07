@@ -23,11 +23,16 @@ from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import (
+        UnitOfWork,
+        UnitOfWorkDoComando,
+    )
     from src.execucao.aplicacao.ports import (
+        DiagnosticosDoVeiculoPort,
         EstoquePort,
         FilaDeExecucaoPort,
         ItemDaFila,
+        MensagensGuardadasPort,
         VeiculosPort,
     )
     from src.execucao.dominio.repository import ExecucaoRepository
@@ -62,7 +67,7 @@ class AgendarExecucao:
     prioridade original fica); ja iniciada, finalizada ou cancelada (inclusive
     a lapide de um cancelamento adiantado), o comando atrasado e descartado sem
     efeito e sem resposta. A execucao nova copia o retrato do veiculo do
-    diagnostico, que a fila mostra ao mecanico.
+    diagnostico, que a fila mostra ao mecanico. Quem comita e o consumidor.
     """
 
     def __init__(
@@ -71,7 +76,7 @@ class AgendarExecucao:
         fila: FilaDeExecucaoPort,
         veiculos: VeiculosPort,
         estoque: EstoquePort,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._repo = repo
         self._fila = fila
@@ -80,8 +85,15 @@ class AgendarExecucao:
         self._uow = uow
 
     @releitura_em_corrida
-    def executar(self, ordem_id: UUID, prioridade: Prioridade) -> Execucao:
+    def executar(
+        self,
+        ordem_id: UUID,
+        prioridade: Prioridade,
+        agendamento_id: UUID,
+    ) -> Execucao:
         """Devolve a execucao da ordem (nova, na fila ou ja encerrada).
+
+        ``agendamento_id``: id do comando, causa dos fatos que o mecanico gera.
 
         Raises:
             ViolacaoRegraDeNegocioException: ordem nova sem reserva ATIVA.
@@ -95,17 +107,20 @@ class AgendarExecucao:
                     prioridade=prioridade,
                     veiculo=self._veiculos.da_ordem(ordem_id),
                     agora=agora,
+                    agendamento_id=agendamento_id,
                 )
                 if not self._estoque.tem_reserva_ativa(ordem_id):
                     raise _sem_reserva()
                 self._repo.salvar(execucao)
             elif execucao.status is not StatusExecucao.AGUARDANDO:
                 _log.info(
-                    "late_command_discarded",
+                    "command_ignored",
+                    codigo="COMANDO_ATRASADO",
                     comando="AgendarExecucao",
                     correlation_id=str(ordem_id),
                     status=execucao.status,
                 )
+                self._uow.descartar()
                 return execucao
             self._uow.registrar_evento(
                 ExecucaoAgendadaEvent(
@@ -114,7 +129,6 @@ class AgendarExecucao:
                     posicao_na_fila=self._fila.posicao(execucao),
                 )
             )
-            self._uow.commit()
         return execucao
 
 
@@ -138,7 +152,7 @@ class CancelarExecucao:
     ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
     """
 
-    def __init__(self, repo: ExecucaoRepository, uow: UnitOfWork) -> None:
+    def __init__(self, repo: ExecucaoRepository, uow: UnitOfWorkDoComando) -> None:
         self._repo = repo
         self._uow = uow
 
@@ -156,8 +170,7 @@ class CancelarExecucao:
             self._uow.registrar_evento(
                 ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
-            self._uow.commit()
-        # Depois do commit (ver DescartarDiagnostico).
+        # Depois do bloco (ver DescartarDiagnostico).
         _log.info("execution_cancelled", correlation_id=str(ordem_id), tombstone=lapide)
 
 
@@ -192,6 +205,7 @@ class IniciarExecucao:
                 ExecucaoIniciadaEvent(
                     ordem_id=ordem_id,
                     ocorrido_em=agora,
+                    causation_id=execucao.agendamento_id,
                     mecanico_id=mecanico_id,
                     iniciada_em=agora,
                 )
@@ -239,6 +253,7 @@ class FinalizarExecucao:
                 ExecucaoFinalizadaEvent(
                     ordem_id=ordem_id,
                     ocorrido_em=agora,
+                    causation_id=execucao.agendamento_id,
                     finalizada_em=agora,
                     pecas_consumidas=tuple(pecas),
                 )
@@ -252,3 +267,60 @@ class FinalizarExecucao:
                 mecanico_id=str(responsavel),
             )
         return execucao
+
+
+class AnonimizarVeiculo:
+    """Comando ``AnonimizarVeiculo`` (LGPD; fora da saga e sem resposta, RFC-004 5.3).
+
+    O OS Service, dono do cadastro, elimina os dados do titular e manda apagar
+    as copias daqui: a placa de cada retrato do veiculo (diagnostico e copia na
+    execucao) vira ``ANONIMIZADO:{veiculo_id}`` e os textos livres dos
+    diagnosticos dele (descricao do problema e observacoes, que podem trazer
+    nome, endereco ou a placa), inclusive as observacoes das mensagens ainda
+    guardadas na outbox, viram o marcador da eliminacao. Marca, modelo e ano
+    ficam: nao identificam o titular. Idempotente: repetido, nada muda e o
+    comando e descartado. O OS so elimina cliente sem OS ativa; registro ainda
+    em andamento e anonimizado do mesmo jeito, com aviso no log.
+    """
+
+    def __init__(
+        self,
+        execucoes: ExecucaoRepository,
+        diagnosticos: DiagnosticosDoVeiculoPort,
+        mensagens: MensagensGuardadasPort,
+        uow: UnitOfWorkDoComando,
+    ) -> None:
+        self._execucoes = execucoes
+        self._diagnosticos = diagnosticos
+        self._mensagens = mensagens
+        self._uow = uow
+
+    def executar(self, veiculo_id: UUID) -> int:
+        """Devolve quantos retratos mudaram (diagnosticos e execucoes)."""
+        with self._uow:
+            diagnosticos = self._diagnosticos.anonimizar(veiculo_id)
+            execucoes = [
+                execucao
+                for execucao in self._execucoes.do_veiculo(veiculo_id)
+                if execucao.anonimizar_titular()
+            ]
+            for execucao in execucoes:
+                self._execucoes.salvar(execucao)
+            mensagens = self._mensagens.anonimizar(
+                [diagnostico.ordem_id for diagnostico in diagnosticos]
+            )
+            if not (diagnosticos or execucoes):
+                self._uow.descartar()
+        em_andamento = [str(d.ordem_id) for d in diagnosticos if d.em_andamento] + [
+            str(e.ordem_id) for e in execucoes if e.em_andamento
+        ]
+        if em_andamento:
+            # O OS so elimina cliente sem OS ativa: premissa violada.
+            _log.warning("vehicle_anonymized_while_in_progress", ordens=em_andamento)
+        _log.info(
+            "vehicle_anonymized",
+            veiculo_id=str(veiculo_id),
+            retratos=len(diagnosticos) + len(execucoes),
+            mensagens=mensagens,
+        )
+        return len(diagnosticos) + len(execucoes)

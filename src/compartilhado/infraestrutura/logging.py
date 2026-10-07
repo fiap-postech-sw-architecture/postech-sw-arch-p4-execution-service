@@ -7,6 +7,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from opentelemetry import trace
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping
@@ -32,13 +33,29 @@ def adicionar_versao_imagem(
     return event_dict
 
 
+def adicionar_contexto_de_trace(
+    _logger: object,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
+    """``trace_id``/``span_id`` do span corrente: o Grafana leva do log ao trace."""
+    contexto = trace.get_current_span().get_span_context()
+    if contexto.is_valid:
+        event_dict.setdefault("trace_id", format(contexto.trace_id, "032x"))
+        event_dict.setdefault("span_id", format(contexto.span_id, "016x"))
+    return event_dict
+
+
 _CPF_PATTERN = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
 _CNPJ_PATTERN = re.compile(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b")
-# Dominio casado label a label (`.` fora da classe): correcao do achado S5852
-# (backtracking) do SonarQube no p3. O scrubber roda sobre o event_dict inteiro,
-# tracebacks inclusos, sem limite de tamanho.
+# Dominio casado label a label (`.` fora da classe), correcao do achado S5852
+# (backtracking) do SonarQube no p3, e cada parte com teto (local ate 64, label
+# ate 63, ate 10 labels): sem teto, `a.a.a...` de 80 KB custava segundos (o motor
+# testa cada inicio ate o fim do texto), e o scrubber roda sobre o event_dict
+# inteiro, tracebacks e valores vindos de mensagem inclusos.
 _EMAIL_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"
+    r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}"
+    r"\.[A-Za-z]{2,24}\b"
 )
 
 # Telefone BR: duas formas estruturais, escolhidas para nao gerar falso-positivo
@@ -54,12 +71,15 @@ _EMAIL_PATTERN = re.compile(
 #      11 digitos corridos com shape de CPF e caem no _CPF_PATTERN acima
 #      antes desta regex; campos NOMEADOS telefone/celular/contato sao
 #      mascarados pela denylist abaixo.
-# O numero nao pode encostar em letra, digito, `_` nem hifen: os ids do servico
-# (`ordem_id`, `correlation_id`, `request_id`, ator e alvo) sao UUID, e o v4 traz
-# entre os grupos trechos `dd-dddd-dddd` (`732ffc02-3465-4237-...`) que o split
-# 4-4 casaria. Sem os lookarounds, cerca de 1,4% dos UUID saiam mascarados do log.
+# Os ids do servico (`ordem_id`, `correlation_id`, `request_id`, ator e alvo) sao
+# UUID, e o v4 traz entre os grupos trechos `dd-dddd-dddd` (`732ffc02-3465-4237-...`)
+# que o split 4-4 casaria (cerca de 1,4% dos UUID saiam mascarados). Por isso o
+# numero nao pode vir colado a digito hexadecimal, salvo quando abre com `(` ou
+# `+`, e nao pode continuar em digito. Colado a letra fora de A-F, a hifen ou a
+# espaco (`tel-11 99999-0000`, `tel(11)99999-0000`) continua mascarado; medido
+# com 0 falso positivo em 400 mil UUID v4.
 _TELEFONE_PATTERN = re.compile(
-    r"(?<![\w-])"  # nao colado em palavra nem em id hifenizado (UUID)
+    r"(?:(?<![0-9A-Fa-f])|(?=[(+]))"  # nao colado a digito hexadecimal (UUID)
     r"(?:"
     r"(?:\+55[\s.-]?)?"  # codigo do pais opcional
     r"(?:\(\d{2}\)|\d{2})"  # DDD com ou sem parenteses
@@ -68,7 +88,7 @@ _TELEFONE_PATTERN = re.compile(
     r"|"
     r"\+55[\s.-]?\d{10,11}"  # +55 com numero corrido (sem hifen local)
     r")"
-    r"(?![\w-])"  # idem, do lado direito (tambem barra numero maior)
+    r"(?!\d)"  # nao continua em digito (numero maior)
 )
 
 # Placa antiga (ABC1234, ABC-1234) e Mercosul (ABC1D23) solta em texto: o
@@ -225,6 +245,7 @@ def _cadeia_compartilhada() -> list[Any]:
     return [
         structlog.contextvars.merge_contextvars,
         adicionar_versao_imagem,
+        adicionar_contexto_de_trace,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
@@ -273,6 +294,11 @@ def configurar_logging(stream: TextIO | None = None) -> None:
     root.handlers = [handler]
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
+    # Pika so em ERROR: em INFO ele narra cada conexao, e em WARNING loga os
+    # primeiros 255 bytes do corpo de toda publicacao devolvida pelo broker
+    # (mandatory), com o texto livre do envelope. Queda e erro do broker ja
+    # saem nos eventos do relay e do consumidor.
+    logging.getLogger("pika").setLevel(logging.ERROR)
     _religar_loggers_do_uvicorn()
 
 

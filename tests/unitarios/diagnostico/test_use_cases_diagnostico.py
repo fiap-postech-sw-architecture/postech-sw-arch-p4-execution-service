@@ -8,6 +8,7 @@ import structlog
 from structlog.testing import capture_logs
 
 import src.compartilhado.aplicacao.responsavel as responsavel
+import src.diagnostico.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
@@ -35,6 +36,7 @@ from src.diagnostico.dominio.exceptions import (
 from tests.fakes import (
     CatalogoFake,
     DiagnosticosEmMemoria,
+    FakeTransacaoDoComando,
     FakeUnitOfWork,
     ValidadorFake,
 )
@@ -53,6 +55,7 @@ def _diagnostico(ordem_id: UUID | None = None, *, atraso: int = 0) -> Diagnostic
         veiculo=VEICULO,
         descricao_problema="Revisao",
         agora=datetime.now(UTC) + timedelta(seconds=atraso),
+        solicitacao_id=uuid4(),
     )
 
 
@@ -64,42 +67,59 @@ def _em_andamento() -> Diagnostico:
 
 class TestRegistrarSolicitacao:
     def test_poe_na_fila_sem_evento(self) -> None:
-        repo, uow = DiagnosticosEmMemoria(), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         diagnostico = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            ordem_id, VEICULO, "Barulho no motor"
+            ordem_id,
+            VEICULO,
+            "Barulho no motor",
+            solicitacao_id=uuid4(),
         )
         assert repo.diagnosticos[ordem_id] is diagnostico
         assert diagnostico.status is StatusDiagnostico.AGUARDANDO
-        assert (uow.commits, uow.eventos) == (1, [])
+        assert (uow.descartado, uow.eventos) == (False, [])
 
     def test_reenvio_do_comando_devolve_o_existente(self) -> None:
         existente = _em_andamento()
-        repo, uow = DiagnosticosEmMemoria(existente), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(existente), FakeTransacaoDoComando()
         resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            existente.ordem_id, VEICULO, "outra descricao"
+            existente.ordem_id,
+            VEICULO,
+            "outra descricao",
+            solicitacao_id=uuid4(),
         )
         assert resultado is existente
         assert resultado.status is StatusDiagnostico.EM_ANDAMENTO
-        assert uow.commits == 0
+        assert uow.descartado
 
-    def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(self) -> None:
+    def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         repo = DiagnosticosEmMemoria()
         ordem_id = uuid4()
-        DescartarDiagnostico(repo, FakeUnitOfWork()).executar(ordem_id)
+        DescartarDiagnostico(repo, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = repo.diagnosticos[ordem_id]
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
 
-        resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            ordem_id, VEICULO, "Barulho no motor"
-        )
+        with capture_logs() as logs:
+            resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
+                ordem_id,
+                VEICULO,
+                "Barulho no motor",
+                solicitacao_id=uuid4(),
+            )
+
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "SolicitarDiagnostico")
+        ]
 
         assert resultado is lapide
         assert (resultado.status, resultado.veiculo) == (
             StatusDiagnostico.DESCARTADO,
             None,
         )
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
 
 def test_listar_filtra_por_status_em_ordem_de_chegada() -> None:
@@ -314,7 +334,7 @@ class TestConcluir:
 class TestDescartar:
     def test_descarta_e_responde(self) -> None:
         diagnostico = _em_andamento()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         DescartarDiagnostico(DiagnosticosEmMemoria(diagnostico), uow).executar(
             diagnostico.ordem_id
         )
@@ -325,7 +345,7 @@ class TestDescartar:
 
     def test_repetido_so_reemite_a_resposta(self) -> None:
         diagnostico = _diagnostico()
-        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeTransacaoDoComando()
         DescartarDiagnostico(repo, uow).executar(diagnostico.ordem_id)
         descartado_em = diagnostico.descartado_em
         DescartarDiagnostico(repo, uow).executar(diagnostico.ordem_id)
@@ -333,7 +353,7 @@ class TestDescartar:
         assert [e.tipo for e in uow.eventos] == 2 * ["DiagnosticoDescartado"]
 
     def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
-        repo, uow = DiagnosticosEmMemoria(), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
 
         DescartarDiagnostico(repo, uow).executar(ordem_id)
@@ -344,4 +364,35 @@ class TestDescartar:
         assert lapide.descartado_em is not None
         assert [(e.tipo, dados_do_evento(e)) for e in uow.eventos] == [
             ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)})
+        ]
+
+
+class TestCausaDosFatosDoMecanico:
+    """Os fatos do mecanico respondem ao SolicitarDiagnostico que abriu o fluxo."""
+
+    def test_solicitacao_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
+        repo, ordem_id = DiagnosticosEmMemoria(), uuid4()
+        comando, reenvio = uuid4(), uuid4()
+        caso = RegistrarSolicitacaoDeDiagnostico(repo, FakeTransacaoDoComando())
+        caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=comando)
+        caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=reenvio)
+        assert repo.diagnosticos[ordem_id].solicitacao_id == comando
+
+    def test_inicio_e_conclusao_levam_o_id_da_solicitacao(self) -> None:
+        comando = uuid4()
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=VEICULO,
+            descricao_problema="Revisao",
+            agora=datetime.now(UTC),
+            solicitacao_id=comando,
+        )
+        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeUnitOfWork()
+        IniciarDiagnostico(repo, uow).executar(diagnostico.ordem_id, MECANICO)
+        ConcluirDiagnostico(repo, CatalogoFake(), ValidadorFake(), uow).executar(
+            diagnostico.ordem_id, MECANICO, [SERVICO], ""
+        )
+        assert [(e.tipo, e.causation_id) for e in uow.eventos] == [
+            ("DiagnosticoIniciado", comando),
+            ("DiagnosticoConcluido", comando),
         ]

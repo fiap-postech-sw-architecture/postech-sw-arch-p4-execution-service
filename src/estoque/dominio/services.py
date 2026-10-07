@@ -32,7 +32,9 @@ def calcular_faltantes(
         livre = item.quantidade_livre if item is not None and item.ativo else 0
         if livre < peca.quantidade:
             faltantes.append(
-                Faltante(sku=peca.sku, solicitado=peca.quantidade, disponivel=livre)
+                Faltante(
+                    sku=str(peca.sku), solicitado=peca.quantidade, disponivel=livre
+                )
             )
     return faltantes
 

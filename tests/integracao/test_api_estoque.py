@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.estoque.aplicacao.use_cases import ReservarPecas
 from src.estoque.dominio.reserva import ItemReserva
 from src.estoque.dominio.sku import Sku
@@ -14,6 +13,7 @@ from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
     ReservaSQLAlchemyRepository,
 )
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     import io
@@ -48,7 +48,7 @@ def _reservar(
         ReservarPecas(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(uuid4(), [ItemReserva(Sku(sku), quantidade)])
 
 

@@ -74,6 +74,7 @@ from src.execucao.infraestrutura.repository import (
     FilaDeExecucaoSQLAlchemy,
 )
 from tests.fakes import ValidadorFake
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -169,7 +170,9 @@ def _reservar(
 ) -> Reserva:
     with session_factory() as session:
         return ReservarPecas(
-            itens(session), ReservaSQLAlchemyRepository(session), _uow(session)
+            itens(session),
+            ReservaSQLAlchemyRepository(session),
+            transacao_do_comando(session),
         ).executar(ordem_id, [ItemReserva(VELA, quantidade)])
 
 
@@ -182,7 +185,9 @@ def _liberar(
 ) -> None:
     with session_factory() as session:
         LiberarReserva(
-            itens(session), ReservaSQLAlchemyRepository(session), _uow(session)
+            itens(session),
+            ReservaSQLAlchemyRepository(session),
+            transacao_do_comando(session),
         ).executar(ordem_id)
 
 
@@ -269,7 +274,7 @@ def _disputar_ultima_unidade(
                 uc = ReservarPecas(
                     repo_itens(session),
                     ReservaSQLAlchemyRepository(session),
-                    SQLAlchemyUnitOfWork(lambda: session),
+                    transacao_do_comando(session),
                 )
                 resultados[nome] = uc.executar(ordem_id, [ItemReserva(VELA, 1)])
         except BaseException as exc:  # pragma: no cover - so aparece em regressao
@@ -357,7 +362,7 @@ def test_muitas_reservas_simultaneas_nao_vendem_alem_do_estoque(
                 ReservarPecas(
                     ItemEstoqueSQLAlchemyRepository(session),
                     ReservaSQLAlchemyRepository(session),
-                    SQLAlchemyUnitOfWork(lambda: session),
+                    transacao_do_comando(session),
                 ).executar(uuid4(), [ItemReserva(VELA, 1)])
         except BaseException as exc:  # pragma: no cover - so aparece em regressao
             erros.append(exc)
@@ -440,8 +445,8 @@ def test_finalizacao_e_liberacao_simultaneas_nao_baixam_reserva_liberada(
             FilaDeExecucaoSQLAlchemy(session),
             VeiculosSQLAlchemy(session),
             EstoqueSQLAlchemyAdapter(session),
-            _uow(session),
-        ).executar(ordem_a, Prioridade.NORMAL)
+            transacao_do_comando(session),
+        ).executar(ordem_a, Prioridade.NORMAL, agendamento_id=uuid4())
     with session_factory() as session:
         IniciarExecucao(
             ExecucaoSQLAlchemyRepository(session),
@@ -591,13 +596,13 @@ def _solicitar_diagnostico(session: Session, ordem_id: UUID) -> object:
         veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
     )
     return RegistrarSolicitacaoDeDiagnostico(
-        DiagnosticoSQLAlchemyRepository(session), _uow(session)
-    ).executar(ordem_id, veiculo, "Nao liga")
+        DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
+    ).executar(ordem_id, veiculo, "Nao liga", solicitacao_id=uuid4())
 
 
 def _descartar_diagnostico(session: Session, ordem_id: UUID) -> object:
     return DescartarDiagnostico(
-        DiagnosticoSQLAlchemyRepository(session), _uow(session)
+        DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
     ).executar(ordem_id)
 
 
@@ -607,13 +612,13 @@ def _agendar_execucao(session: Session, ordem_id: UUID) -> object:
         FilaDeExecucaoSQLAlchemy(session),
         VeiculosSQLAlchemy(session),
         EstoqueSQLAlchemyAdapter(session),
-        _uow(session),
-    ).executar(ordem_id, Prioridade.NORMAL)
+        transacao_do_comando(session),
+    ).executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
 
 def _cancelar_execucao(session: Session, ordem_id: UUID) -> object:
     return CancelarExecucao(
-        ExecucaoSQLAlchemyRepository(session), _uow(session)
+        ExecucaoSQLAlchemyRepository(session), transacao_do_comando(session)
     ).executar(ordem_id)
 
 
@@ -621,7 +626,7 @@ def _reservar_sem_pecas(session: Session, ordem_id: UUID) -> object:
     return ReservarPecas(
         ItemEstoqueSQLAlchemyRepository(session),
         ReservaSQLAlchemyRepository(session),
-        _uow(session),
+        transacao_do_comando(session),
     ).executar(ordem_id, [])
 
 
@@ -629,7 +634,7 @@ def _liberar_reserva(session: Session, ordem_id: UUID) -> object:
     return LiberarReserva(
         ItemEstoqueSQLAlchemyRepository(session),
         ReservaSQLAlchemyRepository(session),
-        _uow(session),
+        transacao_do_comando(session),
     ).executar(ordem_id)
 
 
@@ -786,7 +791,9 @@ def _cancelar(
     ),
 ) -> None:
     with session_factory() as session:
-        CancelarExecucao(execucoes(session), _uow(session)).executar(ordem_id)
+        CancelarExecucao(execucoes(session), transacao_do_comando(session)).executar(
+            ordem_id
+        )
 
 
 def _execucao(session_factory: sessionmaker[Session], ordem_id: UUID) -> Execucao:
@@ -835,7 +842,9 @@ def _descartar(
     ),
 ) -> None:
     with session_factory() as session:
-        DescartarDiagnostico(diagnosticos(session), _uow(session)).executar(ordem_id)
+        DescartarDiagnostico(
+            diagnosticos(session), transacao_do_comando(session)
+        ).executar(ordem_id)
 
 
 def _diagnostico(session_factory: sessionmaker[Session], ordem_id: UUID) -> Diagnostico:

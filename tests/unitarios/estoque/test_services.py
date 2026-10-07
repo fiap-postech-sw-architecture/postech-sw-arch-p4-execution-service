@@ -34,8 +34,8 @@ def test_faltantes_considera_ausente_e_inativo_como_zero() -> None:
     pecas = _reserva(PEC_A=2, PEC_INATIVA=1, PEC_SUMIDA=3).itens
 
     assert calcular_faltantes(pecas, itens) == [
-        Faltante(sku=Sku("PEC-INATIVA"), solicitado=1, disponivel=0),
-        Faltante(sku=Sku("PEC-SUMIDA"), solicitado=3, disponivel=0),
+        Faltante(sku="PEC-INATIVA", solicitado=1, disponivel=0),
+        Faltante(sku="PEC-SUMIDA", solicitado=3, disponivel=0),
     ]
 
 
@@ -43,7 +43,7 @@ def test_faltante_informa_o_saldo_livre_e_nao_o_fisico() -> None:
     itens = _itens(PEC_A=5)
     itens[Sku("PEC-A")].reservar(4)
     assert calcular_faltantes(_reserva(PEC_A=2).itens, itens) == [
-        Faltante(sku=Sku("PEC-A"), solicitado=2, disponivel=1)
+        Faltante(sku="PEC-A", solicitado=2, disponivel=1)
     ]
 
 

@@ -62,6 +62,8 @@ class Execucao(AggregateRoot):
     _iniciada_em: datetime | None = None
     _finalizada_em: datetime | None = None
     _cancelada_em: datetime | None = None
+    # Id do AgendarExecucao que pos a ordem na fila: causa dos fatos do mecanico.
+    _agendamento_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self._prioridade, Prioridade):
@@ -85,9 +87,16 @@ class Execucao(AggregateRoot):
         prioridade: Prioridade,
         veiculo: Veiculo | None,
         agora: datetime,
+        agendamento_id: UUID,
     ) -> Execucao:
+        """Execucao AGUARDANDO; ``agendamento_id`` e o id do comando, causa dos
+        fatos que o mecanico gera (so a lapide e a reidratacao ficam sem ele)."""
         return cls(
-            id=ordem_id, _prioridade=prioridade, _veiculo=veiculo, _enfileirada_em=agora
+            id=ordem_id,
+            _prioridade=prioridade,
+            _veiculo=veiculo,
+            _enfileirada_em=agora,
+            _agendamento_id=agendamento_id,
         )
 
     @classmethod
@@ -110,6 +119,21 @@ class Execucao(AggregateRoot):
     @property
     def ordem_id(self) -> UUID:
         return self.id
+
+    @property
+    def em_andamento(self) -> bool:
+        """Na fila ou em execucao (ainda nao finalizada nem cancelada)."""
+        return self._status in {StatusExecucao.AGUARDANDO, StatusExecucao.EM_EXECUCAO}
+
+    def anonimizar_titular(self) -> bool:
+        """Eliminacao LGPD: placa da copia do retrato pelo marcador.
+
+        Idempotente: False quando nada muda (ja anonimizada, ou sem retrato).
+        """
+        if self._veiculo is None or self._veiculo.anonimizado:
+            return False
+        self._veiculo = self._veiculo.anonimizar()
+        return True
 
     @property
     def status(self) -> StatusExecucao:
@@ -142,6 +166,10 @@ class Execucao(AggregateRoot):
     @property
     def cancelada_em(self) -> datetime | None:
         return self._cancelada_em
+
+    @property
+    def agendamento_id(self) -> UUID | None:
+        return self._agendamento_id
 
     def iniciada_por(self, mecanico_id: UUID) -> bool:
         return (

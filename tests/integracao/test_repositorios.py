@@ -140,7 +140,7 @@ class TestEstoque:
         self, session_factory: sessionmaker[Session]
     ) -> None:
         ordem_id = uuid4()
-        faltantes = [Faltante(sku=Sku("PEC-VELA"), solicitado=4, disponivel=0)]
+        faltantes = [Faltante(sku="PEC-VELA", solicitado=4, disponivel=0)]
         recusada = Reserva.recusar(
             ordem_id=ordem_id,
             itens=[ItemReserva(Sku("PEC-VELA"), 4)],
@@ -196,6 +196,7 @@ class TestDiagnosticos:
             ),
             descricao_problema="Revisao",
             agora=T0 + timedelta(minutes=minutos),
+            solicitacao_id=uuid4(),
         )
         if status != "AGUARDANDO":
             diagnostico.iniciar(uuid4(), T0)
@@ -292,6 +293,7 @@ class TestFilaDeExecucao:
             prioridade=prioridade,
             veiculo=None,
             agora=T0 + timedelta(minutes=minutos),
+            agendamento_id=uuid4(),
         )
 
     def test_alta_antes_chegada_asc_e_desempate_por_ordem(

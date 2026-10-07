@@ -46,14 +46,25 @@ check: lock-check lint lint-arch typecheck security test
 # a stack, confere a readiness (banco), que rota autenticada sem token responde
 # 401, que a imagem roda como 1001:1001, que a resposta nao traz o header
 # `server`, que as linhas de boot do uvicorn saem em JSON e que ele nao escreve
-# access log (so o `http_request` estruturado do middleware), e derruba tudo
-# com os volumes, inclusive em falha (depois de mostrar os logs). Projeto e
-# portas proprios para nao derrubar a stack do compose-up.
+# access log (so o `http_request` estruturado do middleware); que relay e
+# consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
+# os contratos de mensageria estao na imagem (e a topologia do RabbitMQ, com a
+# senha do admin de demonstracao, nao), que o relay conectou ao broker e
+# que o consumidor assinou a execucao.comandos; e
+# derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
+# Projeto e portas proprios para nao derrubar a stack do compose-up.
 API_IMAGE ?= pytstop-execution-service:dev
 SMOKE_PORT ?= 18003
 SMOKE_DB_PORT ?= 15433
+SMOKE_RABBITMQ_PORT ?= 15674
+SMOKE_RABBITMQ_UI_PORT ?= 15675
 SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
-SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
+# Schemas e AsyncAPI dentro da imagem (sem eles a API recusa gravar a outbox), e
+# a topologia do RabbitMQ fora dela (leva a senha de demonstracao do admin).
+SMOKE_CONTRATOS := from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, produtor, tipos_com_contrato; assert tipos_com_contrato() and produtor('ReservarPecas') == 'os'; assert not (CONTRATOS / 'rabbitmq').exists() and not (CONTRATOS / 'exemplos').exists()
+SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) \
+	RABBITMQ_PORT=$(SMOKE_RABBITMQ_PORT) RABBITMQ_UI_PORT=$(SMOKE_RABBITMQ_UI_PORT) \
+	API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
 
 smoke:
 	@status=0; \
@@ -73,13 +84,25 @@ smoke:
 		|| { echo "smoke: o access log estruturado (http_request) nao saiu" >&2; false; }; } \
 	&& { ! printf '%s\n' "$$logs" | grep -q 'uvicorn.access' \
 		|| { echo "smoke: o uvicorn escreveu access log (--no-access-log nao vale)" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON e sem access log do uvicorn" \
+	&& { test "$$(docker inspect -f '{{.State.Health.Status}}' "$$($(SMOKE_COMPOSE) ps -q relay)")" = healthy \
+		|| { echo "smoke: o relay nao esta pronto" >&2; false; }; } \
+	&& { test "$$(docker inspect -f '{{.State.Health.Status}}' "$$($(SMOKE_COMPOSE) ps -q consumidor)")" = healthy \
+		|| { echo "smoke: o consumidor nao esta pronto" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) logs --no-color relay | grep -q '"event": "relay_broker_connected"' \
+		|| { echo "smoke: o relay nao conectou ao broker" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T api python -c "$(SMOKE_CONTRATOS)" \
+		|| { echo "smoke: a imagem nao traz os contratos de mensageria, ou traz a topologia" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_consumers queue_name \
+		| grep -qx 'execucao.comandos' \
+		|| { echo "smoke: o consumidor nao assinou a execucao.comandos" >&2; false; }; } \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, contratos na imagem e topologia fora, relay e consumidor prontos" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
 	exit $$status
 
-# Stack local: API + PostgreSQL 16 proprio, migracoes e seed do estoque no boot.
+# Stack local: API, relay, consumidor, PostgreSQL 16 e RabbitMQ 4.3.6 proprios,
+# migracoes e seed do estoque no boot.
 compose-up:
 	$(COMPOSE) up -d --build --wait
 

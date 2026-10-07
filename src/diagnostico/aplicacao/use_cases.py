@@ -30,7 +30,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import (
+        UnitOfWork,
+        UnitOfWorkDoComando,
+    )
     from src.compartilhado.dominio.veiculo import Veiculo
     from src.diagnostico.aplicacao.ports import (
         CatalogoDePecasPort,
@@ -58,36 +61,43 @@ class RegistrarSolicitacaoDeDiagnostico:
     existente sem mudar nada. Nao ha resposta no catalogo; o fato seguinte e
     ``DiagnosticoIniciado``, quando o mecanico comeca. Com o diagnostico ja
     concluido ou descartado (inclusive a lapide de um descarte adiantado), o
-    comando atrasado e descartado com log.
+    comando atrasado e descartado com log. Quem comita e o consumidor.
     """
 
-    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
+    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWorkDoComando) -> None:
         self._repo = repo
         self._uow = uow
 
     @releitura_em_corrida
     def executar(
-        self, ordem_id: UUID, veiculo: Veiculo, descricao_problema: str
+        self,
+        ordem_id: UUID,
+        veiculo: Veiculo,
+        descricao_problema: str,
+        solicitacao_id: UUID,
     ) -> Diagnostico:
+        """``solicitacao_id``: id do comando, causa dos fatos que o mecanico gera."""
         novo = Diagnostico.solicitar(
             ordem_id=ordem_id,
             veiculo=veiculo,
             descricao_problema=descricao_problema,
             agora=datetime.now(UTC),
+            solicitacao_id=solicitacao_id,
         )
         with self._uow:
             existente = self._repo.obter(ordem_id)
             if existente is not None:
                 if existente.status in _DIAGNOSTICO_ENCERRADO:
                     _log.info(
-                        "late_command_discarded",
+                        "command_ignored",
+                        codigo="COMANDO_ATRASADO",
                         comando="SolicitarDiagnostico",
                         correlation_id=str(ordem_id),
                         status=existente.status,
                     )
+                self._uow.descartar()
                 return existente
             self._repo.salvar(novo)
-            self._uow.commit()
         return novo
 
 
@@ -130,6 +140,7 @@ class IniciarDiagnostico:
                     DiagnosticoIniciadoEvent(
                         ordem_id=ordem_id,
                         ocorrido_em=agora,
+                        causation_id=diagnostico.solicitacao_id,
                         mecanico_id=mecanico_id,
                         iniciado_em=agora,
                     )
@@ -234,6 +245,7 @@ def _concluido(diagnostico: Diagnostico, agora: datetime) -> DiagnosticoConcluid
     return DiagnosticoConcluidoEvent(
         ordem_id=diagnostico.ordem_id,
         ocorrido_em=agora,
+        causation_id=diagnostico.solicitacao_id,
         itens=tuple(
             ItemDTO(
                 tipo=item.tipo.value, codigo=item.codigo, quantidade=item.quantidade
@@ -255,7 +267,7 @@ class DescartarDiagnostico:
     Service.
     """
 
-    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWork) -> None:
+    def __init__(self, repo: DiagnosticoRepository, uow: UnitOfWorkDoComando) -> None:
         self._repo = repo
         self._uow = uow
 
@@ -273,7 +285,6 @@ class DescartarDiagnostico:
             self._uow.registrar_evento(
                 DiagnosticoDescartadoEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
-            self._uow.commit()
-        # Depois do commit: a copia que perde a corrida pela lapide roda de novo
+        # Depois do bloco: a copia que perde a corrida pela lapide roda de novo
         # e nao registra uma lapide que nao gravou.
         _log.info("diagnosis_discarded", correlation_id=str(ordem_id), tombstone=lapide)

@@ -14,3 +14,6 @@ class ExecucaoRepository(Protocol):
 
     def salvar(self, execucao: Execucao) -> None:
         """Adiciona a execucao a sessao e faz flush."""
+
+    def do_veiculo(self, veiculo_id: UUID) -> list[Execucao]:
+        """Execucoes com a copia do retrato do veiculo, travadas (FOR UPDATE)."""

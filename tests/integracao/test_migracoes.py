@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 import src.mapeamentos  # noqa: F401 - registra todas as tabelas no metadata
 from src.compartilhado.infraestrutura.database import metadata
+from src.compartilhado.infraestrutura.mensageria.contratos import validar
 from tests.integracao.conftest import RAIZ, config_alembic
 
 if TYPE_CHECKING:
@@ -27,7 +28,14 @@ def test_migracoes_batem_com_os_mapeamentos(engine: Engine) -> None:
     assert diferencas == []
 
 
-_TABELAS = {"itens_estoque", "reservas", "diagnosticos", "execucoes", "outbox"}
+_TABELAS = {
+    "itens_estoque",
+    "reservas",
+    "diagnosticos",
+    "execucoes",
+    "outbox",
+    "mensagens_processadas",
+}
 
 
 def test_downgrade_e_upgrade_de_ponta_a_ponta(
@@ -41,6 +49,48 @@ def test_downgrade_e_upgrade_de_ponta_a_ponta(
         # O banco e o da suite inteira: volta para head mesmo se o assert falhar.
         command.upgrade(config, "head")
     assert set(inspect(engine).get_table_names()) >= _TABELAS
+
+
+def test_linha_gravada_antes_da_mensageria_ganha_o_envelope_do_contrato(
+    engine: Engine, database_url: str
+) -> None:
+    # Linha da versao sem relay (colunas soltas): sai publicavel, e o downgrade
+    # devolve as colunas antigas.
+    config = config_alembic(database_url)
+    command.downgrade(config, "001")
+    try:
+        with engine.begin() as conexao:
+            conexao.execute(
+                text(
+                    "INSERT INTO outbox (mensagem_id, tipo, correlation_id, "
+                    "ocorrido_em, dados) VALUES ('6d4019fb-0a5b-4f96-ab6b-"
+                    "4ad8ef571f0d', 'ReservaDePecasFalhou', '495db021-ac8d-4a7e-"
+                    "94d1-734c7eab475c', '2026-10-06 10:31:00-03', '{\"ordem_id\": "
+                    '"495db021-ac8d-4a7e-94d1-734c7eab475c", "faltantes": [{'
+                    '"sku": "PEC-VELA", "solicitado": 2, "disponivel": '
+                    "0}]}')"
+                )
+            )
+        command.upgrade(config, "head")
+        with engine.connect() as conexao:
+            linha = conexao.execute(
+                text("SELECT exchange, routing_key, envelope FROM outbox")
+            ).one()
+        command.downgrade(config, "001")
+        with engine.connect() as conexao:
+            antiga = conexao.execute(
+                text("SELECT ocorrido_em, dados FROM outbox")
+            ).one()
+    finally:
+        command.upgrade(config, "head")
+
+    validar(linha.envelope)
+    assert linha.exchange == "pytstop.eventos"
+    assert linha.routing_key == "evento.execucao.reserva_de_pecas_falhou"
+    assert linha.envelope["ocorrido_em"] == "2026-10-06T13:31:00+00:00"
+    assert linha.envelope["causation_id"] is None
+    assert antiga.dados == linha.envelope["dados"]
+    assert antiga.ocorrido_em.isoformat() == "2026-10-06T13:31:00+00:00"
 
 
 def test_replicas_migrando_juntas_se_serializam(

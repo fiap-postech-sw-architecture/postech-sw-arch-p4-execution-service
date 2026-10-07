@@ -97,9 +97,8 @@ class TestQuantidades:
         ],
     )
     def test_faltante_incoerente(self, solicitado: int, disponivel: int) -> None:
-        sku = Sku("PEC-X")
         with pytest.raises(ValueError, match=r"(?i)quantidade|faltante"):
-            Faltante(sku=sku, solicitado=solicitado, disponivel=disponivel)
+            Faltante(sku="PEC-X", solicitado=solicitado, disponivel=disponivel)
 
 
 class TestItemEstoque:
@@ -231,7 +230,7 @@ class TestReserva:
         assert (reserva.criada_em, reserva.encerrada_em) == (AGORA, None)
 
     def test_recusa_registra_os_faltantes_e_ja_nasce_encerrada(self) -> None:
-        faltante = Faltante(sku=Sku("PEC-A"), solicitado=2, disponivel=0)
+        faltante = Faltante(sku="PEC-A", solicitado=2, disponivel=0)
         reserva = Reserva.recusar(
             ordem_id=uuid4(),
             itens=[ItemReserva(Sku("PEC-A"), 2)],
@@ -250,7 +249,7 @@ class TestReserva:
     @pytest.mark.parametrize("status", [StatusReserva.ATIVA, StatusReserva.RECUSADA])
     def test_faltantes_so_na_recusa(self, status: StatusReserva) -> None:
         faltantes = (
-            () if status is StatusReserva.RECUSADA else (Faltante(Sku("PEC-A"), 1, 0),)
+            () if status is StatusReserva.RECUSADA else (Faltante("PEC-A", 1, 0),)
         )
         with pytest.raises(ValueError, match="faltantes"):
             Reserva(

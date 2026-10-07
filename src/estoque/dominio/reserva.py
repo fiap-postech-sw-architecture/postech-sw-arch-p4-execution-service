@@ -46,11 +46,13 @@ class ItemReserva(ValueObject):
 class Faltante(ValueObject):
     """Peca que impediu a reserva.
 
-    ``disponivel`` e o saldo LIVRE no momento (``quantidade_livre`` do item, nao o
-    fisico): o nome vem do contrato ``ReservaDePecasFalhou`` da saga.
+    ``sku`` e o codigo como o comando o pediu: fora do formato do Billing ele
+    nao esta no catalogo e falta inteiro (``disponivel`` 0). ``disponivel`` e o
+    saldo LIVRE no momento (``quantidade_livre`` do item, nao o fisico): o nome
+    vem do contrato ``ReservaDePecasFalhou`` da saga.
     """
 
-    sku: Sku
+    sku: str
     solicitado: int
     disponivel: int
 

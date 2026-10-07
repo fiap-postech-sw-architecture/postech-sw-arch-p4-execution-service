@@ -71,7 +71,11 @@ def _diagnostico(estado: StatusDiagnostico) -> Diagnostico:
         veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
     )
     diagnostico = Diagnostico.solicitar(
-        ordem_id=uuid4(), veiculo=veiculo, descricao_problema="x", agora=AGORA
+        ordem_id=uuid4(),
+        veiculo=veiculo,
+        descricao_problema="x",
+        agora=AGORA,
+        solicitacao_id=uuid4(),
     )
     if estado in {D.EM_ANDAMENTO, D.CONCLUIDO}:
         diagnostico.iniciar(MECANICO, AGORA)
@@ -129,7 +133,11 @@ E = StatusExecucao
 
 def _execucao(estado: StatusExecucao) -> Execucao:
     execucao = Execucao.agendar(
-        ordem_id=uuid4(), prioridade=Prioridade.NORMAL, veiculo=None, agora=AGORA
+        ordem_id=uuid4(),
+        prioridade=Prioridade.NORMAL,
+        veiculo=None,
+        agora=AGORA,
+        agendamento_id=uuid4(),
     )
     if estado in {E.EM_EXECUCAO, E.FINALIZADA}:
         execucao.iniciar(MECANICO, AGORA)
@@ -183,7 +191,7 @@ def _reserva(estado: StatusReserva) -> Reserva:
         return Reserva.recusar(
             ordem_id=uuid4(),
             itens=[ItemReserva(VELA, 2)],
-            faltantes=[Faltante(sku=VELA, solicitado=2, disponivel=0)],
+            faltantes=[Faltante(sku=str(VELA), solicitado=2, disponivel=0)],
             agora=AGORA,
         )
     reserva = Reserva.criar(ordem_id=uuid4(), itens=[ItemReserva(VELA, 2)], agora=AGORA)
