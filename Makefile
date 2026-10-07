@@ -8,7 +8,7 @@ GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
 .PHONY: install lock-check lint format typecheck security lint-arch test check \
-	smoke compose-up compose-down compose-logs migrate seed run
+	smoke manifests kind-deploy compose-up compose-down compose-logs migrate seed run
 
 install:
 	uv sync --frozen
@@ -106,6 +106,35 @@ smoke:
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
 	exit $$status
+
+# Manifestos do Kubernetes (k8s/), como no platform: os tres overlays pelo
+# kubectl kustomize, no kubeconform contra os schemas do Kubernetes do no do
+# kind (Secret reprova: senha nao entra nos manifests) e no trivy config, sem
+# achado HIGH ou CRITICAL. Ferramentas pelas imagens pinadas (as do platform).
+KUBERNETES_VERSION := 1.35.0
+KUBECONFORM := docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary \
+	-output text -kubernetes-version $(KUBERNETES_VERSION) -reject Secret -
+TRIVY_CONFIG := docker run --rm -i --entrypoint sh aquasec/trivy:0.72.0 -c \
+	'cat > /tmp/manifestos.yaml && trivy config --quiet --severity HIGH,CRITICAL --exit-code 1 /tmp/manifestos.yaml'
+
+manifests:
+	@set -e; for overlay in kind kind-ci k3s; do \
+		echo ">> k8s/overlays/$$overlay: kubeconform e trivy config"; \
+		manifestos="$$(kubectl kustomize "k8s/overlays/$$overlay")"; \
+		printf '%s\n' "$$manifestos" | $(KUBECONFORM); \
+		printf '%s\n' "$$manifestos" | $(TRIVY_CONFIG); \
+	done
+
+# Implanta este checkout no kind da plataforma (make kind-up deploy no
+# platform, clonado ao lado deste) pelo scripts/ci/implantar-servicos.sh dele, o
+# mesmo do CD: constroi a imagem com o commit como tag, carrega no kind, aplica
+# o overlay com ela e espera o banco, o Job de migracao e os Deployments.
+PLATFORM_DIR ?= ../postech-sw-arch-p4-platform
+KIND_OVERLAY ?= kind
+
+kind-deploy:
+	$(PLATFORM_DIR)/scripts/ci/implantar-servicos.sh --overlay $(KIND_OVERLAY) \
+		execution-service=$(CURDIR)
 
 # Stack local: API, relay, consumidor, PostgreSQL 16 e RabbitMQ 4.3.6 proprios,
 # migracoes e seed do estoque no boot.
