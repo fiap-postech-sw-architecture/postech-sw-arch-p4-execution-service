@@ -639,6 +639,44 @@ def test_classificacao_de_cada_erro_do_handler(erro: Exception, resultado: str) 
     assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
+@pytest.mark.parametrize(
+    ("erro", "codigo"),
+    [
+        pytest.param(
+            TransicaoStatusInvalidaException("MARCADOR-DA-MENSAGEM"),
+            "TRANSICAO_STATUS_INVALIDA",
+            id="cancelar-depois-do-inicio",
+        ),
+        pytest.param(
+            ViolacaoRegraDeNegocioException("MARCADOR-DA-MENSAGEM"),
+            "VIOLACAO_REGRA_NEGOCIO",
+            id="agendar-sem-reserva-ativa",
+        ),
+        pytest.param(
+            EntidadeNaoEncontradaException("MARCADOR-DA-MENSAGEM"),
+            "ENTIDADE_NAO_ENCONTRADA",
+            id="entidade-ausente",
+        ),
+    ],
+)
+def test_comando_fora_do_estado_loga_command_ignored_com_o_codigo(
+    log_capturado: io.StringIO, erro: Exception, codigo: str
+) -> None:
+    # ADR-036: o descompasso de estado (CancelarExecucao depois do inicio, que
+    # e o pivot da RN-029; LiberarReserva de reserva consumida; AgendarExecucao
+    # sem reserva ativa) aparece no log pelo codigo; a mensagem do dominio,
+    # que pode trazer dado do pedido, nao.
+    _consumir(_Handler(erro))
+    saida = log_capturado.getvalue()
+    (ignorado,) = [
+        json.loads(linha)
+        for linha in saida.splitlines()
+        if '"command_ignored"' in linha
+    ]
+    assert ignorado["codigo"] == codigo
+    assert "MARCADOR-DA-MENSAGEM" not in saida
+
+
 _ANINHADO = b'{"id":' + b'{"a":' * 10_000 + b"1" + b"}" * 10_000 + b"}"
 
 
