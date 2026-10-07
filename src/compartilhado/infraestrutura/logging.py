@@ -50,7 +50,7 @@ _CPF_PATTERN = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
 _CNPJ_PATTERN = re.compile(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b")
 # Dominio casado label a label (`.` fora da classe), correcao do achado S5852
 # (backtracking) do SonarQube no p3, e cada parte com teto (local ate 64, label
-# ate 63, ate 8 labels): sem teto, `a.a.a...` de 80 KB custava segundos (o motor
+# ate 63, ate 10 labels): sem teto, `a.a.a...` de 80 KB custava segundos (o motor
 # testa cada inicio ate o fim do texto), e o scrubber roda sobre o event_dict
 # inteiro, tracebacks e valores vindos de mensagem inclusos.
 _EMAIL_PATTERN = re.compile(

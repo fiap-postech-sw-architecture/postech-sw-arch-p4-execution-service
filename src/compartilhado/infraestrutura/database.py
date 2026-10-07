@@ -55,9 +55,8 @@ def criar_engine(url: str) -> Engine:
     3 s, socket sem resposta derrubado em 10 s (keepalive e
     ``tcp_user_timeout``) e espera por conexao do pool em 5 s; pool de 5 + 10
     (``DB_POOL_*``, ``DB_MAX_OVERFLOW``, ``DB_CONNECT_TIMEOUT_S``).
-    ``pool_pre_ping`` descarta
-    conexao morta apos restart do banco; ``pool_recycle`` evita conexao presa
-    em pod de vida longa.
+    ``pool_pre_ping`` descarta conexao morta apos restart do banco;
+    ``pool_recycle`` evita conexao presa em pod de vida longa.
     """
     opcoes = " ".join(
         f"-c {parametro}={inteiro_opcional(variavel, padrao)}"
