@@ -5,3 +5,23 @@ title = "PytStop fase 4 gitleaks config"
 # segredo (mesmo padrao da fase 3).
 [extend]
 useDefault = true
+
+# URL AMQP com senha, como a RABBITMQ_URL: as regras padrao nao a reconhecem, e
+# uma senha real (como a que o make deploy do platform gera) passaria. Ficam de
+# fora, pelos caracteres excluidos, o placeholder (<senha>), a variavel de shell
+# ($senha) e a f-string ({senha}). Mesma regra do platform.
+[[rules]]
+id = "pytstop-url-amqp-com-senha"
+description = "URL AMQP com senha"
+regex = '''amqps?://[^:/\s@]+:([^@\s"'{}<>$]{8,})@'''
+secretGroup = 1
+keywords = ["amqp"]
+
+# A senha de demonstracao do usuario execucao so vale no compose e no
+# .env.example (o mesmo valor do compose da plataforma); essas linhas levam
+# tambem o marcador gitleaks:allow.
+[[rules.allowlists]]
+description = "Senha de demonstracao do compose"
+condition = "AND"
+paths = ['''(^|/)(docker-compose\.yml|\.env\.example)$''']
+regexes = ['''^pytstop-[a-z-]+-demo-2026$''']
