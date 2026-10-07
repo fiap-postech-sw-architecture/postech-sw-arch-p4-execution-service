@@ -63,6 +63,45 @@ class FakeUnitOfWork:
         self.rollbacks += 1
 
 
+class FakeTransacaoDoComando:
+    """``UnitOfWorkDoComando`` em memoria: ``eventos`` sao os das tentativas guardadas.
+
+    Sem commit: na transacao da mensagem quem comita e o consumidor. Tentativa
+    que sai com excecao conta em ``desfeitas`` e perde os eventos dela.
+    """
+
+    def __init__(self) -> None:
+        self.eventos: list[IntegrationEvent] = []
+        self.tentativas = 0
+        self.desfeitas = 0
+        self.descartado = False
+        self._pendentes: list[IntegrationEvent] = []
+
+    def __enter__(self) -> Self:
+        self._pendentes = []
+        self.tentativas += 1
+        self.descartado = False
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        pendentes, self._pendentes = self._pendentes, []
+        if exc_type is not None:
+            self.desfeitas += 1
+            return
+        self.eventos.extend(pendentes)
+
+    def registrar_evento(self, evento: IntegrationEvent) -> None:
+        self._pendentes.append(evento)
+
+    def descartar(self) -> None:
+        self.descartado = True
+
+
 class ItensEmMemoria:
     def __init__(self, *itens: ItemEstoque) -> None:
         self.itens: dict[Sku, ItemEstoque] = {item.sku: item for item in itens}

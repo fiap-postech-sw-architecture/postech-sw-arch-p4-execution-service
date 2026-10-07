@@ -27,7 +27,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import (
+        UnitOfWork,
+        UnitOfWorkDoComando,
+    )
     from src.estoque.dominio.repository import ItemEstoqueRepository, ReservaRepository
     from src.estoque.dominio.reserva import ItemReserva
     from src.estoque.dominio.sku import Sku
@@ -163,13 +166,14 @@ class ReservarPecas:
     DEPOIS de travar os itens, entao a segunda copia ve a decisao da primeira;
     sem itens para travar (lista vazia), a UNIQUE(ordem_id) barra a segunda,
     que roda de novo e cai na regra de repeticao (``releitura_em_corrida``).
+    Quem comita e o consumidor, na transacao da mensagem.
     """
 
     def __init__(
         self,
         itens: ItemEstoqueRepository,
         reservas: ReservaRepository,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._itens = itens
         self._reservas = reservas
@@ -197,7 +201,6 @@ class ReservarPecas:
                 )
                 self._reservas.salvar(recusada)
                 self._uow.registrar_evento(_falha(recusada, agora))
-                self._uow.commit()
                 _log.info(
                     "parts_reservation_refused",
                     correlation_id=str(ordem_id),
@@ -211,7 +214,6 @@ class ReservarPecas:
                     ordem_id=ordem_id, ocorrido_em=agora, reserva_id=nova.id
                 )
             )
-            self._uow.commit()
         return nova
 
     def _responder_de_novo(self, existente: Reserva) -> None:
@@ -222,6 +224,7 @@ class ReservarPecas:
                 correlation_id=str(existente.ordem_id),
                 status=existente.status,
             )
+            self._uow.descartar()
             return
         if existente.status is StatusReserva.RECUSADA:
             self._uow.registrar_evento(_falha(existente, datetime.now(UTC)))
@@ -231,7 +234,6 @@ class ReservarPecas:
                     ordem_id=existente.ordem_id, reserva_id=existente.id
                 )
             )
-        self._uow.commit()
 
 
 # Compensada (inclusive a lapide) ou superada pela baixa: o comando atrasado
@@ -267,7 +269,7 @@ class LiberarReserva:
         self,
         itens: ItemEstoqueRepository,
         reservas: ReservaRepository,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._itens = itens
         self._reservas = reservas
@@ -289,8 +291,7 @@ class LiberarReserva:
             self._uow.registrar_evento(
                 ReservaLiberadaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
-            self._uow.commit()
-        # Depois do commit: a copia que perde a corrida pela lapide roda de novo
+        # Depois do bloco: a copia que perde a corrida pela lapide roda de novo
         # e nao registra uma lapide que nao gravou.
         _log.info(
             "reservation_released", correlation_id=str(ordem_id), tombstone=lapide

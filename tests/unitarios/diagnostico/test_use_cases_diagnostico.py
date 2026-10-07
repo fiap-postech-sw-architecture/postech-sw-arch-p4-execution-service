@@ -35,6 +35,7 @@ from src.diagnostico.dominio.exceptions import (
 from tests.fakes import (
     CatalogoFake,
     DiagnosticosEmMemoria,
+    FakeTransacaoDoComando,
     FakeUnitOfWork,
     ValidadorFake,
 )
@@ -64,31 +65,31 @@ def _em_andamento() -> Diagnostico:
 
 class TestRegistrarSolicitacao:
     def test_poe_na_fila_sem_evento(self) -> None:
-        repo, uow = DiagnosticosEmMemoria(), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         diagnostico = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
             ordem_id, VEICULO, "Barulho no motor"
         )
         assert repo.diagnosticos[ordem_id] is diagnostico
         assert diagnostico.status is StatusDiagnostico.AGUARDANDO
-        assert (uow.commits, uow.eventos) == (1, [])
+        assert (uow.descartado, uow.eventos) == (False, [])
 
     def test_reenvio_do_comando_devolve_o_existente(self) -> None:
         existente = _em_andamento()
-        repo, uow = DiagnosticosEmMemoria(existente), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(existente), FakeTransacaoDoComando()
         resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
             existente.ordem_id, VEICULO, "outra descricao"
         )
         assert resultado is existente
         assert resultado.status is StatusDiagnostico.EM_ANDAMENTO
-        assert uow.commits == 0
+        assert uow.descartado
 
     def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(self) -> None:
         repo = DiagnosticosEmMemoria()
         ordem_id = uuid4()
-        DescartarDiagnostico(repo, FakeUnitOfWork()).executar(ordem_id)
+        DescartarDiagnostico(repo, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = repo.diagnosticos[ordem_id]
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
 
         resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
             ordem_id, VEICULO, "Barulho no motor"
@@ -99,7 +100,7 @@ class TestRegistrarSolicitacao:
             StatusDiagnostico.DESCARTADO,
             None,
         )
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
 
 def test_listar_filtra_por_status_em_ordem_de_chegada() -> None:
@@ -314,7 +315,7 @@ class TestConcluir:
 class TestDescartar:
     def test_descarta_e_responde(self) -> None:
         diagnostico = _em_andamento()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         DescartarDiagnostico(DiagnosticosEmMemoria(diagnostico), uow).executar(
             diagnostico.ordem_id
         )
@@ -325,7 +326,7 @@ class TestDescartar:
 
     def test_repetido_so_reemite_a_resposta(self) -> None:
         diagnostico = _diagnostico()
-        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeTransacaoDoComando()
         DescartarDiagnostico(repo, uow).executar(diagnostico.ordem_id)
         descartado_em = diagnostico.descartado_em
         DescartarDiagnostico(repo, uow).executar(diagnostico.ordem_id)
@@ -333,7 +334,7 @@ class TestDescartar:
         assert [e.tipo for e in uow.eventos] == 2 * ["DiagnosticoDescartado"]
 
     def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
-        repo, uow = DiagnosticosEmMemoria(), FakeUnitOfWork()
+        repo, uow = DiagnosticosEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
 
         DescartarDiagnostico(repo, uow).executar(ordem_id)
@@ -353,7 +354,7 @@ class TestCausaDosFatosDoMecanico:
     def test_solicitacao_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
         repo, ordem_id = DiagnosticosEmMemoria(), uuid4()
         comando, reenvio = uuid4(), uuid4()
-        caso = RegistrarSolicitacaoDeDiagnostico(repo, FakeUnitOfWork())
+        caso = RegistrarSolicitacaoDeDiagnostico(repo, FakeTransacaoDoComando())
         caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=comando)
         caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=reenvio)
         assert repo.diagnosticos[ordem_id].solicitacao_id == comando

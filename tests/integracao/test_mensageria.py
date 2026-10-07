@@ -27,13 +27,13 @@ import src.consumidor
 import src.relay
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
-    criar_session_factory,
 )
 from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
 from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal
 from src.compartilhado.infraestrutura.mensageria.consumidor import (
     NIVEIS_DE_RETRY,
     Consumidor,
+    Resultado,
 )
 from src.compartilhado.infraestrutura.mensageria.contratos import validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
@@ -45,7 +45,7 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
     contexto_atual,
     tracer,
 )
-from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
+from src.compartilhado.infraestrutura.outbox_mapping import registrar_processada
 from src.consumidor import HANDLERS
 from src.estoque.aplicacao.use_cases import LiberarReserva
 from src.estoque.infraestrutura.repository import (
@@ -60,6 +60,7 @@ from tests.integracao.broker import (
     envelope_de_comando,
     esperar_ate,
 )
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     import io
@@ -74,7 +75,7 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
     from tests.integracao.broker import Broker
 
 VEICULO_ID = UUID("3277db7e-8283-4dd9-89e7-df3eeacb8710")
@@ -93,12 +94,12 @@ def sinais(tmp_path: Path) -> Callable[[str], SinaisDoProcesso]:
 @pytest.fixture
 def consumidor(
     broker: Broker,
-    session_factory: sessionmaker[Session],
+    engine: Engine,
     sinais: Callable[[str], SinaisDoProcesso],
 ) -> Callable[..., Consumidor]:
     def _criar(handlers: Mapping[str, Any] = HANDLERS) -> Consumidor:
         return Consumidor(
-            session_factory,
+            engine,
             broker.url("execucao"),
             handlers,
             sinais("consumidor"),
@@ -396,7 +397,7 @@ class _FalhaTransitoria:
         self._real = real
 
     def __call__(
-        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
     ) -> None:
         self.chamadas += 1
         if self.chamadas <= self._vezes:
@@ -591,34 +592,137 @@ def test_mensagem_de_quem_nao_e_o_orquestrador_vai_direto_para_a_dlq(
     assert _saldo(engine, "PEC-VELA") == (5, 0)
 
 
-def test_segunda_entrega_simultanea_do_mesmo_comando_desfaz_o_proprio_efeito(
-    broker: Broker,
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    consumidor: Callable[..., Consumidor],
+def _esperando_lock(engine: Engine) -> bool:
+    # Uma leitura por transacao: pg_stat_activity e um retrato da transacao.
+    with engine.connect() as conexao:
+        esperando = conexao.execute(
+            text(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                "AND query LIKE 'INSERT INTO mensagens_processadas%'"
+            )
+        ).scalar_one()
+    return bool(esperando)
+
+
+def test_entrega_simultanea_do_mesmo_comando_espera_a_outra_e_nao_roda_o_handler(
+    engine: Engine, consumidor: Callable[..., Consumidor]
 ) -> None:
-    # Outra copia do mesmo id comitou enquanto esta rodava: a chave primaria de
-    # mensagens_processadas desfaz esta transacao inteira.
+    # Outra entrega do mesmo id gravou mensagens_processadas e ainda nao
+    # comitou: esta espera na chave primaria e, com o commit da outra, responde
+    # duplicada sem rodar o handler.
     _criar_item(engine, "PEC-VELA", 5)
     comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
-
-    def concorrente(
-        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
-    ) -> None:
-        with session_factory() as outra:
-            copia = SQLAlchemyUnitOfWork(
-                lambda: outra, mensagem_de_origem=UUID(comando["id"])
+    handler = _FalhaTransitoria(0, reservar_pecas)
+    resultados: list[Resultado] = []
+    with engine.connect() as outra:
+        transacao = outra.begin()
+        assert registrar_processada(outra, UUID(comando["id"]))
+        esta = threading.Thread(
+            target=lambda: resultados.append(
+                consumidor({"ReservarPecas": handler})._rodar_handler(comando)
             )
-            with copia:
-                copia.commit()
-        reservar_pecas(envelope, sessao, uow)
+        )
+        esta.start()
+        esperar_ate(lambda: _esperando_lock(engine))
+        transacao.commit()
+        esta.join(timeout=10)
 
-    antes = consumidas("ReservarPecas", "duplicada")
-    with EmSegundoPlano(consumidor({"ReservarPecas": concorrente})):
-        broker.publicar_comando(comando)
-        _esperar_consumo("ReservarPecas", "duplicada", antes)
+    assert resultados == [Resultado.DUPLICADA]
+    assert handler.chamadas == 0
+    assert _saldo(engine, "PEC-VELA") == (5, 0)
+
+
+def _processadas(engine: Engine) -> list[UUID]:
+    with engine.connect() as conexao:
+        return list(
+            conexao.execute(text("SELECT mensagem_id FROM mensagens_processadas"))
+            .scalars()
+            .all()
+        )
+
+
+def test_falha_depois_do_efeito_desfaz_efeito_resposta_e_idempotencia(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # O caso de uso reservou e registrou a resposta; o handler falha depois.
+    # Quem comita e o consumidor: nada fica, e a mensagem vai para a DLQ.
+    _criar_item(engine, "PEC-VELA", 5)
+
+    def reserva_e_falha(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
+    ) -> None:
+        reservar_pecas(envelope, sessao, uow)
+        raise RuntimeError("falha depois do efeito")
+
+    antes = consumidas("ReservarPecas", "dlq")
+    with EmSegundoPlano(consumidor({"ReservarPecas": reserva_e_falha})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        _esperar_consumo("ReservarPecas", "dlq", antes)
 
     assert _saldo(engine, "PEC-VELA") == (5, 0)
+    assert outbox() == []
+    assert _processadas(engine) == []
+
+
+def test_handler_nao_comita_a_transacao_da_mensagem(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # A sessao do handler entra na transacao da mensagem por savepoint: o
+    # commit dela nao comita nada; a falha seguinte desfaz tudo.
+    _criar_item(engine, "PEC-VELA", 5)
+
+    def reserva_comita_e_falha(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
+    ) -> None:
+        reservar_pecas(envelope, sessao, uow)
+        sessao.commit()
+        raise RuntimeError("falha depois do commit do handler")
+
+    antes = consumidas("ReservarPecas", "dlq")
+    with EmSegundoPlano(consumidor({"ReservarPecas": reserva_comita_e_falha})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        _esperar_consumo("ReservarPecas", "dlq", antes)
+
+    assert _saldo(engine, "PEC-VELA") == (5, 0)
+    assert outbox() == []
+    assert _processadas(engine) == []
+
+
+def test_comando_descartado_grava_o_id_e_a_reentrega_e_duplicada(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+) -> None:
+    # ReservarPecas depois da lapide: sem efeito, mas o id fica gravado.
+    ordem_id = uuid4()
+    liberacao = envelope_de_comando(
+        "LiberarReserva", {"ordem_id": str(ordem_id), "motivo": "cancelamento"}
+    )
+    atrasado = envelope_de_comando("ReservarPecas", _reservar(ordem_id, 0))
+    ignoradas = consumidas("ReservarPecas", "ignorada")
+    duplicadas = consumidas("ReservarPecas", "duplicada")
+
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(liberacao)
+        broker.publicar_comando(atrasado)
+        _esperar_consumo("ReservarPecas", "ignorada", ignoradas)
+        broker.publicar_comando(atrasado)
+        _esperar_consumo("ReservarPecas", "duplicada", duplicadas)
+
+    assert set(_processadas(engine)) == {
+        UUID(liberacao["id"]),
+        UUID(atrasado["id"]),
+    }
 
 
 def test_consumidor_reconecta_quando_o_broker_derruba_a_conexao(
@@ -648,7 +752,7 @@ def _linha_pendente(session_factory: sessionmaker[Session]) -> UUID:
         LiberarReserva(
             ItemEstoqueSQLAlchemyRepository(sessao),
             ReservaSQLAlchemyRepository(sessao),
-            SQLAlchemyUnitOfWork(lambda: sessao),
+            transacao_do_comando(sessao),
         ).executar(ordem_id)
     return ordem_id
 
@@ -978,7 +1082,7 @@ def test_conferencia_da_topologia_fora_do_alcance_falha_e_fecha_a_conexao(
 def test_limpeza_que_falha_nao_derruba_o_consumidor(
     broker: Broker, tmp_path: Path, log_capturado: io.StringIO
 ) -> None:
-    morto = criar_session_factory(criar_engine("postgresql://x:y@127.0.0.1:1/nada"))
+    morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
     consumidor = Consumidor(
         morto,
         broker.url("execucao"),

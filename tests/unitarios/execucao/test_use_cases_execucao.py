@@ -33,6 +33,7 @@ from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 from tests.fakes import (
     EstoqueEmMemoria,
     ExecucoesEmMemoria,
+    FakeTransacaoDoComando,
     FakeUnitOfWork,
     FilaFixa,
     ItensEmMemoria,
@@ -60,11 +61,13 @@ def _estoque_com_reserva(*ordens: UUID) -> EstoqueEmMemoria:
     """Estoque em memoria com uma reserva ATIVA (sem pecas) para cada ordem."""
     itens, reservas = ItensEmMemoria(), ReservasEmMemoria()
     for ordem_id in ordens:
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(ordem_id, [])
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(ordem_id, [])
     return EstoqueEmMemoria(itens, reservas)
 
 
-def _eventos(uow: FakeUnitOfWork) -> list[tuple[str, dict[str, object]]]:
+def _eventos(
+    uow: FakeUnitOfWork | FakeTransacaoDoComando,
+) -> list[tuple[str, dict[str, object]]]:
     return [(e.tipo, dados_do_evento(e)) for e in uow.eventos]
 
 
@@ -88,7 +91,7 @@ def _oficina(*, reservar: bool = True) -> _Oficina:
     )
     reservas = ReservasEmMemoria()
     if reservar:
-        ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+        ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
             execucao.ordem_id, [ItemReserva(VELA, 4)]
         )
     estoque, uow = EstoqueEmMemoria(itens, reservas), FakeUnitOfWork()
@@ -112,7 +115,7 @@ def _em_execucao(*, reservar: bool = True) -> _Oficina:
 
 class TestAgendar:
     def test_enfileira_com_o_retrato_e_responde_com_a_posicao(self) -> None:
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         veiculos = VeiculosEmMemoria({ordem_id: VEICULO})
         execucao = AgendarExecucao(
@@ -131,7 +134,7 @@ class TestAgendar:
 
     def test_reenvio_com_execucao_na_fila_reemite_e_mantem_prioridade(self) -> None:
         existente = _agendada()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         resultado = AgendarExecucao(
             ExecucoesEmMemoria(existente),
             FilaFixa(posicao=2),
@@ -151,7 +154,7 @@ class TestAgendar:
     def test_reenvio_atrasado_apos_inicio_e_ignorado(self) -> None:
         existente = _agendada()
         existente.iniciar(MECANICO, datetime.now(UTC))
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         AgendarExecucao(
             ExecucoesEmMemoria(existente),
             FilaFixa(),
@@ -159,14 +162,14 @@ class TestAgendar:
             _estoque_com_reserva(existente.ordem_id),
             uow,
         ).executar(existente.ordem_id, Prioridade.NORMAL)
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
     def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
         repo = ExecucoesEmMemoria()
         ordem_id = uuid4()
-        CancelarExecucao(repo, FakeUnitOfWork()).executar(ordem_id)
+        CancelarExecucao(repo, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = repo.execucoes[ordem_id]
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
 
         resultado = AgendarExecucao(
             repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
@@ -174,7 +177,7 @@ class TestAgendar:
 
         assert resultado is lapide
         assert resultado.status is StatusExecucao.CANCELADA
-        assert (uow.eventos, uow.commits) == ([], 0)
+        assert (uow.eventos, uow.descartado) == ([], True)
 
     def test_prioridade_fora_do_contrato(self) -> None:
         ordem_id, urgente = uuid4(), "urgente"
@@ -183,7 +186,7 @@ class TestAgendar:
             FilaFixa(),
             VeiculosEmMemoria(),
             _estoque_com_reserva(ordem_id),
-            FakeUnitOfWork(),
+            FakeTransacaoDoComando(),
         )
         with pytest.raises(ValueError, match="Prioridade"):
             uc.executar(ordem_id, urgente)
@@ -205,12 +208,12 @@ class TestAgendar:
         reservas = ReservasEmMemoria()
         if reserva != "nenhuma":
             quantidade = 9 if reserva == "recusada" else 1
-            ReservarPecas(itens, reservas, FakeUnitOfWork()).executar(
+            ReservarPecas(itens, reservas, FakeTransacaoDoComando()).executar(
                 ordem_id, [ItemReserva(VELA, quantidade)]
             )
         if reserva == "liberada":
             reservas.reservas[ordem_id].liberar(datetime.now(UTC))
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         uc = AgendarExecucao(
             repo,
             FilaFixa(),
@@ -223,7 +226,7 @@ class TestAgendar:
             uc.executar(ordem_id, Prioridade.NORMAL)
 
         assert repo.execucoes == {}
-        assert (uow.eventos, uow.rollbacks) == ([], 1)
+        assert (uow.eventos, uow.desfeitas) == ([], 1)
 
 
 class TestListarFila:
@@ -246,7 +249,7 @@ class TestListarFila:
 class TestCancelar:
     def test_cancela_e_responde(self) -> None:
         execucao = _agendada()
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         CancelarExecucao(ExecucoesEmMemoria(execucao), uow).executar(execucao.ordem_id)
         assert execucao.status is StatusExecucao.CANCELADA
         assert _eventos(uow) == [
@@ -255,7 +258,7 @@ class TestCancelar:
 
     def test_repetido_reemite_a_resposta(self) -> None:
         execucao = _agendada()
-        repo, uow = ExecucoesEmMemoria(execucao), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(execucao), FakeTransacaoDoComando()
         CancelarExecucao(repo, uow).executar(execucao.ordem_id)
         CancelarExecucao(repo, uow).executar(execucao.ordem_id)
         assert [e.tipo for e in uow.eventos] == 2 * ["ExecucaoCancelada"]
@@ -263,14 +266,14 @@ class TestCancelar:
     def test_depois_do_pivot_nao_cancela(self) -> None:
         execucao = _agendada()
         execucao.iniciar(MECANICO, datetime.now(UTC))
-        uow = FakeUnitOfWork()
+        uow = FakeTransacaoDoComando()
         uc = CancelarExecucao(ExecucoesEmMemoria(execucao), uow)
         with pytest.raises(TransicaoStatusInvalidaException):
             uc.executar(execucao.ordem_id)
         assert uow.eventos == []
 
     def test_compensacao_antes_do_original_grava_lapide_e_responde(self) -> None:
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
 
         CancelarExecucao(repo, uow).executar(ordem_id)
@@ -403,7 +406,7 @@ class TestCausaDosFatosDoMecanico:
 
     def test_agendamento_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
         ordem_id, comando, reenvio = uuid4(), uuid4(), uuid4()
-        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        repo, uow = ExecucoesEmMemoria(), FakeTransacaoDoComando()
         caso = AgendarExecucao(
             repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
         )

@@ -1,7 +1,8 @@
 """Comandos da saga para o diagnostico, entregues pelo consumidor (RFC-004 5.3).
 
-O envelope chega validado pelo contrato; o caso de uso roda na sessao e na UoW
-da mensagem, que gravam a idempotencia e a resposta na mesma transacao.
+O envelope chega validado pelo contrato; o caso de uso roda na sessao e na
+unidade de trabalho da mensagem, e o consumidor comita efeito, resposta e
+idempotencia juntos.
 """
 
 from __future__ import annotations
@@ -21,11 +22,11 @@ if TYPE_CHECKING:
 
     from sqlalchemy.orm import Session
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
 
 
 def solicitar_diagnostico(
-    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
     retrato = dados["veiculo"]
@@ -46,7 +47,7 @@ def solicitar_diagnostico(
 
 
 def descartar_diagnostico(
-    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
     DescartarDiagnostico(DiagnosticoSQLAlchemyRepository(sessao), uow).executar(

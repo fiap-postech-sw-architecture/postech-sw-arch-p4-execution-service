@@ -11,10 +11,7 @@ from typing import TYPE_CHECKING, Final
 import structlog
 
 from src.compartilhado.infraestrutura.ambiente import variavel_obrigatoria
-from src.compartilhado.infraestrutura.database import (
-    criar_engine,
-    criar_session_factory,
-)
+from src.compartilhado.infraestrutura.database import criar_engine
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.processo import (
@@ -61,7 +58,7 @@ def main() -> None:
     configurar_telemetria()
     engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     consumidor = Consumidor(
-        criar_session_factory(engine),
+        engine,
         variavel_obrigatoria("RABBITMQ_URL"),
         HANDLERS,
         SinaisDoProcesso.do_processo("consumidor"),

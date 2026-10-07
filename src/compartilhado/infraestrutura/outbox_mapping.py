@@ -10,11 +10,14 @@ colunas de controle (``status``, ``tentativas``, ``proxima_tentativa_em``,
 ``entregue_em``, ``ultimo_erro``) sao as do relay do p3, que acorda pelo
 ``NOTIFY`` em ``CANAL_NOTIFY``.
 
-``mensagens_processadas`` guarda o ``id`` de cada comando consumido, gravado na
-mesma transacao do efeito: a reentrega do mesmo ``id`` recebe ack sem efeito.
+``mensagens_processadas`` guarda o ``id`` de cada comando consumido, gravado pelo
+consumidor na mesma transacao do efeito: a reentrega do mesmo ``id`` recebe ack
+sem efeito.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -29,9 +32,14 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from src.compartilhado.infraestrutura.database import metadata
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy import Connection
 
 CANAL_NOTIFY = "outbox_novo"
 
@@ -91,3 +99,18 @@ Index(
     "ix_mensagens_processadas_processada_em",
     mensagens_processadas_table.c.processada_em,
 )
+
+
+def registrar_processada(conexao: Connection, mensagem_id: UUID) -> bool:
+    """Grava o ``id`` do comando como processado; False se ja estava (reentrega).
+
+    ``ON CONFLICT DO NOTHING``: uma entrega simultanea do mesmo comando espera
+    a transacao desta na chave primaria e recebe False, sem estourar a PK.
+    """
+    inserida = conexao.execute(
+        insert(mensagens_processadas_table)
+        .values(mensagem_id=mensagem_id)
+        .on_conflict_do_nothing(index_elements=["mensagem_id"])
+        .returning(mensagens_processadas_table.c.mensagem_id)
+    ).first()
+    return inserida is not None

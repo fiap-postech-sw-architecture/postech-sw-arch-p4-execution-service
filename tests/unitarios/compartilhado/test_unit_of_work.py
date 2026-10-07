@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from opentelemetry import context, trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
+from sqlalchemy.orm import Session
 
 from src.compartilhado.aplicacao.integration_event import IntegrationEvent
 from src.compartilhado.infraestrutura.mensageria.contratos import (
@@ -14,8 +16,8 @@ from src.compartilhado.infraestrutura.mensageria.contratos import (
 )
 from src.compartilhado.infraestrutura.mensageria.telemetria import tracer
 from src.compartilhado.infraestrutura.unit_of_work import (
-    MensagemJaProcessadaError,
     SQLAlchemyUnitOfWork,
+    TransacaoDaMensagem,
 )
 from src.estoque.aplicacao.events import ReservaLiberadaEvent
 
@@ -25,23 +27,29 @@ class ForaDoContratoEvent(IntegrationEvent):
     """Evento sem schema no contrato: so um defeito o gravaria."""
 
 
-class _Violacao:
-    def __init__(self, pgcode: str) -> None:
-        self.pgcode = pgcode
+class _Tentativa:
+    def __init__(self, chamadas: list[tuple[Any, ...]]) -> None:
+        self._chamadas = chamadas
+
+    def commit(self) -> None:
+        self._chamadas.append(("liberar savepoint",))
+
+    def rollback(self) -> None:
+        self._chamadas.append(("voltar ao savepoint",))
 
 
 class _SessaoFake:
     """Grava a sequencia de chamadas (a gravacao real e testada no Postgres)."""
 
-    def __init__(self, recusa_pgcode: str | None = None) -> None:
+    def __init__(self) -> None:
         self.chamadas: list[tuple[Any, ...]] = []
-        self._recusa = recusa_pgcode
 
     def execute(self, stmt: object, params: object = None) -> None:
-        sql = str(stmt)
-        if self._recusa and sql.startswith("INSERT INTO mensagens_processadas"):
-            raise IntegrityError(sql, {}, _Violacao(self._recusa))  # type: ignore[arg-type]
-        self.chamadas.append(("execute", sql, params, stmt))
+        self.chamadas.append(("execute", str(stmt), params))
+
+    def begin_nested(self) -> _Tentativa:
+        self.chamadas.append(("savepoint",))
+        return _Tentativa(self.chamadas)
 
     def commit(self) -> None:
         self.chamadas.append(("commit",))
@@ -59,16 +67,24 @@ class _SessaoSemConexao(_SessaoFake):
         raise ConnectionError
 
 
-def _uow(
-    sessao: _SessaoFake | None = None, **kwargs: Any
-) -> tuple[SQLAlchemyUnitOfWork, _SessaoFake]:
-    sessao = sessao or _SessaoFake()
-    # Fake so com a superficie da Session que a UoW usa (o tipo e Session).
-    return SQLAlchemyUnitOfWork(lambda: sessao, **kwargs), sessao  # type: ignore[arg-type,return-value]
+def _sessao(fake: _SessaoFake) -> Session:
+    # Fake so com a superficie da Session que as unidades de trabalho usam.
+    return cast("Session", fake)
 
 
-def _sql(sessao: _SessaoFake) -> list[str]:
-    return [c[1].split(" (")[0] if c[0] == "execute" else c[0] for c in sessao.chamadas]
+def _uow(sessao: _SessaoFake | None = None) -> tuple[SQLAlchemyUnitOfWork, _SessaoFake]:
+    fake = sessao or _SessaoFake()
+    return SQLAlchemyUnitOfWork(lambda: _sessao(fake)), fake
+
+
+def _w3c(contexto: SpanContext) -> str:
+    return (
+        f"00-{contexto.trace_id:032x}-{contexto.span_id:016x}-"
+        f"{contexto.trace_flags:02x}"
+    )
+
+
+# --- API: o caso de uso comita ---------------------------------------------
 
 
 def test_commit_sem_eventos_nao_toca_a_outbox() -> None:
@@ -76,7 +92,6 @@ def test_commit_sem_eventos_nao_toca_a_outbox() -> None:
     with uow:
         uow.commit()
     assert sessao.chamadas == [("commit",), ("close",)]
-    assert uow.comitou
 
 
 def test_commit_grava_o_envelope_do_contrato_e_notifica_o_relay() -> None:
@@ -114,50 +129,16 @@ def test_commit_grava_o_envelope_do_contrato_e_notifica_o_relay() -> None:
     assert (commit, close) == (("commit",), ("close",))
 
 
-def test_comando_em_processamento_vira_causa_e_linha_de_processada() -> None:
-    comando_id = uuid4()
-    uow, sessao = _uow(mensagem_de_origem=comando_id)
-    with tracer.start_as_current_span("process LiberarReserva") as span:
-        with uow:
-            uow.registrar_evento(ReservaLiberadaEvent(ordem_id=uuid4()))
-            uow.commit()
-        contexto = span.get_span_context()
-
-    processada, insert, *_ = sessao.chamadas
-    assert processada[1].startswith("INSERT INTO mensagens_processadas")
-    assert processada[3].compile().params == {"mensagem_id": comando_id}
-    (linha,) = insert[2]
-    assert linha["envelope"]["causation_id"] == str(comando_id)
-    assert linha["traceparent"] == (
-        f"00-{contexto.trace_id:032x}-{contexto.span_id:016x}-"
-        f"{contexto.trace_flags:02x}"
-    )
-
-
-def test_causa_propria_do_evento_vale_mais_que_o_comando_em_processamento() -> None:
-    # Fato do mecanico (API): responde ao comando que abriu o fluxo.
+def test_fato_do_mecanico_leva_a_causa_propria() -> None:
     abertura = uuid4()
-    uow, sessao = _uow(mensagem_de_origem=uuid4())
+    uow, sessao = _uow()
     with uow:
         uow.registrar_evento(
             ReservaLiberadaEvent(ordem_id=uuid4(), causation_id=abertura)
         )
         uow.commit()
-    (linha,) = sessao.chamadas[1][2]
+    (linha,) = sessao.chamadas[0][2]
     assert linha["envelope"]["causation_id"] == str(abertura)
-
-
-def test_processada_e_gravada_so_no_primeiro_commit() -> None:
-    uow, sessao = _uow(mensagem_de_origem=uuid4())
-    with uow:
-        uow.commit()
-        uow.commit()
-    assert _sql(sessao) == [
-        "INSERT INTO mensagens_processadas",
-        "commit",
-        "commit",
-        "close",
-    ]
 
 
 def _gravar(uow: SQLAlchemyUnitOfWork, evento: IntegrationEvent) -> None:
@@ -166,27 +147,10 @@ def _gravar(uow: SQLAlchemyUnitOfWork, evento: IntegrationEvent) -> None:
         uow.commit()
 
 
-def test_outra_entrega_do_mesmo_comando_ja_comitada_vira_excecao_propria() -> None:
-    uow, sessao = _uow(_SessaoFake(recusa_pgcode="23505"), mensagem_de_origem=uuid4())
-    evento = ReservaLiberadaEvent(ordem_id=uuid4())
-    with pytest.raises(MensagemJaProcessadaError):
-        _gravar(uow, evento)
-    assert sessao.chamadas == [("rollback",), ("close",)]
-    assert not uow.comitou
-
-
-def test_outra_violacao_de_integridade_sobe_como_esta() -> None:
-    uow, _ = _uow(_SessaoFake(recusa_pgcode="23502"), mensagem_de_origem=uuid4())
-    evento = ReservaLiberadaEvent(ordem_id=uuid4())
-    with pytest.raises(IntegrityError):
-        _gravar(uow, evento)
-
-
 def test_evento_fora_do_contrato_nao_e_gravado() -> None:
     uow, sessao = _uow()
-    evento = ForaDoContratoEvent(ordem_id=uuid4())
     with pytest.raises(MensagemInvalidaError, match="tipo sem contrato"):
-        _gravar(uow, evento)
+        _gravar(uow, ForaDoContratoEvent(ordem_id=uuid4()))
     assert sessao.chamadas == [("rollback",), ("close",)]
 
 
@@ -244,3 +208,101 @@ def test_rollback_que_falha_ainda_fecha_a_sessao() -> None:
     with pytest.raises(ConnectionError):
         _falhar_no_meio(uow)
     assert sessao.chamadas == [("rollback",), ("close",)]
+
+
+# --- comando da saga: quem comita e o consumidor ------------------------------
+
+
+def _transacao() -> tuple[TransacaoDaMensagem, _SessaoFake, Any]:
+    fake, comando_id = _SessaoFake(), uuid4()
+    return TransacaoDaMensagem(_sessao(fake), comando_id), fake, comando_id
+
+
+def test_tentativa_guarda_o_efeito_e_as_respostas_sem_comitar() -> None:
+    transacao, sessao, comando_id = _transacao()
+    with tracer.start_as_current_span("process LiberarReserva") as span:
+        with transacao:
+            transacao.registrar_evento(ReservaLiberadaEvent(ordem_id=uuid4()))
+        contexto = span.get_span_context()
+
+    savepoint, insert, notify, liberar = sessao.chamadas
+    assert (savepoint, liberar) == (("savepoint",), ("liberar savepoint",))
+    assert insert[1].startswith("INSERT INTO outbox")
+    assert notify[1] == "SELECT pg_notify(:canal, '')"
+    (linha,) = insert[2]
+    # A resposta leva o id do comando respondido e o contexto do consumidor.
+    assert linha["envelope"]["causation_id"] == str(comando_id)
+    assert linha["traceparent"] == _w3c(contexto)
+    assert ("commit",) not in sessao.chamadas
+    assert not transacao.descartado
+
+
+def test_causa_propria_do_evento_vale_mais_que_o_comando_em_processamento() -> None:
+    transacao, sessao, _ = _transacao()
+    abertura = uuid4()
+    with transacao:
+        transacao.registrar_evento(
+            ReservaLiberadaEvent(ordem_id=uuid4(), causation_id=abertura)
+        )
+    (linha,) = sessao.chamadas[1][2]
+    assert linha["envelope"]["causation_id"] == str(abertura)
+
+
+def _tentar_e_falhar(transacao: TransacaoDaMensagem) -> None:
+    with transacao:
+        transacao.registrar_evento(ReservaLiberadaEvent(ordem_id=uuid4()))
+        raise RuntimeError
+
+
+def test_tentativa_com_excecao_volta_ao_savepoint_e_perde_os_eventos() -> None:
+    transacao, sessao, _ = _transacao()
+    with pytest.raises(RuntimeError):
+        _tentar_e_falhar(transacao)
+
+    with transacao:
+        pass
+    assert sessao.chamadas == [
+        ("savepoint",),
+        ("voltar ao savepoint",),
+        ("savepoint",),
+        ("liberar savepoint",),
+    ]
+
+
+def test_resposta_fora_do_contrato_desfaz_a_tentativa() -> None:
+    transacao, sessao, _ = _transacao()
+    with pytest.raises(MensagemInvalidaError), transacao:
+        transacao.registrar_evento(ForaDoContratoEvent(ordem_id=uuid4()))
+    assert sessao.chamadas == [("savepoint",), ("voltar ao savepoint",)]
+
+
+def test_descarte_vale_para_a_ultima_tentativa() -> None:
+    transacao, _, _ = _transacao()
+    with transacao:
+        transacao.descartar()
+    assert transacao.descartado
+    with transacao:
+        pass
+    assert not transacao.descartado
+
+
+def test_tracestate_do_contexto_corrente_vai_para_a_outbox_junto_do_traceparent() -> (
+    None
+):
+    pai = SpanContext(
+        trace_id=0x0AF7651916CD43DD8448EB211C80319C,
+        span_id=0xB7AD6B7169203331,
+        is_remote=True,
+        trace_flags=TraceFlags(1),
+        trace_state=TraceState([("fornecedor", "estado-1")]),
+    )
+    token = context.attach(trace.set_span_in_context(NonRecordingSpan(pai)))
+    try:
+        transacao, sessao, _ = _transacao()
+        with transacao:
+            transacao.registrar_evento(ReservaLiberadaEvent(ordem_id=uuid4()))
+    finally:
+        context.detach(token)
+    (linha,) = sessao.chamadas[1][2]
+    assert linha["tracestate"] == "fornecedor=estado-1"
+    assert linha["traceparent"] == _w3c(pai)

@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import threading
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import pika
@@ -31,11 +32,11 @@ from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_con
 from src.compartilhado.infraestrutura.mensageria import processo, telemetria
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
-from src.compartilhado.infraestrutura.unit_of_work import MensagemJaProcessadaError
+from tests.fakes import FakeTransacaoDoComando
 
 if TYPE_CHECKING:
     import io
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
     from pathlib import Path
 
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
     )
     from sqlalchemy.orm import Session
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
 
 _COMANDO = (CONTRATOS / "exemplos" / "ReservarPecas.json").read_bytes()
 _URL = "amqp://execucao:x@broker.test:5672/%2F"  # gitleaks:allow - nunca conecta
@@ -222,14 +223,11 @@ class _Entrega:
 
 
 class _Sessao:
-    """Sessao falsa: ``processada`` diz se o id ja esta em mensagens_processadas."""
+    """Sessao e engine falsas: ``begin`` e a limpeza da retencao (nada a apagar)."""
 
-    rowcount = 0  # limpeza da retencao: nada a apagar
+    rowcount = 0
 
-    def __init__(self, processada: bool = False) -> None:
-        self._processada = processada
-
-    def connection(self) -> _Sessao:
+    def begin(self) -> _Sessao:
         return self
 
     def __enter__(self) -> Self:
@@ -241,42 +239,63 @@ class _Sessao:
     def execute(self, *_: object) -> _Sessao:
         return self
 
-    def first(self) -> object:
-        return object() if self._processada else None
-
-    def commit(self) -> None:
-        pass
-
     def rollback(self) -> None:
         pass
 
-    def close(self) -> None:
-        pass
+
+class _Transacoes:
+    """Transacao da mensagem em memoria; ``processada`` simula o id ja gravado.
+
+    ``comitadas`` conta as transacoes que o consumidor fechou sem excecao.
+    """
+
+    def __init__(self, processada: bool = False) -> None:
+        self.processada = processada
+        self.comitadas = 0
+        self.ultima: FakeTransacaoDoComando | None = None
+
+    @contextmanager
+    def __call__(
+        self, _comando_id: object
+    ) -> Iterator[tuple[_Sessao, FakeTransacaoDoComando] | None]:
+        if self.processada:
+            yield None
+            return
+        self.ultima = FakeTransacaoDoComando()
+        yield _Sessao(), self.ultima
+        self.comitadas += 1
 
 
 class _Handler:
-    def __init__(self, erro: Exception | None = None) -> None:
+    def __init__(
+        self, erro: Exception | None = None, *, descartar: bool = False
+    ) -> None:
         self.chamadas = 0
         self.envelopes: list[Mapping[str, Any]] = []
         self._erro = erro
+        self._descartar = descartar
 
     def __call__(
-        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
     ) -> None:
         self.chamadas += 1
         self.envelopes.append(envelope)
         structlog.get_logger("teste.handler").info("handler_ran")
+        if self._descartar:
+            uow.descartar()
         if self._erro is not None:
             raise self._erro
 
 
-def _consumidor(handler: _Handler, processada: bool = False) -> Consumidor:
-    return Consumidor(
-        lambda: _Sessao(processada),  # type: ignore[arg-type,return-value]
+def _consumidor(handler: _Handler, transacoes: _Transacoes | None = None) -> Consumidor:
+    consumidor = Consumidor(
+        _Sessao(),  # type: ignore[arg-type]  # engine falsa: so a limpeza a usa
         _URL,
         {"ReservarPecas": handler},
         processo.SinaisDoProcesso.do_processo("teste"),
     )
+    consumidor._transacao = transacoes or _Transacoes()  # type: ignore[method-assign]
+    return consumidor
 
 
 def _consumir(
@@ -285,12 +304,12 @@ def _consumir(
     corpo: bytes = _COMANDO,
     user_id: str | None = "os",
     headers: dict[str, Any] | None = None,
-    processada: bool = False,
+    transacoes: _Transacoes | None = None,
     tipo: str = "ReservarPecas",
 ) -> _Canal:
     canal = _Canal()
     props = pika.BasicProperties(user_id=user_id, type=tipo, headers=headers)
-    _consumidor(handler, processada)._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
+    _consumidor(handler, transacoes)._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
     return canal
 
 
@@ -302,27 +321,33 @@ def _consumidas(tipo: str, resultado: str) -> float:
 
 
 @pytest.mark.parametrize(
-    ("erro", "resultado"),
+    ("handler", "resultado"),
     [
-        pytest.param(None, "ignorada", id="sem-commit-e-ignorada"),
-        pytest.param(MensagemJaProcessadaError(), "duplicada", id="corrida-do-id"),
+        pytest.param(_Handler(), "processada", id="processada"),
+        pytest.param(_Handler(descartar=True), "ignorada", id="atrasado-descartado"),
         pytest.param(
-            ViolacaoRegraDeNegocioException(), "ignorada", id="estado-nao-corresponde"
+            _Handler(ViolacaoRegraDeNegocioException()),
+            "ignorada",
+            id="estado-nao-corresponde",
         ),
     ],
 )
-def test_desfechos_com_ack(erro: Exception | None, resultado: str) -> None:
+def test_desfechos_com_ack_comitam_a_transacao_da_mensagem(
+    handler: _Handler, resultado: str
+) -> None:
     antes = _consumidas("ReservarPecas", resultado)
-    handler = _Handler(erro)
-    canal = _consumir(handler)
+    transacoes = _Transacoes()
+    canal = _consumir(handler, transacoes=transacoes)
     assert (canal.acks, canal.rejeicoes, canal.publicadas) == ([7], [], [])
-    assert handler.envelopes == [json.loads(_COMANDO)]
+    assert handler.envelopes[-1] == json.loads(_COMANDO)
+    # Ignorada tambem comita: o id fica gravado e a reentrega e duplicada.
+    assert transacoes.comitadas == 1
     assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
 def test_id_ja_processado_recebe_ack_sem_chamar_o_handler() -> None:
     handler = _Handler()
-    canal = _consumir(handler, processada=True)
+    canal = _consumir(handler, transacoes=_Transacoes(processada=True))
     assert canal.acks == [7]
     assert handler.chamadas == 0
 
@@ -417,9 +442,9 @@ def test_copia_de_retry_do_proprio_consumidor_e_aceita() -> None:
 
 def test_tipo_fora_do_mapa_vira_label_desconhecido() -> None:
     # O label nao cresce com o que o publicador inventar na propriedade type.
-    antes = _consumidas("desconhecido", "ignorada")
+    antes = _consumidas("desconhecido", "processada")
     _consumir(_Handler(), tipo="Qualquer" * 20)
-    assert _consumidas("desconhecido", "ignorada") == antes + 1
+    assert _consumidas("desconhecido", "processada") == antes + 1
 
 
 def test_logs_do_handler_saem_no_span_do_consumidor_e_sem_dado(
@@ -501,7 +526,7 @@ def _rodar_laco(
     monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
     backoff = _BackoffGravado()
     Consumidor(
-        lambda: _Sessao(),  # type: ignore[arg-type,return-value]
+        _Sessao(),  # type: ignore[arg-type]  # engine falsa: so a limpeza a usa
         _URL,
         {},
         processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto"),

@@ -23,7 +23,10 @@ from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import (
+        UnitOfWork,
+        UnitOfWorkDoComando,
+    )
     from src.execucao.aplicacao.ports import (
         EstoquePort,
         FilaDeExecucaoPort,
@@ -62,7 +65,7 @@ class AgendarExecucao:
     prioridade original fica); ja iniciada, finalizada ou cancelada (inclusive
     a lapide de um cancelamento adiantado), o comando atrasado e descartado sem
     efeito e sem resposta. A execucao nova copia o retrato do veiculo do
-    diagnostico, que a fila mostra ao mecanico.
+    diagnostico, que a fila mostra ao mecanico. Quem comita e o consumidor.
     """
 
     def __init__(
@@ -71,7 +74,7 @@ class AgendarExecucao:
         fila: FilaDeExecucaoPort,
         veiculos: VeiculosPort,
         estoque: EstoquePort,
-        uow: UnitOfWork,
+        uow: UnitOfWorkDoComando,
     ) -> None:
         self._repo = repo
         self._fila = fila
@@ -114,6 +117,7 @@ class AgendarExecucao:
                     correlation_id=str(ordem_id),
                     status=execucao.status,
                 )
+                self._uow.descartar()
                 return execucao
             self._uow.registrar_evento(
                 ExecucaoAgendadaEvent(
@@ -122,7 +126,6 @@ class AgendarExecucao:
                     posicao_na_fila=self._fila.posicao(execucao),
                 )
             )
-            self._uow.commit()
         return execucao
 
 
@@ -146,7 +149,7 @@ class CancelarExecucao:
     ``motivo`` do comando nao e usado aqui: o historico fica no OS Service.
     """
 
-    def __init__(self, repo: ExecucaoRepository, uow: UnitOfWork) -> None:
+    def __init__(self, repo: ExecucaoRepository, uow: UnitOfWorkDoComando) -> None:
         self._repo = repo
         self._uow = uow
 
@@ -164,8 +167,7 @@ class CancelarExecucao:
             self._uow.registrar_evento(
                 ExecucaoCanceladaEvent(ordem_id=ordem_id, ocorrido_em=agora)
             )
-            self._uow.commit()
-        # Depois do commit (ver DescartarDiagnostico).
+        # Depois do bloco (ver DescartarDiagnostico).
         _log.info("execution_cancelled", correlation_id=str(ordem_id), tombstone=lapide)
 
 

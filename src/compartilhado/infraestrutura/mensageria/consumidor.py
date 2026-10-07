@@ -3,8 +3,10 @@
 Cada mensagem da fila do servico abre um span CONSUMER filho da publicacao (os
 logs do handler saem dentro dele), tem o envelope conferido pelo contrato e a
 origem pelo ``user_id`` (o produtor do tipo no AsyncAPI; a copia de retry, com
-``x-tentativa``, vem do proprio consumidor) e vai ao handler do tipo, com
-``mensagens_processadas`` gravada na mesma transacao do efeito. Desfecho:
+``x-tentativa``, vem do proprio consumidor) e vai ao handler do tipo, preso a
+transacao da mensagem: o consumidor grava o ``id`` em ``mensagens_processadas``,
+roda o handler e comita uma vez so (efeito, respostas na outbox e o ``id``
+juntos ou nada). Desfecho:
 
 - processada, ignorada (o comando nao corresponde ao estado atual e o handler o
   descarta, regra dos participantes da saga) ou duplicada (``id`` ja
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from datetime import timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
@@ -31,7 +34,7 @@ import structlog
 from opentelemetry.trace import SpanKind, StatusCode
 from pika.exceptions import AMQPError, ConsumerCancelled
 from prometheus_client import Counter
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func
 from sqlalchemy.exc import (
     DBAPIError,
     InterfaceError,
@@ -46,7 +49,10 @@ from src.compartilhado.dominio.exceptions import (
     EntidadeDuplicadaException,
     ValorInvalidoError,
 )
-from src.compartilhado.infraestrutura.database import descrever_erro_de_banco
+from src.compartilhado.infraestrutura.database import (
+    criar_session_factory,
+    descrever_erro_de_banco,
+)
 from src.compartilhado.infraestrutura.mensageria.amqp import (
     EXCHANGE_RETRY,
     abrir_canal,
@@ -66,21 +72,20 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
 )
 from src.compartilhado.infraestrutura.outbox_mapping import (
     mensagens_processadas_table,
+    registrar_processada,
 )
-from src.compartilhado.infraestrutura.unit_of_work import (
-    MensagemJaProcessadaError,
-    SQLAlchemyUnitOfWork,
-)
+from src.compartilhado.infraestrutura.unit_of_work import TransacaoDaMensagem
 
 if TYPE_CHECKING:
     import threading
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
     import pika
     from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
     from src.compartilhado.infraestrutura.mensageria.processo import SinaisDoProcesso
 
 _log = structlog.get_logger(__name__)
@@ -111,8 +116,11 @@ _TRANSITORIOS: Final = (
     EntidadeDuplicadaException,
 )
 
-# Recebe o envelope ja validado e roda o caso de uso na sessao e UoW da mensagem.
-type HandlerDeComando = Callable[[Mapping[str, Any], Session, UnitOfWork], None]
+# Recebe o envelope ja validado e roda o caso de uso na sessao e na unidade de
+# trabalho da mensagem; quem comita e o consumidor.
+type HandlerDeComando = Callable[
+    [Mapping[str, Any], Session, UnitOfWorkDoComando], None
+]
 
 
 class Resultado(StrEnum):
@@ -144,13 +152,14 @@ class Consumidor:
 
     def __init__(
         self,
-        session_factory: Callable[[], Session],
+        engine: Engine,
         rabbitmq_url: str,
         handlers: Mapping[str, HandlerDeComando],
         sinais: SinaisDoProcesso,
         backoff: Backoff | None = None,
     ) -> None:
-        self._session_factory = session_factory
+        self._engine = engine
+        self._sessoes = criar_session_factory(engine)
         self._url = rabbitmq_url
         self._usuario = usuario_da_url(rabbitmq_url)
         self._handlers = handlers
@@ -297,13 +306,8 @@ class Consumidor:
     def _executar(self, envelope: Mapping[str, Any], tentativa: int) -> Resultado:
         try:
             return self._rodar_handler(envelope)
-        except MensagemJaProcessadaError:
-            return Resultado.DUPLICADA
         except _TRANSITORIOS as exc:
             return self._falha_transitoria(exc, tentativa)
-        except DomainException as exc:
-            _log.info("command_ignored", codigo=exc.codigo)
-            return Resultado.IGNORADA
         except ValorInvalidoError:
             # So a classe: a mensagem pode ecoar o dado recebido.
             _log.warning("command_rejected_by_domain")
@@ -313,16 +317,43 @@ class Consumidor:
             return Resultado.DLQ
 
     def _rodar_handler(self, envelope: Mapping[str, Any]) -> Resultado:
-        mensagem_id = UUID(envelope["id"])
-        processada = select(mensagens_processadas_table.c.mensagem_id).where(
-            mensagens_processadas_table.c.mensagem_id == mensagem_id
-        )
-        with self._session_factory() as sessao:
-            if sessao.execute(processada).first() is not None:
+        with self._transacao(UUID(envelope["id"])) as aberta:
+            if aberta is None:
                 return Resultado.DUPLICADA
-            uow = SQLAlchemyUnitOfWork(lambda: sessao, mensagem_de_origem=mensagem_id)
-            self._handlers[envelope["tipo"]](envelope, sessao, uow)
-            return Resultado.PROCESSADA if uow.comitou else Resultado.IGNORADA
+            sessao, transacao = aberta
+            try:
+                self._handlers[envelope["tipo"]](envelope, sessao, transacao)
+            except _TRANSITORIOS:
+                raise
+            except DomainException as exc:
+                # Fora do estado: nada do handler fica, mas o id fica gravado
+                # (a reentrega e duplicada, nao roda de novo).
+                sessao.rollback()
+                _log.info("command_ignored", codigo=exc.codigo)
+                return Resultado.IGNORADA
+        return Resultado.IGNORADA if transacao.descartado else Resultado.PROCESSADA
+
+    @contextmanager
+    def _transacao(
+        self, comando_id: UUID
+    ) -> Iterator[tuple[Session, TransacaoDaMensagem] | None]:
+        """Transacao da mensagem, comitada pelo consumidor; ``None`` se ja processada.
+
+        O ``id`` entra em ``mensagens_processadas`` antes do handler: outra
+        entrega do mesmo comando espera esta transacao e recebe ``None``. A
+        sessao do handler entra por savepoint, entao o commit dela nao comita a
+        mensagem: saida normal do bloco comita efeito, outbox e ``id`` juntos, e
+        excecao desfaz tudo.
+        """
+        with self._engine.connect() as conexao, conexao.begin():
+            if not registrar_processada(conexao, comando_id):
+                yield None
+                return
+            with self._sessoes(
+                bind=conexao, join_transaction_mode="create_savepoint"
+            ) as sessao:
+                yield sessao, TransacaoDaMensagem(sessao, comando_id)
+                sessao.commit()
 
     @staticmethod
     def _falha_transitoria(exc: Exception, tentativa: int) -> Resultado:
@@ -368,17 +399,12 @@ class Consumidor:
         # Relogio do banco, o mesmo do default de processada_em.
         limite = func.now() - _RETENCAO_DAS_PROCESSADAS
         try:
-            with self._session_factory() as sessao:
-                apagadas = (
-                    sessao.connection()
-                    .execute(
-                        delete(mensagens_processadas_table).where(
-                            mensagens_processadas_table.c.processada_em < limite
-                        )
+            with self._engine.begin() as conexao:
+                apagadas = conexao.execute(
+                    delete(mensagens_processadas_table).where(
+                        mensagens_processadas_table.c.processada_em < limite
                     )
-                    .rowcount
-                )
-                sessao.commit()
+                ).rowcount
         except SQLAlchemyError as exc:
             _log.warning("processed_messages_cleanup_failed", error=type(exc).__name__)
             return

@@ -9,7 +9,7 @@ import structlog
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
 
 _log = structlog.get_logger(__name__)
 
@@ -31,13 +31,14 @@ class AnonimizarVeiculo:
     placa antiga para uma execucao nova.
     """
 
-    def __init__(self, retratos: RetratosDoVeiculoPort, uow: UnitOfWork) -> None:
+    def __init__(
+        self, retratos: RetratosDoVeiculoPort, uow: UnitOfWorkDoComando
+    ) -> None:
         self._retratos = retratos
         self._uow = uow
 
     def executar(self, veiculo_id: UUID) -> int:
         with self._uow:
             trocados = self._retratos.anonimizar(veiculo_id)
-            self._uow.commit()
         _log.info("vehicle_anonymized", veiculo_id=str(veiculo_id), retratos=trocados)
         return trocados

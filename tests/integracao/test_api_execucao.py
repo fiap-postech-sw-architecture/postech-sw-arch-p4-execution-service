@@ -9,7 +9,6 @@ from sqlalchemy import text
 
 from src.compartilhado.dominio.exceptions import TransicaoStatusInvalidaException
 from src.compartilhado.dominio.veiculo import Veiculo
-from src.compartilhado.infraestrutura.unit_of_work import SQLAlchemyUnitOfWork
 from src.diagnostico.aplicacao.use_cases import RegistrarSolicitacaoDeDiagnostico
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.aplicacao.use_cases import LiberarReserva, ReservarPecas
@@ -30,6 +29,7 @@ from src.execucao.infraestrutura.repository import (
     ExecucaoSQLAlchemyRepository,
     FilaDeExecucaoSQLAlchemy,
 )
+from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     import io
@@ -49,7 +49,7 @@ def _reservar(
         ReservarPecas(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(ordem_id, [ItemReserva(Sku(sku), q) for sku, q in pecas.items()])
 
 
@@ -68,7 +68,7 @@ def _agendar(
             FilaDeExecucaoSQLAlchemy(session),
             VeiculosSQLAlchemy(session),
             EstoqueSQLAlchemyAdapter(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(ordem_id, prioridade)
     return ordem_id
 
@@ -78,7 +78,7 @@ def _liberar(session_factory: sessionmaker[Session], ordem_id: UUID) -> None:
         LiberarReserva(
             ItemEstoqueSQLAlchemyRepository(session),
             ReservaSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(ordem_id)
 
 
@@ -121,7 +121,7 @@ def test_fila_mostra_o_retrato_copiado_do_diagnostico(
     with session_factory() as session:
         RegistrarSolicitacaoDeDiagnostico(
             DiagnosticoSQLAlchemyRepository(session),
-            SQLAlchemyUnitOfWork(lambda: session),
+            transacao_do_comando(session),
         ).executar(ordem_id, veiculo, "Freio chiando")
     _agendar(session_factory, ordem_id=ordem_id)
     sem_diagnostico = _agendar(session_factory)
@@ -256,7 +256,7 @@ def test_pivot_depois_de_iniciar_nao_cancela(
     ordem_id = _em_execucao(api, mecanico, session_factory)
     with session_factory() as session:
         uc = CancelarExecucao(
-            ExecucaoSQLAlchemyRepository(session), SQLAlchemyUnitOfWork(lambda: session)
+            ExecucaoSQLAlchemyRepository(session), transacao_do_comando(session)
         )
         with pytest.raises(TransicaoStatusInvalidaException):
             uc.executar(ordem_id)

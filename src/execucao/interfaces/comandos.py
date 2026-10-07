@@ -1,7 +1,8 @@
 """Comandos para a execucao, entregues pelo consumidor (RFC-004 5.3).
 
-O envelope chega validado pelo contrato; o caso de uso roda na sessao e na UoW
-da mensagem, que gravam a idempotencia e a resposta na mesma transacao.
+O envelope chega validado pelo contrato; o caso de uso roda na sessao e na
+unidade de trabalho da mensagem, e o consumidor comita efeito, resposta e
+idempotencia juntos.
 """
 
 from __future__ import annotations
@@ -27,11 +28,11 @@ if TYPE_CHECKING:
 
     from sqlalchemy.orm import Session
 
-    from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
+    from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
 
 
 def agendar_execucao(
-    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
     AgendarExecucao(
@@ -48,7 +49,7 @@ def agendar_execucao(
 
 
 def cancelar_execucao(
-    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
     CancelarExecucao(ExecucaoSQLAlchemyRepository(sessao), uow).executar(
@@ -57,7 +58,7 @@ def cancelar_execucao(
 
 
 def anonimizar_veiculo(
-    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
     AnonimizarVeiculo(RetratosDoVeiculoSQLAlchemy(sessao), uow).executar(
