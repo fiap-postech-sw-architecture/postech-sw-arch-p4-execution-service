@@ -48,11 +48,14 @@ def adicionar_contexto_de_trace(
 
 _CPF_PATTERN = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
 _CNPJ_PATTERN = re.compile(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b")
-# Dominio casado label a label (`.` fora da classe): correcao do achado S5852
-# (backtracking) do SonarQube no p3. O scrubber roda sobre o event_dict inteiro,
-# tracebacks inclusos, sem limite de tamanho.
+# Dominio casado label a label (`.` fora da classe), correcao do achado S5852
+# (backtracking) do SonarQube no p3, e cada parte com teto (local ate 64, label
+# ate 63, ate 8 labels): sem teto, `a.a.a...` de 80 KB custava segundos (o motor
+# testa cada inicio ate o fim do texto), e o scrubber roda sobre o event_dict
+# inteiro, tracebacks e valores vindos de mensagem inclusos.
 _EMAIL_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"
+    r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}"
+    r"\.[A-Za-z]{2,24}\b"
 )
 
 # Telefone BR: duas formas estruturais, escolhidas para nao gerar falso-positivo
@@ -291,8 +294,11 @@ def configurar_logging(stream: TextIO | None = None) -> None:
     root.handlers = [handler]
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
-    # O pika loga cada conexao aberta e fechada em INFO; queda e erro seguem.
-    logging.getLogger("pika").setLevel(logging.WARNING)
+    # Pika so em ERROR: em INFO ele narra cada conexao, e em WARNING loga os
+    # primeiros 255 bytes do corpo de toda publicacao devolvida pelo broker
+    # (mandatory), com o texto livre do envelope. Queda e erro do broker ja
+    # saem nos eventos do relay e do consumidor.
+    logging.getLogger("pika").setLevel(logging.ERROR)
     _religar_loggers_do_uvicorn()
 
 

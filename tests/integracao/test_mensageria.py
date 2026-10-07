@@ -36,7 +36,7 @@ from src.compartilhado.infraestrutura.mensageria.consumidor import (
     Consumidor,
     Resultado,
 )
-from src.compartilhado.infraestrutura.mensageria.contratos import validar
+from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
     Backoff,
     SinaisDoProcesso,
@@ -892,6 +892,48 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     (linha,) = outbox()
     assert linha["status"] == "pendente"
     assert linha["ultimo_erro"] == "UnroutableError"
+
+
+def test_publicacao_devolvida_nao_leva_o_corpo_para_o_log(
+    broker: Broker,
+    engine: Engine,
+    relay: Callable[..., Relay],
+    outbox: Callable[[], list[dict[str, Any]]],
+    log_capturado: io.StringIO,
+) -> None:
+    # O pika loga em WARNING os 255 primeiros bytes do corpo devolvido pelo
+    # broker (mandatory); o texto livre do envelope nao pode chegar ao log.
+    envelope = json.loads(
+        (CONTRATOS / "exemplos" / "DiagnosticoConcluido.json").read_text()
+    )
+    envelope["dados"]["observacoes"] = "MARCADOR-DO-CORPO Joao da Silva"
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
+                "routing_key, envelope) VALUES (:id, 'DiagnosticoConcluido', :ordem, "
+                "'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
+                "CAST(:envelope AS jsonb))"
+            ),
+            {
+                "id": envelope["id"],
+                "ordem": envelope["correlation_id"],
+                "envelope": json.dumps(envelope),
+            },
+        )
+    with broker.canal() as canal:
+        canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
+    try:
+        with EmSegundoPlano(relay()):
+            esperar_ate(lambda: outbox()[0]["tentativas"] == 1)
+    finally:
+        with broker.canal() as canal:
+            canal.queue_bind("os.eventos", "pytstop.eventos", "evento.execucao.#")
+
+    saida = log_capturado.getvalue()
+    assert "message_publish_failed" in saida
+    assert "MARCADOR-DO-CORPO" not in saida
+    assert "Published message was returned" not in saida
 
 
 def test_quinta_falha_de_publicacao_vira_dead(

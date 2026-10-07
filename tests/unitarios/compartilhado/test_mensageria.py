@@ -542,6 +542,113 @@ def test_classificacao_de_cada_erro_do_handler(erro: Exception, resultado: str) 
     assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
+_ANINHADO = b'{"id":' + b'{"a":' * 10_000 + b"1" + b"}" * 10_000 + b"}"
+
+
+@pytest.mark.parametrize(
+    "corpo",
+    [
+        pytest.param(b"[" * 100_000, id="acima-do-teto"),
+        pytest.param(_ANINHADO, id="aninhado-no-id-dentro-do-teto"),
+        pytest.param(b"\xff\xfe", id="utf8-invalido"),
+        pytest.param(b"null", id="json-nao-objeto"),
+    ],
+)
+def test_corpo_hostil_vai_para_a_dlq_sem_derrubar_o_consumidor(corpo: bytes) -> None:
+    assert len(_ANINHADO) < 64 * 1024
+    handler = _Handler()
+    canal = _consumir(handler, corpo=corpo)
+    assert (canal.rejeicoes, canal.acks, canal.publicadas) == ([(7, False)], [], [])
+    assert handler.chamadas == 0
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(RecursionError(), id="recursao-na-validacao"),
+        pytest.param(TypeError("x"), id="tipo-inesperado"),
+        pytest.param(MemoryError(), id="memoria"),
+    ],
+)
+def test_erro_inesperado_no_parse_vai_para_a_dlq(
+    monkeypatch: pytest.MonkeyPatch, erro: Exception
+) -> None:
+    # Nenhuma excecao do parse sai do callback (derrubaria o processo e a
+    # mensagem voltaria primeiro a cada reinicio).
+    def explode(_envelope: object) -> None:
+        raise erro
+
+    monkeypatch.setattr(modulo_consumidor, "validar", explode)
+    canal = _consumir(_Handler())
+    assert canal.passos == ["reject"]
+
+
+def test_corpo_acima_do_teto_nem_chega_ao_parse(log_capturado: io.StringIO) -> None:
+    _consumir(_Handler(), corpo=b" " * (64 * 1024 + 1))
+    assert "corpo acima de 65536 bytes" in log_capturado.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("user_id", "tentativa"),
+    [
+        pytest.param("os", 1, id="produtor-com-x-tentativa"),
+        pytest.param("billing", 1, id="outro-servico-com-x-tentativa"),
+        pytest.param("admin", 2, id="admin-com-x-tentativa"),
+    ],
+)
+def test_x_tentativa_so_vale_na_copia_do_proprio_consumidor(
+    user_id: str, tentativa: int
+) -> None:
+    handler = _Handler()
+    canal = _consumir(handler, user_id=user_id, headers={"x-tentativa": tentativa})
+    assert (canal.rejeicoes, canal.acks, canal.publicadas) == ([(7, False)], [], [])
+    assert handler.chamadas == 0
+
+
+def test_atributos_do_span_sao_so_messaging_com_ids_conferidos(
+    spans: InMemorySpanExporter,
+) -> None:
+    corpo = json.loads(_COMANDO)
+    canal = _Canal()
+    props = pika.BasicProperties(
+        user_id="os",
+        type="ReservarPecas",
+        message_id=corpo["id"],
+        correlation_id="x" * 10_000,  # nao e UUID: fica fora do span
+    )
+    _consumidor(_Handler())._ao_receber(canal, _Entrega(), props, _COMANDO)  # type: ignore[arg-type]
+    (span,) = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
+    assert dict(span.attributes or {}) == {
+        "messaging.system": "rabbitmq",
+        "messaging.destination.name": "execucao.comandos",
+        "messaging.message.id": corpo["id"],
+        "pytstop.resultado": "processada",
+    }
+
+
+def test_log_de_mensagem_rejeitada_nao_carrega_o_corpo(
+    log_capturado: io.StringIO,
+) -> None:
+    corpo = json.loads(_COMANDO)
+    corpo["dados"]["pecas"] = [{"sku": "MARCADOR-DO-CORPO", "quantidade": 0}]
+    canal = _Canal()
+    props = pika.BasicProperties(
+        user_id="os", type="ReservarPecas", message_id="y" * 5_000
+    )
+    _consumidor(_Handler())._ao_receber(  # type: ignore[arg-type]
+        canal, _Entrega(), props, json.dumps(corpo).encode()
+    )
+    saida = log_capturado.getvalue()
+    (rejeicao,) = [
+        json.loads(linha)
+        for linha in saida.splitlines()
+        if '"message_rejected"' in linha
+    ]
+    assert rejeicao["message_id"] is None
+    assert "MARCADOR-DO-CORPO" not in saida
+    assert "yyyy" not in saida
+
+
 def test_copia_de_retry_do_proprio_consumidor_e_aceita() -> None:
     handler = _Handler()
     canal = _consumir(handler, user_id="execucao", headers={"x-tentativa": 1})

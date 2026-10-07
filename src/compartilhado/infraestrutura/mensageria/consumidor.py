@@ -106,6 +106,10 @@ _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)
 _LIMPEZA_A_CADA_S: Final = 3600.0
 _TIPO_DESCONHECIDO: Final = "desconhecido"
+# O envelope da saga tem poucos KB; acima disto e entrada hostil (JSON aninhado
+# que estoura a recursao do parser ou da validacao), direto para a DLQ.
+_CORPO_MAXIMO: Final = 64 * 1024
+_TAMANHO_DO_UUID: Final = 36
 # Erro que passa com o tempo, e vira copia de retry: banco fora, conexao
 # fechada, pool cheio ou timeout (lock e statement timeout, deadlock e falha de
 # serializacao chegam como OperationalError), rede, dependencia fora e a corrida
@@ -239,11 +243,12 @@ class Consumidor:
     ) -> None:
         headers = props.headers or {}
         tipo = props.type if props.type in self._handlers else _TIPO_DESCONHECIDO
+        # Propriedades ainda nao conferidas: no span so o que tem forma de UUID.
         atributos = {
             "messaging.system": "rabbitmq",
             "messaging.destination.name": FILA,
-            "messaging.message.id": props.message_id,
-            "messaging.message.conversation_id": props.correlation_id,
+            "messaging.message.id": _uuid_ou_none(props.message_id),
+            "messaging.message.conversation_id": _uuid_ou_none(props.correlation_id),
         }
         with tracer.start_as_current_span(
             f"process {tipo}",
@@ -275,7 +280,7 @@ class Consumidor:
             _log.warning(
                 "message_rejected",
                 motivo_rejeicao=str(exc),
-                message_id=props.message_id,
+                message_id=_uuid_ou_none(props.message_id),
             )
             return Resultado.DLQ, None, 0
         with structlog.contextvars.bound_contextvars(
@@ -292,25 +297,34 @@ class Consumidor:
     def _abrir(
         self, user_id: str | None, corpo: bytes, tentativa: int
     ) -> dict[str, Any]:
-        """Envelope valido de um tipo com handler, vindo do produtor do tipo.
+        """Envelope valido de um tipo com handler, vindo de quem pode publica-lo.
+
+        Corpo acima do teto, ilegivel (JSON invalido ou aninhado demais) ou fora
+        do contrato e erro permanente: nenhuma excecao do parse sai daqui.
 
         Raises:
             MensagemInvalidaError: erro permanente (vai para a DLQ).
         """
+        if len(corpo) > _CORPO_MAXIMO:
+            msg = f"corpo acima de {_CORPO_MAXIMO} bytes"
+            raise MensagemInvalidaError(msg)
         try:
             envelope: dict[str, Any] = json.loads(corpo)
-        except (ValueError, RecursionError) as exc:
-            msg = "corpo nao e JSON valido"
+            validar(envelope)
+        except MensagemInvalidaError:
+            raise
+        except Exception as exc:  # corpo ilegivel (inclusive RecursionError): DLQ
+            msg = f"corpo ilegivel ({type(exc).__name__})"
             raise MensagemInvalidaError(msg) from exc
-        validar(envelope)
         tipo = envelope["tipo"]
         if tipo not in self._handlers:
             msg = f"tipo sem handler neste servico: {tipo}"
             raise MensagemInvalidaError(msg)
-        # Na copia de retry o user_id e o do proprio consumidor, que a republicou;
-        # a conferencia do produtor ja aconteceu na primeira entrega.
-        if user_id != produtor(tipo) and not (tentativa and user_id == self._usuario):
-            msg = f"user_id {user_id!r} nao e o produtor de {tipo}"
+        # Primeira entrega: o produtor do tipo no AsyncAPI. Copia de retry
+        # (x-tentativa de 1 a 5): o proprio consumidor, que a republicou.
+        esperado = self._usuario if tentativa else produtor(tipo)
+        if user_id != esperado:
+            msg = f"user_id {user_id!r} nao publica {tipo} com x-tentativa {tentativa}"
             raise MensagemInvalidaError(msg)
         return envelope
 
@@ -431,6 +445,16 @@ class Consumidor:
             _log.warning("processed_messages_cleanup_failed", error=type(exc).__name__)
             return
         _log.info("processed_messages_cleanup", apagadas=apagadas)
+
+
+def _uuid_ou_none(valor: object) -> str | None:
+    """O valor como UUID canonico, ou None: o que vem da propriedade AMQP."""
+    if not isinstance(valor, str) or len(valor) > _TAMANHO_DO_UUID:
+        return None
+    try:
+        return str(UUID(valor))
+    except ValueError:
+        return None
 
 
 def _descricao_do_erro(exc: Exception) -> dict[str, Any]:

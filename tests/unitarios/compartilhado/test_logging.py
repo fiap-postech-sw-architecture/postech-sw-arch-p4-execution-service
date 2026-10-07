@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -211,6 +212,33 @@ class TestScrubTelefone:
         result = scrub_pii(None, "info", {"event": texto})
         assert "99999-0000" not in str(result["event"])
         assert "***" in str(result["event"])
+
+
+class TestScrubEntradaHostil:
+    """O scrub roda sobre valores vindos de mensagem: custo linear no tamanho."""
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("a." * 40_000, id="local-part-sem-arroba"),
+            pytest.param("a." * 40_000 + "@", id="local-part-gigante"),
+            pytest.param("a@" + "a." * 40_000, id="dominio-sem-tld"),
+            pytest.param("x-" * 40_000, id="hifens"),
+            pytest.param("a@a." * 20_000, id="arrobas"),
+        ],
+    )
+    def test_scrub_de_80_kb_hostis_fica_abaixo_de_100_ms(self, texto: str) -> None:
+        inicio = time.perf_counter()
+        scrub_pii(None, "info", {"id": texto})
+        assert time.perf_counter() - inicio < 0.1
+
+    @pytest.mark.parametrize(
+        "email", ["joao.silva@exemplo.com.br", "a+b@sub.dominio.io", "x@y.co"]
+    )
+    def test_email_comum_continua_mascarado(self, email: str) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": f"de {email}"})["event"])
+        assert email not in resultado
+        assert "***@" in resultado
 
 
 # UUID v4 de verdade cujo grupo "02-3465-4237" (dd-dddd-dddd) casava com o telefone.
