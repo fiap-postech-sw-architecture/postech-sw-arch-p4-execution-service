@@ -87,6 +87,8 @@ known-first-party = ["src"]
 # importa interfaces). Entre contextos, o contrato forbidden abaixo.
 [tool.importlinter]
 root_packages = ["src"]
+# Os contratos tambem olham pacotes de terceiros (o de frameworks abaixo).
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Camadas por contexto (interfaces -> infraestrutura -> aplicacao -> dominio)"
@@ -117,6 +119,36 @@ forbidden_modules = [
     "src.estoque.infraestrutura",
     "src.diagnostico.infraestrutura",
     "src.execucao.infraestrutura",
+]
+
+# Mensageria, persistencia, HTTP e telemetria ficam fora do nucleo por gate, nao
+# por convencao. structlog fica permitido: os casos de uso logam decisoes.
+[[tool.importlinter.contracts]]
+name = "Dominio e aplicacao nao dependem de frameworks nem de drivers"
+type = "forbidden"
+source_modules = [
+    "src.compartilhado.dominio",
+    "src.compartilhado.aplicacao",
+    "src.estoque.dominio",
+    "src.estoque.aplicacao",
+    "src.diagnostico.dominio",
+    "src.diagnostico.aplicacao",
+    "src.execucao.dominio",
+    "src.execucao.aplicacao",
+]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "sqlalchemy",
+    "psycopg2",
+    "httpx",
+    "jwt",
+    "prometheus_client",
+    "pika",
+    "jsonschema",
+    "yaml",
+    "opentelemetry",
 ]
 
 [[tool.importlinter.contracts]]
