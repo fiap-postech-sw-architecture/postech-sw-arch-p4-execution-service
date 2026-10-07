@@ -1,0 +1,113 @@
+# Exemplo de borda do Execution Service (prefixo /execucao), para o
+# repositorio do servico copiar para o k8s/ dele, no proprio namespace. O
+# make smoke aplica este arquivo no kind, sem mudar nada, com um servidor de
+# eco no lugar da API.
+#
+# E o molde do OS (borda-os-service.yaml) sem JWKS e sem rotas publicas: a
+# Execucao so tem rotas com JWT. Pela borda saem /api/v1/*, /docs e
+# /openapi.json, todos com o rate limiting global (60/min por IP);
+# /api/v1/admin/* e /metrics casam o Ingress fora-da-borda (o caminho mais
+# longo vence) e respondem 404.
+#
+# strip-path tira do caminho tudo o que a regra casou: cada prefixo tem um
+# Service proprio, todos com os mesmos pods, com o konghq.com/path que devolve
+# o prefixo. O Service interno do servico fica sem anotacao.
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service-borda-api
+  annotations:
+    konghq.com/path: /api/v1
+spec:
+  selector:
+    app: execution-service-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service-borda-docs
+  annotations:
+    konghq.com/path: /docs
+spec:
+  selector:
+    app: execution-service-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service-borda-openapi
+  annotations:
+    konghq.com/path: /openapi.json
+spec:
+  selector:
+    app: execution-service-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# API, Swagger e OpenAPI, com o rate limiting global.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: execution-service-borda
+  annotations:
+    konghq.com/strip-path: "true"
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /execucao/api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: execution-service-borda-api
+                port:
+                  number: 8000
+          - path: /execucao/docs
+            pathType: Prefix
+            backend:
+              service:
+                name: execution-service-borda-docs
+                port:
+                  number: 8000
+          - path: /execucao/openapi.json
+            pathType: Exact
+            backend:
+              service:
+                name: execution-service-borda-openapi
+                port:
+                  number: 8000
+---
+# Bloqueio: o Kong responde 404 sem chamar o servico.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: execution-service-fora-da-borda
+  annotations:
+    konghq.com/plugins: fora-da-borda
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /execucao/api/v1/admin
+            pathType: Prefix
+            backend:
+              service:
+                name: execution-service-borda-api
+                port:
+                  number: 8000
+          - path: /execucao/metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: execution-service-borda-api
+                port:
+                  number: 8000

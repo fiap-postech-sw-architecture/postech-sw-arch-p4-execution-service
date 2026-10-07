@@ -9,7 +9,10 @@
 
 # Mensageria pelo usuario `execucao` (senha de demonstracao, a mesma do
 # compose da plataforma) e trace sem exportacao (sem Jaeger aqui).
+# ENVIRONMENT=development: fora dele (e sem ele) o boot recusa as senhas de
+# demonstracao deste arquivo.
 x-mensageria: &mensageria
+  ENVIRONMENT: development
   DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
   RABBITMQ_URL: amqp://execucao:pytstop-execucao-demo-2026@rabbitmq:5672/%2F  # gitleaks:allow
   OTEL_ENABLED: "false"
@@ -30,7 +33,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Credencial de demonstracao, so do banco local do compose.
+      # Credencial de demonstracao, so do banco local do compose (aceita so com
+      # ENVIRONMENT development ou test).
+      ENVIRONMENT: development
       DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
       JWKS_URL: ${JWKS_URL:-http://os-service:8000/.well-known/jwks.json}
       BILLING_URL: ${BILLING_URL:-http://billing-service:8000}

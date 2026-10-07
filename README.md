@@ -62,7 +62,7 @@ Envelope: `id`, `tipo`, `versao`, `origem` (`execution-service`), `correlation_i
 - **Contratos** ([`contratos/`](contratos)): AsyncAPI, envelope, schemas e exemplos das mensagens que o serviço consome e produz, e a topologia do RabbitMQ (definitions, permissões, init de usuários), copiados do `platform` no commit da `main` registrado em [`contratos/ORIGEM`](contratos/ORIGEM). O CI baixa o tarball desse commit e compara cada arquivo byte a byte (offline: `-m "not rede"`); o leitor é tolerante a campo novo e recusa `versao` desconhecida. Só os schemas e o AsyncAPI entram na imagem.
 - **Trace**: o contexto W3C segue pela outbox e pelos headers AMQP; a exportação para o Jaeger pelo protocolo do OpenTelemetry (OTLP) liga com `OTEL_ENABLED=true` ([ADR-043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/043-observabilidade-distribuida.md)), e cada processo marca `pytstop.processo` nos spans. Diagnóstico e execução guardam o contexto do comando que os pôs em espera, e a ação do mecânico pela API roda como filha dele, com span link para quem retomou: o fato que ela publica sai no mesmo trace da saga. A instrumentação automática de FastAPI, SQLAlchemy, httpx e do cliente AMQP ainda não está ligada; até lá a requisição HTTP não tem span próprio e o link fica vazio. Os logs JSON levam `trace_id`, `span_id` e `correlation_id`, inclusive os do caso de uso chamado pelo consumidor.
 - **Métricas** (porta `METRICS_PORT`, padrão 9100, em cada processo): `pytstop_mensagens_publicadas_total{tipo}` e `outbox_pendentes`/`outbox_dead` no relay; `pytstop_mensagens_consumidas_total{tipo,resultado}` (`processada`, `duplicada`, `ignorada`, `retry`, `dlq`) no consumidor.
-- **Prontidão**: cada processo toca um heartbeat em `/tmp/<processo>-heartbeat` a cada volta do laço (liveness; dependência fora não reinicia o pod, nem quando o nome do broker some do DNS, como no Service headless sem pod pronto) e mantém `/tmp/<processo>-pronto` enquanto está conectado (readiness). A reconexão espera um sorteio entre 0 e o atraso da vez (1 a 30 s), para as réplicas não voltarem juntas. Depois de um erro de banco num handler, o consumidor confere o banco antes de consumir de novo: sem resposta, fecha a assinatura e sai da prontidão até o banco voltar, e as mensagens esperam na fila em vez de gastar a escada de retry. SIGTERM termina a mensagem em curso e fecha as conexões.
+- **Prontidão**: cada processo toca um heartbeat em `/tmp/<processo>-heartbeat` a cada volta do laço (liveness; dependência fora não reinicia o pod) e mantém `/tmp/<processo>-pronto` enquanto está conectado (readiness). Na abertura da conexão com o broker, contam como broker fora o erro de conexão do cliente AMQP (`AMQPError`), o nome sem resolução no DNS (`socket.gaierror`, como no Service headless do RabbitMQ sem pod pronto) e o broker que aceita a conexão TCP e não responde o AMQP no prazo da pilha do cliente (15 s, `AMQPConnectorStackTimeout`); qualquer outro erro derruba o processo, para o Kubernetes reiniciá-lo e o defeito aparecer: falta de descritores, certificado TLS recusado e erro de disco ao tocar os arquivos de sinal. O cliente AMQP não põe prazo na resolução do nome, e a tentativa que falha toca o heartbeat de novo: a idade dele na espera é a da espera, não a soma das duas. A reconexão espera um sorteio entre 0 e o atraso da vez (1 a 30 s), para as réplicas não voltarem juntas. Depois de um erro de banco num handler, o consumidor confere o banco antes de consumir de novo: sem resposta, fecha a assinatura e sai da prontidão até o banco voltar, e as mensagens esperam na fila em vez de gastar a escada de retry. SIGTERM termina a mensagem em curso e fecha as conexões.
 
 Para rodar fora do compose, com o RabbitMQ e o PostgreSQL do `make compose-up` no ar:
 
@@ -134,7 +134,9 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
 
 | Variável | Obrigatória | Uso |
 |---|---|---|
-| `DATABASE_URL` | sim | PostgreSQL do serviço |
+| `DATABASE_URL` | sim | PostgreSQL do serviço (no Kubernetes, com o papel `execucao_app`; [Implantação](#implantação)) |
+| `ENVIRONMENT` | não | `development` ou `test` aceitam as senhas de demonstração do compose e do `.env.example`; qualquer outro valor, inclusive a variável ausente, é produção, e a API, o relay e o consumidor não sobem com elas em `DATABASE_URL` ou `RABBITMQ_URL` |
+| `ROOT_PATH` | não | Prefixo da borda (`/execucao` no Kubernetes), passado ao uvicorn como `--root-path`: o Swagger atrás do Kong busca o `openapi.json` sob ele, e as sondas e o `/metrics`, que chegam direto ao pod, seguem sem ele. Vazio no compose, que serve na raiz |
 | `JWKS_URL` | sim | JWKS do OS Service (`/.well-known/jwks.json`) |
 | `BILLING_URL` | sim | Base do Billing para a validação de preços |
 | `RUN_MIGRATIONS_ON_STARTUP`, `RUN_SEED_ON_STARTUP` | não | Ligados no compose; no Kubernetes a migração roda em Job. Várias réplicas migrando juntas se serializam por `pg_advisory_lock` |
@@ -144,7 +146,7 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
 | `METRICS_PORT` | não | Porta do `/metrics` do relay e do consumidor (9100) |
 | `OTEL_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | não | Exportação OTLP/gRPC dos spans (desligada; `http://jaeger:4317`; `execution-service`) |
 
-O boot falha com mensagem clara se faltar uma variável obrigatória ou se `JWKS_URL`/`BILLING_URL` não forem URL http(s) com host. Valores de demonstração em `.env.example`.
+O boot falha com mensagem clara se faltar uma variável obrigatória, se `JWKS_URL`/`BILLING_URL` não forem URL http(s) com host ou se uma URL de conexão trouxer a senha de demonstração fora de `development`/`test`. Valores de demonstração em `.env.example`.
 
 ## Como rodar
 
@@ -172,6 +174,60 @@ Sem o OS Service no ar, rota autenticada responde 401 sem token e 503 com `Retry
 | `PEC-AMORTECEDOR` | Amortecedor dianteiro | 4 |
 | `PEC-VELA` | Vela de ignicao | 0 (cenário de falta de peça da demo da saga) |
 
+## Implantação
+
+Os manifestos do Kubernetes estão em [`k8s/`](k8s) ([ADR-042](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/042-cicd-e-deploy-kubernetes.md)): a base e os overlays `kind` (local), `kind-ci` (o do CD) e `k3s` (VM na Azure). Tudo fica no namespace `pytstop-execucao`, com o Pod Security `restricted` em `enforce`. O `make deploy` do repositório `platform` cria o namespace vazio, gera os Secrets e sobe o RabbitMQ, o Kong e a observabilidade de que o serviço depende.
+
+| Objeto | O que é |
+|---|---|
+| Deployments `execution-service-api`, `execution-service-relay` e `execution-service-consumidor` | A mesma imagem, `pytstop-execution-service`, com o comando de cada processo. A API não declara réplicas: quem decide é o HPA, por CPU, até 2 no `kind`, 1 no `kind-ci` e 3 no `k3s`. Relay e consumidor têm uma réplica |
+| StatefulSet `execucao-postgres` e o Service headless dele | PostgreSQL 16.15 com volume de 1 Gi (5 Gi no `k3s`) e o `postgres_exporter` como sidecar, na porta 9187 |
+| Job `execucao-migracao` | `alembic upgrade head` e a semente do estoque de demonstração, com o dono do banco |
+| Service `execution-service` | Endereço interno da API, na porta 8000 |
+| [`borda.yaml`](k8s/base/borda.yaml) | Ingress e Services da borda no Kong, cópia sem mudança do exemplo `borda-execution-service.yaml` do `platform`: saem `/execucao/api/v1`, `/execucao/docs` e `/execucao/openapi.json`, e `/execucao/api/v1/admin` e `/execucao/metrics` respondem 404 no próprio Kong ([ADR-038](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/038-borda-e-comunicacao-sincrona.md)) |
+| ConfigMap `execution-service` | A [configuração](#configuração) comum: `ENVIRONMENT=production`, `ROOT_PATH=/execucao`, os endereços do JWKS do OS e do Billing, o pool do banco, a exportação OTLP para o Jaeger e a porta de métricas |
+| NetworkPolicies | Entrada negada a todo pod do namespace e liberada só para o Kong e o Prometheus na API (8000), para o Prometheus nas métricas do relay, do consumidor (9100) e do exporter (9187), e para o próprio namespace no banco (5432) |
+
+**Processos e sondas.** A API tem liveness em `GET /api/v1/saude` e readiness em `GET /api/v1/saude/pronto`, e serve o `/metrics` na porta `http`. Relay e consumidor são sondados pelos arquivos em `/tmp` (Prontidão, em [Mensageria](#mensageria)): liveness pelo heartbeat com menos de 90 s, readiness pelo arquivo de pronto e startup pela existência do heartbeat, para que o broker fora no boot deixe o processo fora da prontidão, em vez de reiniciá-lo; os dois servem o `/metrics` na 9100. Cada pod espera, num initContainer (`aguarda-migracao`), que o `alembic current` do banco chegue ao `alembic heads` da imagem: num rolling update, os pods novos esperam o Job da versão nova, e os antigos seguem servindo (migração que expande e contrai). Todo container roda sem root (1001; 999 o PostgreSQL e 65534 o exporter), sem escalar privilégio, sem capability, com seccomp `RuntimeDefault` e raiz somente leitura (o `/tmp` num `emptyDir` de 16 Mi), nenhum pod monta token de ServiceAccount, e cada um leva no template as anotações do Prometheus ([ADR-043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/043-observabilidade-distribuida.md)).
+
+**Segredos e papéis do banco.** Nenhum Secret fica em `k8s/`. O `make deploy` do `platform` grava o `rabbitmq`, com a `RABBITMQ_URL` do usuário `execucao`, e o `execucao-postgres`, com uma senha por papel; a `DATABASE_URL` se monta no pod, por expansão de variável, e o `kubectl describe` mostra o molde, não a senha. O superusuário `postgres` só inicializa o volume: o [`papeis.sql`](k8s/base/papeis.sql), que a imagem roda uma vez, na primeira inicialização, cria o dono `execucao` (DDL, só o Job), o `execucao_app` (só DML nas tabelas do dono, pelos privilégios padrão: API, relay e consumidor) e o `execucao_exporter` (`pg_monitor`). O script lê as senhas do ambiente do container do banco (`\getenv`) e desliga o log de comandos da própria sessão antes de usá-las: o `psql` troca a variável pelo valor antes de enviar o comando, e um `log_statement` em `all` ou um comando que falha gravariam a senha no log do servidor. O banco não aceita conexão sem senha nem no loopback e no socket (`POSTGRES_INITDB_ARGS` com `scram-sha-256`): a imagem do PostgreSQL confia neles, e o exporter, no mesmo pod, entraria como `postgres`. O [`test_papeis_do_banco.py`](tests/integracao/test_papeis_do_banco.py) sobe a imagem e o ambiente do StatefulSet com esse script e confere cada papel e o log do servidor.
+
+**No kind**, com o `platform` clonado ao lado deste repositório:
+
+```bash
+make -C ../postech-sw-arch-p4-platform kind-up deploy                    # plataforma e Secrets
+make kind-deploy                                                         # este checkout, pelo script do platform
+../postech-sw-arch-p4-platform/scripts/ci/smoke-servicos.sh execution-service
+```
+
+O `make kind-deploy` chama o `scripts/ci/implantar-servicos.sh` do `platform` (o diretório vem de `PLATFORM_DIR`), o mesmo do CD: constrói a imagem deste checkout com o commit como tag, carrega-a no kind, gera sobre o overlay (`KIND_OVERLAY`, padrão `kind`) um com a imagem trocada, apaga o Job anterior (Job é imutável), aplica e espera o banco, o Job e os Deployments, nessa ordem. O smoke confere o Job, os rollouts, `https://localhost/execucao/api/v1/saude` com 200 e `/execucao/metrics` com 404 pela borda, `up = 1` de cada pod no Prometheus e a NetworkPolicy barrando o banco a quem vem de outro namespace. Sem o OS e o Billing implantados, a API sobe, mas rota autenticada com token responde 503 (JWKS indisponível). Sem cluster, `make manifests` valida os três overlays, como o job `build` do CI.
+
+**Troca de senha do banco**, com janela até o restart. São os passos da [troca de senha do banco](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform#troca-de-senha-do-banco) do `platform`; o exemplo troca a do `execucao_app`, e para outro papel muda a chave e o nome do papel (`POSTGRES_EXPORTER_PASSWORD` e `execucao_exporter`, `POSTGRES_OWNER_PASSWORD` e `execucao`, `POSTGRES_PASSWORD` e `postgres`):
+
+1. Grave a senha nova no Secret, para que ela não fique só numa variável do shell:
+
+   ```bash
+   senha=$(openssl rand -hex 24)
+   kubectl --context kind-pytstop-p4 -n pytstop-execucao get secret execucao-postgres -o json \
+     | SENHA="$senha" jq '.data["POSTGRES_APP_PASSWORD"] = (env.SENHA | @base64)' \
+     | kubectl --context kind-pytstop-p4 replace -f -
+   ```
+
+2. Aplique-a no banco, como `postgres`, pela entrada padrão do `kubectl exec -i`, nunca por argumento; os dois `SET` a tiram do log do servidor. A saída esperada é `SET`, `SET` e `ALTER ROLE`:
+
+   ```bash
+   { printf '%s\n' "$senha"; cat <<'SQL'
+   SET log_statement = none;
+   SET log_min_error_statement = panic;
+   \getenv senha SENHA_NOVA
+   ALTER ROLE execucao_app PASSWORD :'senha';
+   SQL
+   } | kubectl --context kind-pytstop-p4 -n pytstop-execucao exec -i statefulset/execucao-postgres -c postgres -- \
+       sh -c 'read -r SENHA_NOVA && [ -n "$SENHA_NOVA" ] && export SENHA_NOVA && PGPASSWORD=$POSTGRES_PASSWORD exec psql -w -U postgres -v ON_ERROR_STOP=1'
+   ```
+
+3. Reinicie quem usa o papel, que lê a senha só no start: `execucao_app`, os Deployments (`kubectl --context kind-pytstop-p4 -n pytstop-execucao rollout restart deployment`); `execucao_exporter` e `postgres`, o StatefulSet do banco (o exporter é sidecar dele, e o comando do passo 2 usa a senha do superusuário lida no start); `execucao`, ninguém: o Job a relê no deploy seguinte. Até o restart, conexão nova com a senha antiga é recusada.
+
 ## Testes
 
 `make test` (ou `uv run pytest`) roda os unitários e os de integração. Os de integração sobem um PostgreSQL 16 e um RabbitMQ 4.3.6 efêmeros via testcontainers (o broker com as definitions, as permissões e o init de usuários copiados do `platform`, e o TTL das filas de retry reduzido para 100 ms) e aplicam as migrações do Alembic. Por área:
@@ -180,6 +236,7 @@ Sem o OS Service no ar, rota autenticada responde 401 sem token e 503 com `Retry
 - **Relay**: duas réplicas em threads (lease, fencing e `SKIP LOCKED`), ordem por OS, mensagem sem rota, nack, recusa 403, alarme de memória e queda do broker no meio do lote, com o broker de verdade, e a retenção em lotes.
 - **API e domínio**: repositórios, outbox (inclusive o `NOTIFY`), JWT real (chave RSA gerada no teste e JWKS servido por HTTP local, inclusive pendurado) e Billing simulado com `respx`.
 - **Concorrência**: a disputa pela última unidade de uma peça, cada lock pessimista, cópias simultâneas dos comandos da saga e réplicas migrando juntas.
+- **Implantação**: o PostgreSQL 16.15 com o ambiente do StatefulSet e o `papeis.sql` dos manifestos, como o usuário 999 e com a raiz somente leitura (o dono migra, a API sobe com `execucao_app`, que não faz DDL, o exporter não lê tabela, ninguém entra como `postgres` sem senha e nenhuma senha chega ao log do servidor, gravando todo comando); o `entrypoint.sh` com o `ROOT_PATH`; e o uvicorn com o prefixo da borda, servindo o Swagger sob ele e as sondas sem ele.
 
 O gate de cobertura (ramos incluídos) é de 90%, no `.coveragerc`. O teste da cópia dos contratos precisa de rede (marcador `rede`).
 
@@ -189,10 +246,10 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 | Workflow | Jobs | O que garante |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 90% (relatório por pacote no summary e `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis e o consumidor assinado na `execucao.comandos`) |
-| `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos na árvore e CVE HIGH/CRITICAL com correção na imagem; roda também toda segunda-feira |
+| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 90% (relatório por pacote no summary e `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`), os manifestos do Kubernetes (`make manifests`: os três overlays no kubeconform, contra os schemas do Kubernetes 1.35 e com `Secret` recusado, e no `trivy config`, sem achado HIGH ou CRITICAL) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis, o consumidor assinado na `execucao.comandos` e a senha de demonstração recusada com `ENVIRONMENT=production`) |
+| `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos em todo o histórico do commit testado (um segredo commitado e apagado no commit seguinte também reprova) e CVE HIGH/CRITICAL com correção na imagem; roda também toda segunda-feira |
 
-`make check` roda localmente os mesmos gates de código do job `CI`, e `make smoke` o do job `build`.
+`make check` roda localmente os mesmos gates de código do job `CI`, e `make manifests` e `make smoke`, os do job `build`.
 
 ## Repositórios da fase 4
 

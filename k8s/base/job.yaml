@@ -1,0 +1,90 @@
+# Migracao e semente do estoque de demonstracao, antes dos Deployments: o
+# implantar-servicos.sh do platform apaga os Jobs com o rotulo de inicializacao
+# antes do apply (Job e imutavel) e espera este completar. Roda com o dono do
+# banco (DDL); as duas etapas sao idempotentes (alembic em head, semente que so
+# cria o que falta).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: execucao-migracao
+  labels:
+    app.kubernetes.io/component: inicializacao
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: execucao-migracao
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # O nome do Service headless so resolve com o banco pronto.
+        - name: aguarda-postgres
+          image: postgres:16.15
+          command:
+            - sh
+            - -c
+            - until pg_isready -h execucao-postgres -U execucao; do sleep 2; done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: migracao
+          image: pytstop-execution-service
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - alembic upgrade head && python -m src.estoque.infraestrutura.seed
+          envFrom:
+            - configMapRef:
+                name: execution-service
+          env:
+            - name: POSTGRES_OWNER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_OWNER_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://execucao:$(POSTGRES_OWNER_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

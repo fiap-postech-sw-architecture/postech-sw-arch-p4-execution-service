@@ -1,0 +1,53 @@
+# Execution Service no namespace pytstop-execucao: API, relay e consumidor (a
+# mesma imagem, comandos diferentes), o PostgreSQL 16 com o exporter, o Job de
+# migracao e a borda no Kong da plataforma. Nenhum Secret aqui: as senhas do
+# banco e a RABBITMQ_URL vem do make deploy do platform (README, Implantacao).
+#
+# Nao aplique este diretorio direto: use um overlay pelo
+# scripts/ci/implantar-servicos.sh do platform (make kind-deploy), que apaga o
+# Job antes do apply (Job e imutavel) e espera o banco, o Job e os Deployments,
+# nessa ordem.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: pytstop-execucao
+
+# Em todo objeto, sem entrar nos seletores (os Deployments selecionam por app).
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: execution-service
+
+resources:
+  - namespace.yaml
+  - api.yaml
+  - relay.yaml
+  - consumidor.yaml
+  - servico.yaml
+  - banco.yaml
+  - job.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  - borda.yaml
+
+configMapGenerator:
+  # Configuracao dos processos e do Job (README, Configuracao). O hash no nome
+  # troca os pods quando um valor muda. ENVIRONMENT=production liga a guarda que
+  # recusa as senhas de demonstracao do compose, tambem no kind.
+  - name: execution-service
+    literals:
+      - ENVIRONMENT=production
+      - ROOT_PATH=/execucao
+      - JWKS_URL=http://os-service.pytstop-os.svc.cluster.local:8000/.well-known/jwks.json
+      - BILLING_URL=http://billing-service.pytstop-billing.svc.cluster.local:8000
+      - DB_POOL_SIZE=5
+      - DB_MAX_OVERFLOW=10
+      - METRICS_PORT=9100
+      - OTEL_ENABLED=true
+      - OTEL_SERVICE_NAME=execution-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger.pytstop-plataforma.svc.cluster.local:4317
+      - RUN_MIGRATIONS_ON_STARTUP=false
+      - RUN_SEED_ON_STARTUP=false
+  # Script de init do PostgreSQL com os papeis do banco (banco.yaml).
+  - name: execucao-postgres-init
+    files:
+      - papeis.sql

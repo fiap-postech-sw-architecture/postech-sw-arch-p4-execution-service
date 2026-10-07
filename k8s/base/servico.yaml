@@ -1,0 +1,13 @@
+# Endereco interno da API, sem anotacao do Kong: a borda usa os Services de
+# borda.yaml, um por prefixo publicado.
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service
+spec:
+  selector:
+    app: execution-service-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

@@ -8,7 +8,7 @@ GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
 .PHONY: install lock-check lint format typecheck security lint-arch test check \
-	smoke compose-up compose-down compose-logs migrate seed run
+	smoke manifests kind-deploy compose-up compose-down compose-logs migrate seed run
 
 install:
 	uv sync --frozen
@@ -50,7 +50,9 @@ check: lock-check lint lint-arch typecheck security test
 # consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
 # os contratos de mensageria estao na imagem (e a topologia do RabbitMQ, com a
 # senha do admin de demonstracao, nao), que o relay conectou ao broker e
-# que o consumidor assinou a execucao.comandos; e
+# que o consumidor assinou a execucao.comandos; que a imagem, com
+# ENVIRONMENT=production, recusa a senha de demonstracao do compose (o compose
+# sobe com development); e
 # derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
 # Projeto e portas proprios para nao derrubar a stack do compose-up.
 API_IMAGE ?= pytstop-execution-service:dev
@@ -62,6 +64,7 @@ SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
 # Schemas e AsyncAPI dentro da imagem (sem eles a API recusa gravar a outbox), e
 # a topologia do RabbitMQ fora dela (leva a senha de demonstracao do admin).
 SMOKE_CONTRATOS := from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, produtor, tipos_com_contrato; assert tipos_com_contrato() and produtor('ReservarPecas') == 'os'; assert not (CONTRATOS / 'rabbitmq').exists() and not (CONTRATOS / 'exemplos').exists()
+SMOKE_GUARDA := from src.compartilhado.infraestrutura.ambiente import url_de_conexao; url_de_conexao('DATABASE_URL')
 SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) \
 	RABBITMQ_PORT=$(SMOKE_RABBITMQ_PORT) RABBITMQ_UI_PORT=$(SMOKE_RABBITMQ_UI_PORT) \
 	API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
@@ -95,11 +98,43 @@ smoke:
 	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_consumers queue_name \
 		| grep -qx 'execucao.comandos' \
 		|| { echo "smoke: o consumidor nao assinou a execucao.comandos" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, contratos na imagem e topologia fora, relay e consumidor prontos" \
+	&& { $(SMOKE_COMPOSE) exec -T -e ENVIRONMENT=production api python -c "$(SMOKE_GUARDA)" 2>&1 \
+		| grep -q 'DATABASE_URL usa a senha de demonstracao' \
+		|| { echo "smoke: com ENVIRONMENT=production a imagem aceita a senha de demonstracao" >&2; false; }; } \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, contratos na imagem e topologia fora, relay e consumidor prontos, senha de demonstracao recusada em producao" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
 	exit $$status
+
+# Manifestos do Kubernetes (k8s/), como no platform: os tres overlays pelo
+# kubectl kustomize, no kubeconform contra os schemas do Kubernetes do no do
+# kind (Secret reprova: senha nao entra nos manifests) e no trivy config, sem
+# achado HIGH ou CRITICAL. Ferramentas pelas imagens pinadas (as do platform).
+KUBERNETES_VERSION := 1.35.0
+KUBECONFORM := docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary \
+	-output text -kubernetes-version $(KUBERNETES_VERSION) -reject Secret -
+TRIVY_CONFIG := docker run --rm -i --entrypoint sh aquasec/trivy:0.72.0 -c \
+	'cat > /tmp/manifestos.yaml && trivy config --quiet --severity HIGH,CRITICAL --exit-code 1 /tmp/manifestos.yaml'
+
+manifests:
+	@set -e; for overlay in kind kind-ci k3s; do \
+		echo ">> k8s/overlays/$$overlay: kubeconform e trivy config"; \
+		manifestos="$$(kubectl kustomize "k8s/overlays/$$overlay")"; \
+		printf '%s\n' "$$manifestos" | $(KUBECONFORM); \
+		printf '%s\n' "$$manifestos" | $(TRIVY_CONFIG); \
+	done
+
+# Implanta este checkout no kind da plataforma (make kind-up deploy no
+# platform, clonado ao lado deste) pelo scripts/ci/implantar-servicos.sh dele, o
+# mesmo do CD: constroi a imagem com o commit como tag, carrega no kind, aplica
+# o overlay com ela e espera o banco, o Job de migracao e os Deployments.
+PLATFORM_DIR ?= ../postech-sw-arch-p4-platform
+KIND_OVERLAY ?= kind
+
+kind-deploy:
+	$(PLATFORM_DIR)/scripts/ci/implantar-servicos.sh --overlay $(KIND_OVERLAY) \
+		execution-service=$(CURDIR)
 
 # Stack local: API, relay, consumidor, PostgreSQL 16 e RabbitMQ 4.3.6 proprios,
 # migracoes e seed do estoque no boot.

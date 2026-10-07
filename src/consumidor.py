@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final
 
 import structlog
 
-from src.compartilhado.infraestrutura.ambiente import variavel_obrigatoria
+from src.compartilhado.infraestrutura.ambiente import url_de_conexao
 from src.compartilhado.infraestrutura.database import criar_engine
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
@@ -56,10 +56,10 @@ HANDLERS: Final[Mapping[str, HandlerDeComando]] = {
 def main() -> None:
     configurar_logging()
     configurar_telemetria("consumidor")
-    engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
+    engine = criar_engine(url_de_conexao("DATABASE_URL"))
     consumidor = Consumidor(
         engine,
-        variavel_obrigatoria("RABBITMQ_URL"),
+        url_de_conexao("RABBITMQ_URL"),
         HANDLERS,
         SinaisDoProcesso.do_processo("consumidor"),
     )

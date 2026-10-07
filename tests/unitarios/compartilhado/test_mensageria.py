@@ -7,13 +7,16 @@ RabbitMQ de verdade esta em ``tests/integracao/test_mensageria.py``.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
@@ -1153,3 +1156,128 @@ def test_nome_do_broker_sem_resolucao_reconecta_com_backoff_fora_da_prontidao(
     assert roteiro == []
     assert prontidao_na_espera == [False, False, False]
     assert log_capturado.getvalue().count('"error": "gaierror"') == 2
+
+
+class _ParaNaEspera(_BackoffGravado):
+    """Anota a idade do heartbeat em cada espera e para o laco na primeira."""
+
+    def __init__(self, heartbeat: Path) -> None:
+        super().__init__()
+        self._heartbeat = heartbeat
+        self.idades: list[float] = []
+
+    def esperar(self, parar: threading.Event) -> None:
+        super().esperar(parar)
+        self.idades.append(time.time() - self._heartbeat.stat().st_mtime)
+        parar.set()
+
+
+def _sem_dns(*_: object, **__: object) -> Any:
+    raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+
+@pytest.mark.parametrize(
+    "erro", ["gaierror", "AMQPConnectorStackTimeout"], ids=["sem-dns", "broker-mudo"]
+)
+def test_broker_fora_do_pika_de_verdade_reconecta_com_backoff_fora_da_prontidao(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    log_capturado: io.StringIO,
+    erro: str,
+) -> None:
+    # Pelo pika de verdade, sem abrir_canal falso: ele deixa sair crus o
+    # gaierror do nome sem resolucao (o Service headless do broker sem pod
+    # pronto) e o prazo da pilha vencido (o broker aceita o TCP pela fila do
+    # sistema, sem accept, e nunca responde o AMQP).
+    with socket.create_server(("127.0.0.1", 0)) as mudo:
+        url = _URL
+        if erro == "gaierror":
+            monkeypatch.setattr(socket, "getaddrinfo", _sem_dns)
+        else:
+            porta = mudo.getsockname()[1]
+            url = f"amqp://execucao:x@127.0.0.1:{porta}/%2F?stack_timeout=0.5"
+        backoff = _ParaNaEspera(tmp_path / "hb")
+        Consumidor(
+            _engine_falsa(),
+            url,
+            {},
+            processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto"),
+            backoff,
+        ).executar(threading.Event())
+    assert backoff.esperas == 1
+    assert not (tmp_path / "pronto").exists()
+    assert f'"error": "{erro}"' in log_capturado.getvalue()
+
+
+def test_abertura_lenta_que_falha_toca_o_heartbeat_antes_da_espera(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    heartbeat = tmp_path / "hb"
+
+    def resolucao_lenta(*_: object, **__: object) -> Any:
+        # O pika nao poe prazo na resolucao do nome: com o DNS mudo a tentativa
+        # leva dezenas de segundos, e o heartbeat, tocado antes dela, envelhece.
+        antigo = time.time() - 120
+        os.utime(heartbeat, (antigo, antigo))
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(modulo_consumidor, "abrir_canal", resolucao_lenta)
+    backoff = _ParaNaEspera(heartbeat)
+    Consumidor(
+        _engine_falsa(),
+        _URL,
+        {},
+        processo.SinaisDoProcesso(heartbeat, tmp_path / "pronto"),
+        backoff,
+    ).executar(threading.Event())
+    # A idade na espera e so a da espera: a da tentativa nao se soma a ela.
+    [idade] = backoff.idades
+    assert idade < 5
+
+
+@pytest.mark.parametrize(
+    ("erro", "pronto", "mensagem"),
+    [
+        pytest.param(
+            OSError(errno.EMFILE, "Too many open files"),
+            "pronto",
+            "Too many open files",
+            id="sem-descritores",
+        ),
+        pytest.param(
+            ssl.SSLCertVerificationError(1, "certificate verify failed"),
+            "pronto",
+            "certificate verify failed",
+            id="tls",
+        ),
+        pytest.param(
+            None, "sem-diretorio/pronto", "No such file", id="disco-no-arquivo-de-sinal"
+        ),
+    ],
+)
+def test_oserror_que_nao_e_broker_fora_derruba_o_consumidor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    erro: OSError | None,
+    pronto: str,
+    mensagem: str,
+) -> None:
+    # Descritores esgotados ou certificado recusado na abertura, e disco ao
+    # tocar o arquivo de prontidao, nao sao broker fora: reconectar em laco
+    # esconderia o defeito; o processo cai e o Kubernetes o reinicia.
+    def abrir(*_: object, **__: object) -> tuple[_ConexaoFalsa, _CanalFalso]:
+        if erro is not None:
+            raise erro
+        return _ConexaoFalsa([]), _CanalFalso()
+
+    monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
+    backoff = _BackoffGravado()
+    with pytest.raises(OSError, match=mensagem):
+        Consumidor(
+            _engine_falsa(),
+            _URL,
+            {},
+            processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / pronto),
+            backoff,
+        ).executar(threading.Event())
+    assert backoff.esperas == 0

@@ -1304,6 +1304,9 @@ def test_processo_sobe_com_o_ambiente_e_para_no_sinal(
     parado = threading.Event()
     parado.set()
     chamadas: list[str] = []
+    # O broker dos testes usa a senha de demonstracao do compose, que o boot so
+    # aceita em development ou test.
+    monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("RABBITMQ_URL", broker.url("execucao"))
     monkeypatch.setattr(modulo, "parada_por_sinal", lambda: parado)

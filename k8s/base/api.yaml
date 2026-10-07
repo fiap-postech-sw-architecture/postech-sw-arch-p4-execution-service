@@ -1,0 +1,120 @@
+# API REST: o entrypoint.sh da imagem sobe o uvicorn com --root-path do
+# ROOT_PATH, para o Swagger atras do prefixo /execucao do Kong achar o
+# openapi.json. Sem replicas: quem decide e o HPA (hpa.yaml), e o apply nao
+# briga com ele. /metrics na propria porta http.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-service-api
+spec:
+  selector:
+    matchLabels:
+      app: execution-service-api
+  template:
+    metadata:
+      labels:
+        app: execution-service-api
+        processo: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Espera o Job de migracao da mesma versao: no rolling update os pods
+        # novos esperam a revisao nova e os antigos seguem servindo (ADR-042,
+        # migracao expandir e contrair).
+        - name: aguarda-migracao
+          image: pytstop-execution-service
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              h="$(alembic heads | cut -d' ' -f1)" && [ -n "$h" ]
+              && until [ "$(alembic current 2>/dev/null | cut -d' ' -f1)" = "$h" ];
+              do sleep 2; done
+          env:
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_APP_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://execucao_app:$(POSTGRES_APP_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: api
+          image: pytstop-execution-service
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: execution-service
+          # A URL se monta no pod, com a senha do papel da aplicacao (so DML):
+          # o describe do pod mostra o molde, nao a senha.
+          env:
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_APP_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://execucao_app:$(POSTGRES_APP_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+          livenessProbe:
+            httpGet:
+              path: /api/v1/saude
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/saude/pronto
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

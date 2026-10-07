@@ -1,0 +1,187 @@
+# PostgreSQL 16 do servico: StatefulSet de uma replica, volume pela StorageClass
+# padrao do cluster (standard no kind, local-path no k3s) e o postgres_exporter
+# como sidecar. Service headless: o nome resolve so com o pod pronto, e so o
+# proprio namespace alcanca a porta (networkpolicy.yaml).
+#
+# Um papel por uso (ADR-042): o superusuario postgres so inicializa o volume; o
+# papeis.sql (ConfigMap execucao-postgres-init), que a imagem roda uma vez, na
+# primeira inicializacao, cria o dono execucao (DDL, Job de migracao), o
+# execucao_app (so DML: API, relay e consumidor) e o execucao_exporter
+# (pg_monitor), com as senhas do Secret execucao-postgres, que o make deploy do
+# platform gera.
+apiVersion: v1
+kind: Service
+metadata:
+  name: execucao-postgres
+spec:
+  clusterIP: None
+  selector:
+    app: execucao-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: execucao-postgres
+spec:
+  serviceName: execucao-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: execucao-postgres
+  template:
+    metadata:
+      labels:
+        app: execucao-postgres
+        processo: banco
+      # O Prometheus raspa o exporter (a porta anotada tem de estar em ports).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      # postgres (999) da imagem; o fsGroup deixa o volume gravavel por ele.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16.15
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: execucao
+            - name: POSTGRES_USER
+              value: postgres
+            # Subdiretorio do volume: criado pelo proprio postgres, com o dono e
+            # o modo 700 que o initdb exige.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # Sem trust: a imagem deixa o loopback e o socket sem senha, e o
+            # exporter, no mesmo pod, entraria como postgres.
+            - name: POSTGRES_INITDB_ARGS
+              value: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_PASSWORD
+            # Lidas pelo papeis.sql (\getenv), nunca por argumento.
+            - name: POSTGRES_OWNER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_OWNER_PASSWORD
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_APP_PASSWORD
+            - name: POSTGRES_EXPORTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_EXPORTER_PASSWORD
+          # Durante o init o servidor temporario so ouve o socket: a janela do
+          # startup cobre o initdb e o papeis.sql, que um restart no meio
+          # deixaria pela metade.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "execucao", "-d", "execucao"]
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "execucao", "-d", "execucao"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "execucao", "-d", "execucao"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: dados
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+        - name: exporter
+          image: prometheuscommunity/postgres-exporter:v0.20.1
+          ports:
+            - name: metrics
+              containerPort: 9187
+          env:
+            - name: DATA_SOURCE_URI
+              value: 127.0.0.1:5432/execucao?sslmode=disable
+            - name: DATA_SOURCE_USER
+              value: execucao_exporter
+            - name: DATA_SOURCE_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_EXPORTER_PASSWORD
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: init
+          configMap:
+            name: execucao-postgres-init
+        - name: run
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: dados
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
