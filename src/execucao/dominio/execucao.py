@@ -87,8 +87,10 @@ class Execucao(AggregateRoot):
         prioridade: Prioridade,
         veiculo: Veiculo | None,
         agora: datetime,
-        agendamento_id: UUID | None = None,
+        agendamento_id: UUID,
     ) -> Execucao:
+        """Execucao AGUARDANDO; ``agendamento_id`` e o id do comando, causa dos
+        fatos que o mecanico gera (so a lapide e a reidratacao ficam sem ele)."""
         return cls(
             id=ordem_id,
             _prioridade=prioridade,

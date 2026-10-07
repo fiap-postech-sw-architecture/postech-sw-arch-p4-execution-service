@@ -54,6 +54,7 @@ def _solicitar(
                 ano=2022,
             ),
             descricao,
+            solicitacao_id=uuid4(),
         )
     return ordem_id
 

@@ -37,6 +37,7 @@ def _diagnostico() -> Diagnostico:
         veiculo=_veiculo(),
         descricao_problema=" Barulho ao frear ",
         agora=AGORA,
+        solicitacao_id=uuid4(),
     )
 
 
@@ -77,13 +78,18 @@ class TestDiagnostico:
             veiculo=_veiculo(placa="abc-1234"),
             descricao_problema="x",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         assert diagnostico.veiculo is not None
         assert diagnostico.veiculo.placa == "ABC1234"
         ordem_id, invalido = uuid4(), _veiculo(placa="ABC")
         with pytest.raises(ValueError, match="Placa invalida"):
             Diagnostico.solicitar(
-                ordem_id=ordem_id, veiculo=invalido, descricao_problema="x", agora=AGORA
+                ordem_id=ordem_id,
+                veiculo=invalido,
+                descricao_problema="x",
+                agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_descricao_com_caractere_de_controle_e_recusada(self) -> None:
@@ -94,6 +100,7 @@ class TestDiagnostico:
                 veiculo=veiculo,
                 descricao_problema="freio\x00chiando",
                 agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_descricao_multilinha_e_aceita(self) -> None:
@@ -102,6 +109,7 @@ class TestDiagnostico:
             veiculo=_veiculo(),
             descricao_problema="freio chiando\r\nao frear",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         assert diagnostico.descricao_problema == "freio chiando\r\nao frear"
 
@@ -126,6 +134,7 @@ class TestDiagnostico:
                 veiculo=veiculo,
                 descricao_problema=descricao,
                 agora=AGORA,
+                solicitacao_id=uuid4(),
             )
 
     def test_iniciar_registra_mecanico(self) -> None:
@@ -236,6 +245,7 @@ class TestDiagnostico:
             veiculo=_veiculo(placa="ABC1D23"),
             descricao_problema="cliente Joao reclamou",
             agora=AGORA,
+            solicitacao_id=uuid4(),
         )
         diagnostico.iniciar(MECANICO, AGORA)
         diagnostico.concluir(MECANICO, ITENS, "falar com Maria", AGORA)
@@ -320,6 +330,7 @@ class TestAnonimizarTitular:
             veiculo=_VEICULO_LGPD,
             descricao_problema="Barulho",
             agora=datetime.now(UTC),
+            solicitacao_id=uuid4(),
         )
         assert diagnostico.em_andamento
         diagnostico.iniciar(uuid4(), datetime.now(UTC))
@@ -337,6 +348,7 @@ def _concluido_com_observacoes(observacoes: str) -> Diagnostico:
         veiculo=_VEICULO_LGPD,
         descricao_problema="Barulho; ligar para Maria (11) 99999-0000",
         agora=datetime.now(UTC),
+        solicitacao_id=uuid4(),
     )
     mecanico = uuid4()
     diagnostico.iniciar(mecanico, datetime.now(UTC))

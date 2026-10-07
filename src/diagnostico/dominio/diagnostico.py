@@ -161,8 +161,10 @@ class Diagnostico(AggregateRoot):
         veiculo: Veiculo,
         descricao_problema: str,
         agora: datetime,
-        solicitacao_id: UUID | None = None,
+        solicitacao_id: UUID,
     ) -> Diagnostico:
+        """Diagnostico AGUARDANDO; ``solicitacao_id`` e o id do comando, causa dos
+        fatos que o mecanico gera (so a lapide e a reidratacao ficam sem ele)."""
         return cls(
             id=ordem_id,
             _veiculo=veiculo.validado(agora),

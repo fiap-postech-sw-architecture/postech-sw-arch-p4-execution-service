@@ -69,7 +69,7 @@ def _agendar(
             VeiculosSQLAlchemy(session),
             EstoqueSQLAlchemyAdapter(session),
             transacao_do_comando(session),
-        ).executar(ordem_id, prioridade)
+        ).executar(ordem_id, prioridade, agendamento_id=uuid4())
     return ordem_id
 
 
@@ -122,7 +122,7 @@ def test_fila_mostra_o_retrato_copiado_do_diagnostico(
         RegistrarSolicitacaoDeDiagnostico(
             DiagnosticoSQLAlchemyRepository(session),
             transacao_do_comando(session),
-        ).executar(ordem_id, veiculo, "Freio chiando")
+        ).executar(ordem_id, veiculo, "Freio chiando", solicitacao_id=uuid4())
     _agendar(session_factory, ordem_id=ordem_id)
     sem_diagnostico = _agendar(session_factory)
 

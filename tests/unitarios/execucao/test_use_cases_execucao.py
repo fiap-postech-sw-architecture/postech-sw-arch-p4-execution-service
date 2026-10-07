@@ -56,6 +56,7 @@ def _agendada(ordem_id: UUID | None = None) -> Execucao:
         prioridade=Prioridade.NORMAL,
         veiculo=None,
         agora=datetime.now(UTC),
+        agendamento_id=uuid4(),
     )
 
 
@@ -122,7 +123,7 @@ class TestAgendar:
         veiculos = VeiculosEmMemoria({ordem_id: VEICULO})
         execucao = AgendarExecucao(
             repo, FilaFixa(posicao=3), veiculos, _estoque_com_reserva(ordem_id), uow
-        ).executar(ordem_id, Prioridade.ALTA)
+        ).executar(ordem_id, Prioridade.ALTA, agendamento_id=uuid4())
 
         assert repo.execucoes[ordem_id] is execucao
         assert (execucao.status, execucao.prioridade) == (
@@ -143,7 +144,7 @@ class TestAgendar:
             VeiculosEmMemoria(),
             _estoque_com_reserva(existente.ordem_id),
             uow,
-        ).executar(existente.ordem_id, Prioridade.ALTA)
+        ).executar(existente.ordem_id, Prioridade.ALTA, agendamento_id=uuid4())
         assert resultado is existente
         assert resultado.prioridade is Prioridade.NORMAL
         assert _eventos(uow) == [
@@ -163,7 +164,7 @@ class TestAgendar:
             VeiculosEmMemoria(),
             _estoque_com_reserva(existente.ordem_id),
             uow,
-        ).executar(existente.ordem_id, Prioridade.NORMAL)
+        ).executar(existente.ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
         assert (uow.eventos, uow.descartado) == ([], True)
 
     def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
@@ -175,7 +176,7 @@ class TestAgendar:
 
         resultado = AgendarExecucao(
             repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
-        ).executar(ordem_id, Prioridade.NORMAL)
+        ).executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
         assert resultado is lapide
         assert resultado.status is StatusExecucao.CANCELADA
@@ -191,7 +192,7 @@ class TestAgendar:
             FakeTransacaoDoComando(),
         )
         with pytest.raises(ValueError, match="Prioridade"):
-            uc.executar(ordem_id, urgente)
+            uc.executar(ordem_id, urgente, agendamento_id=uuid4())
 
     @pytest.mark.parametrize(
         "reserva",
@@ -225,7 +226,7 @@ class TestAgendar:
         )
 
         with pytest.raises(ViolacaoRegraDeNegocioException, match="reserva"):
-            uc.executar(ordem_id, Prioridade.NORMAL)
+            uc.executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
         assert repo.execucoes == {}
         assert (uow.eventos, uow.desfeitas) == ([], 1)
@@ -465,6 +466,7 @@ def _com_retrato(veiculo: Veiculo, status: str = "cancelada") -> Execucao:
         prioridade=Prioridade.NORMAL,
         veiculo=veiculo,
         agora=datetime.now(UTC),
+        agendamento_id=uuid4(),
     )
     if status == "cancelada":
         execucao.cancelar(datetime.now(UTC))

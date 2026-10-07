@@ -22,7 +22,11 @@ MECANICO, OUTRO = uuid4(), uuid4()
 
 def _agendada(prioridade: Prioridade = Prioridade.NORMAL) -> Execucao:
     return Execucao.agendar(
-        ordem_id=uuid4(), prioridade=prioridade, veiculo=None, agora=AGORA
+        ordem_id=uuid4(),
+        prioridade=prioridade,
+        veiculo=None,
+        agora=AGORA,
+        agendamento_id=uuid4(),
     )
 
 
@@ -192,6 +196,7 @@ class TestAnonimizarTitular:
             prioridade=Prioridade.NORMAL,
             veiculo=veiculo,
             agora=datetime.now(UTC),
+            agendamento_id=uuid4(),
         )
         assert execucao.em_andamento
         assert execucao.anonimizar_titular()

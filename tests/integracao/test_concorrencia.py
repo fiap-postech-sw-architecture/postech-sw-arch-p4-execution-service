@@ -446,7 +446,7 @@ def test_finalizacao_e_liberacao_simultaneas_nao_baixam_reserva_liberada(
             VeiculosSQLAlchemy(session),
             EstoqueSQLAlchemyAdapter(session),
             transacao_do_comando(session),
-        ).executar(ordem_a, Prioridade.NORMAL)
+        ).executar(ordem_a, Prioridade.NORMAL, agendamento_id=uuid4())
     with session_factory() as session:
         IniciarExecucao(
             ExecucaoSQLAlchemyRepository(session),
@@ -597,7 +597,7 @@ def _solicitar_diagnostico(session: Session, ordem_id: UUID) -> object:
     )
     return RegistrarSolicitacaoDeDiagnostico(
         DiagnosticoSQLAlchemyRepository(session), transacao_do_comando(session)
-    ).executar(ordem_id, veiculo, "Nao liga")
+    ).executar(ordem_id, veiculo, "Nao liga", solicitacao_id=uuid4())
 
 
 def _descartar_diagnostico(session: Session, ordem_id: UUID) -> object:
@@ -613,7 +613,7 @@ def _agendar_execucao(session: Session, ordem_id: UUID) -> object:
         VeiculosSQLAlchemy(session),
         EstoqueSQLAlchemyAdapter(session),
         transacao_do_comando(session),
-    ).executar(ordem_id, Prioridade.NORMAL)
+    ).executar(ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
 
 
 def _cancelar_execucao(session: Session, ordem_id: UUID) -> object:

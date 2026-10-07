@@ -74,7 +74,7 @@ class RegistrarSolicitacaoDeDiagnostico:
         ordem_id: UUID,
         veiculo: Veiculo,
         descricao_problema: str,
-        solicitacao_id: UUID | None = None,
+        solicitacao_id: UUID,
     ) -> Diagnostico:
         """``solicitacao_id``: id do comando, causa dos fatos que o mecanico gera."""
         novo = Diagnostico.solicitar(

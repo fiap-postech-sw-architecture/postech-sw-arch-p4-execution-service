@@ -54,6 +54,7 @@ def _diagnostico(ordem_id: UUID | None = None, *, atraso: int = 0) -> Diagnostic
         veiculo=VEICULO,
         descricao_problema="Revisao",
         agora=datetime.now(UTC) + timedelta(seconds=atraso),
+        solicitacao_id=uuid4(),
     )
 
 
@@ -68,7 +69,10 @@ class TestRegistrarSolicitacao:
         repo, uow = DiagnosticosEmMemoria(), FakeTransacaoDoComando()
         ordem_id = uuid4()
         diagnostico = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            ordem_id, VEICULO, "Barulho no motor"
+            ordem_id,
+            VEICULO,
+            "Barulho no motor",
+            solicitacao_id=uuid4(),
         )
         assert repo.diagnosticos[ordem_id] is diagnostico
         assert diagnostico.status is StatusDiagnostico.AGUARDANDO
@@ -78,7 +82,10 @@ class TestRegistrarSolicitacao:
         existente = _em_andamento()
         repo, uow = DiagnosticosEmMemoria(existente), FakeTransacaoDoComando()
         resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            existente.ordem_id, VEICULO, "outra descricao"
+            existente.ordem_id,
+            VEICULO,
+            "outra descricao",
+            solicitacao_id=uuid4(),
         )
         assert resultado is existente
         assert resultado.status is StatusDiagnostico.EM_ANDAMENTO
@@ -92,7 +99,10 @@ class TestRegistrarSolicitacao:
         uow = FakeTransacaoDoComando()
 
         resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            ordem_id, VEICULO, "Barulho no motor"
+            ordem_id,
+            VEICULO,
+            "Barulho no motor",
+            solicitacao_id=uuid4(),
         )
 
         assert resultado is lapide

@@ -196,6 +196,7 @@ class TestDiagnosticos:
             ),
             descricao_problema="Revisao",
             agora=T0 + timedelta(minutes=minutos),
+            solicitacao_id=uuid4(),
         )
         if status != "AGUARDANDO":
             diagnostico.iniciar(uuid4(), T0)
@@ -292,6 +293,7 @@ class TestFilaDeExecucao:
             prioridade=prioridade,
             veiculo=None,
             agora=T0 + timedelta(minutes=minutos),
+            agendamento_id=uuid4(),
         )
 
     def test_alta_antes_chegada_asc_e_desempate_por_ordem(

@@ -89,7 +89,7 @@ class AgendarExecucao:
         self,
         ordem_id: UUID,
         prioridade: Prioridade,
-        agendamento_id: UUID | None = None,
+        agendamento_id: UUID,
     ) -> Execucao:
         """Devolve a execucao da ordem (nova, na fila ou ja encerrada).
 

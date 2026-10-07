@@ -338,6 +338,7 @@ def _diagnostico_concluido(
         veiculo=veiculo,
         descricao_problema=f"Barulho; dona Maria Souza, placa {placa}",
         agora=agora,
+        solicitacao_id=uuid4(),
     )
     diagnostico.iniciar(mecanico, agora)
     diagnostico.concluir(
@@ -347,7 +348,11 @@ def _diagnostico_concluido(
         agora,
     )
     execucao = Execucao.agendar(
-        ordem_id=ordem_id, prioridade=Prioridade.NORMAL, veiculo=veiculo, agora=agora
+        ordem_id=ordem_id,
+        prioridade=Prioridade.NORMAL,
+        veiculo=veiculo,
+        agora=agora,
+        agendamento_id=uuid4(),
     )
     execucao.cancelar(agora)
     with session_factory() as sessao:
