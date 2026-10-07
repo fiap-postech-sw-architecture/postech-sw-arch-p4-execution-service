@@ -871,16 +871,20 @@ def test_conexao_bloqueada_pelo_broker_para_os_claims_ate_o_desbloqueio(
         esperar_ate((tmp_path / "relay-pronto").exists)
 
 
-def test_envelope_fora_do_contrato_vira_dead_sem_derrubar_o_relay(
+def test_envelope_fora_do_contrato_vira_dead_sem_segurar_a_ordem_nem_o_relay(
     engine: Engine,
     sinais: Callable[[str], SinaisDoProcesso],
     outbox: Callable[[], list[dict[str, Any]]],
     broker_falso: type[_BrokerFalso],
     log_capturado: io.StringIO,
 ) -> None:
+    # A `dead` nao segura as mensagens seguintes da mesma ordem (ADR-036): a
+    # barreira por ordem so espera as pendentes.
     broker_falso.conexoes = 1
-    _gravar(engine, envelope={})  # editado a mao ou defeito: nenhuma tentativa conserta
-    valida = _gravar(engine)
+    ordem = uuid4()
+    # Editado a mao ou defeito: nenhuma tentativa conserta.
+    _gravar(engine, ordem_id=ordem, envelope={})
+    valida = _gravar(engine, ordem_id=ordem)
     with EmSegundoPlano(_relay_falso(engine, sinais)):
         esperar_ate(lambda: broker_falso.publicadas == [valida])
     venenosa = outbox()[0]
