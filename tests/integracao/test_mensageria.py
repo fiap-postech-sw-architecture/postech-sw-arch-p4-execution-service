@@ -30,7 +30,7 @@ from src.compartilhado.infraestrutura.database import (
     criar_engine,
 )
 from src.compartilhado.infraestrutura.mensageria import amqp
-from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal
+from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal, propriedades
 from src.compartilhado.infraestrutura.mensageria.consumidor import (
     NIVEIS_DE_RETRY,
     Consumidor,
@@ -958,14 +958,22 @@ def test_erro_nao_classificado_vai_direto_para_a_dlq_sem_passar_pelo_retry(
 def test_x_tentativa_acima_do_limite_vai_direto_para_a_dlq(
     broker: Broker, engine: Engine, consumidor: Callable[..., Consumidor]
 ) -> None:
-    # Copia forjada com x-tentativa 6: nao roda o handler.
+    # Copia com x-tentativa 6 publicada pelo proprio usuario do servico, pela
+    # fila de retry: a origem confere, e a faixa do header a recusa.
     _criar_item(engine, "PEC-VELA", 5)
+    comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
     antes = consumidas("ReservarPecas", "dlq")
     with EmSegundoPlano(consumidor()):
-        broker.publicar_comando(
-            envelope_de_comando("ReservarPecas", _reservar(uuid4())),
-            headers={"x-tentativa": 6},
-        )
+        with broker.canal("execucao") as canal:
+            canal.basic_publish(
+                exchange="pytstop.retry",
+                routing_key=NIVEIS_DE_RETRY[0],
+                body=json.dumps(comando).encode(),
+                properties=propriedades(
+                    comando, usuario="execucao", headers={"x-tentativa": 6}
+                ),
+                mandatory=True,
+            )
         _esperar_consumo("ReservarPecas", "dlq", antes)
     assert _saldo(engine, "PEC-VELA") == (5, 0)
 

@@ -562,9 +562,28 @@ def test_falha_depois_da_quinta_copia_vai_para_a_dlq() -> None:
         pytest.param({"user_id": "billing"}, None, id="produtor-errado"),
         pytest.param({"user_id": None}, None, id="sem-user-id"),
         pytest.param({"user_id": "execucao"}, None, id="proprio-usuario-sem-tentativa"),
-        pytest.param({"headers": {"x-tentativa": "1"}}, None, id="tentativa-texto"),
-        pytest.param({"headers": {"x-tentativa": -1}}, None, id="tentativa-negativa"),
-        pytest.param({"headers": {"x-tentativa": 6}}, None, id="tentativa-acima-de-5"),
+        # x-tentativa fora da faixa na copia do proprio consumidor: a recusa vem
+        # da faixa do header, nao da origem.
+        pytest.param(
+            {"user_id": "execucao", "headers": {"x-tentativa": "1"}},
+            None,
+            id="tentativa-texto",
+        ),
+        pytest.param(
+            {"user_id": "execucao", "headers": {"x-tentativa": True}},
+            None,
+            id="tentativa-booleana",
+        ),
+        pytest.param(
+            {"user_id": "execucao", "headers": {"x-tentativa": -1}},
+            None,
+            id="tentativa-negativa",
+        ),
+        pytest.param(
+            {"user_id": "execucao", "headers": {"x-tentativa": 6}},
+            None,
+            id="tentativa-acima-de-5",
+        ),
         pytest.param(
             {"corpo": (CONTRATOS / "exemplos" / "LiberarReserva.json").read_bytes()},
             None,
