@@ -5,13 +5,25 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from opentelemetry.trace import SpanKind
+import pytest
+from opentelemetry import context, trace
+from opentelemetry.trace import (
+    NonRecordingSpan,
+    SpanContext,
+    SpanKind,
+    StatusCode,
+    TraceFlags,
+    TraceState,
+)
 
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
     contexto_atual,
     tracer,
 )
-from src.compartilhado.infraestrutura.rastreamento import retomando
+from src.compartilhado.infraestrutura.rastreamento import (
+    colunas_do_contexto_de_espera,
+    retomando,
+)
 from src.diagnostico.infraestrutura.mapping import diagnosticos_table
 
 if TYPE_CHECKING:
@@ -39,6 +51,18 @@ class _Sessao:
 
     def one_or_none(self) -> _Linha | None:
         return self._linha
+
+
+class _SessaoQueRegistra(_Sessao):
+    """Sessao falsa que guarda as consultas recebidas."""
+
+    def __init__(self, linha: _Linha | None) -> None:
+        super().__init__(linha)
+        self.consultas: list[Any] = []
+
+    def execute(self, stmt: object) -> _Sessao:
+        self.consultas.append(stmt)
+        return self
 
 
 def _retomar(sessao: _Sessao) -> dict[str, str]:
@@ -85,3 +109,55 @@ def test_sem_contexto_guardado_o_passo_abre_trace_proprio(
         _retomar(_Sessao(linha))
     passos = [s for s in spans.get_finished_spans() if s.name == "iniciar diagnostico"]
     assert [(s.parent, list(s.links)) for s in passos] == [(None, []), (None, [])]
+
+
+def test_contexto_e_lido_so_do_registro_da_ordem_retomada() -> None:
+    sessao = _SessaoQueRegistra(_Linha(_GUARDADO))
+    ordem_id = uuid4()
+    with retomando(
+        cast("Session", sessao), diagnosticos_table, ordem_id, "iniciar diagnostico"
+    ):
+        pass
+    (consulta,) = sessao.consultas
+    compilada = consulta.compile()
+    assert "WHERE diagnosticos.ordem_id = " in str(compilada)
+    assert list(compilada.params.values()) == [ordem_id]
+
+
+def test_excecao_do_caso_de_uso_nao_vai_para_o_span(
+    spans: InMemorySpanExporter,
+) -> None:
+    # A mensagem da excecao pode trazer dado do pedido (placa, texto livre).
+    with (
+        pytest.raises(RuntimeError),
+        retomando(
+            cast("Session", _Sessao(_Linha(_GUARDADO))),
+            diagnosticos_table,
+            uuid4(),
+            "iniciar diagnostico",
+        ),
+    ):
+        raise RuntimeError("placa ABC1D23 do pedido")
+    passo = _span(spans, "iniciar diagnostico")
+    assert passo.events == ()
+    assert passo.status.status_code is StatusCode.UNSET
+
+
+def test_colunas_de_espera_guardam_o_contexto_do_span_corrente() -> None:
+    # O comando da saga cria o registro no span do consumidor: o INSERT grava
+    # traceparent e tracestate dele, sem passar pelo agregado.
+    traceparent, tracestate = colunas_do_contexto_de_espera()
+    pai = SpanContext(
+        trace_id=0x0AF7651916CD43DD8448EB211C80319C,
+        span_id=0xB7AD6B7169203331,
+        is_remote=False,
+        trace_flags=TraceFlags(1),
+        trace_state=TraceState([("fornecedor", "estado-1")]),
+    )
+    token = context.attach(trace.set_span_in_context(NonRecordingSpan(pai)))
+    try:
+        # O SQLAlchemy chama o default com o contexto de execucao.
+        assert traceparent.default.arg(None) == _GUARDADO
+        assert tracestate.default.arg(None) == "fornecedor=estado-1"
+    finally:
+        context.detach(token)

@@ -1383,17 +1383,23 @@ def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
         esperar_ate(outbox)
 
 
-def test_fatos_do_mecanico_levam_a_causa_do_comando_que_abriu_o_fluxo(
+def _trace(traceparent: str | None) -> str | None:
+    return None if traceparent is None else traceparent.split("-")[1]
+
+
+def test_fatos_do_mecanico_levam_a_causa_e_o_trace_do_comando_que_abriu_o_fluxo(
     api: TestClient,
     autenticar: Callable[..., dict[str, str]],
     billing: respx.MockRouter,
     broker: Broker,
+    engine: Engine,
     session_factory: sessionmaker[Session],
     consumidor: Callable[..., Consumidor],
     outbox: Callable[[], list[dict[str, Any]]],
 ) -> None:
     # O orquestrador casa as respostas pelo causation_id: o que o mecanico faz
-    # pela API responde ao SolicitarDiagnostico ou ao AgendarExecucao.
+    # pela API responde ao SolicitarDiagnostico ou ao AgendarExecucao, e sai no
+    # trace do consumo desse comando, guardado com o registro que esperava.
     semear(session_factory)
     billing.post("/api/v1/precos/validacao").respond(200, json={"invalidos": []})
     mecanico = autenticar("mecanico", uuid4())
@@ -1457,4 +1463,35 @@ def test_fatos_do_mecanico_levam_a_causa_do_comando_que_abriu_o_fluxo(
         # ...e o fato do mecanico, o do comando que abriu a execucao.
         ("ExecucaoIniciada", agendamento["id"]),
         ("ExecucaoFinalizada", agendamento["id"]),
+    ]
+    with engine.connect() as conexao:
+        diagnostico_guardado = conexao.execute(
+            text("SELECT traceparent FROM diagnosticos WHERE ordem_id = :o"),
+            {"o": ordem_id},
+        ).scalar_one()
+        execucao_guardada = conexao.execute(
+            text("SELECT traceparent FROM execucoes WHERE ordem_id = :o"),
+            {"o": ordem_id},
+        ).scalar_one()
+    do_diagnostico = _trace(diagnostico_guardado)
+    da_execucao = _trace(execucao_guardada)
+    # Dois comandos publicados sem trace: cada consumo abre o seu.
+    assert do_diagnostico is not None
+    assert da_execucao is not None
+    assert do_diagnostico != da_execucao
+    fatos_do_mecanico = {
+        "DiagnosticoIniciado",
+        "DiagnosticoConcluido",
+        "ExecucaoIniciada",
+        "ExecucaoFinalizada",
+    }
+    assert [
+        (linha["tipo"], _trace(linha["traceparent"]))
+        for linha in outbox()
+        if linha["tipo"] in fatos_do_mecanico
+    ] == [
+        ("DiagnosticoIniciado", do_diagnostico),
+        ("DiagnosticoConcluido", do_diagnostico),
+        ("ExecucaoIniciada", da_execucao),
+        ("ExecucaoFinalizada", da_execucao),
     ]
