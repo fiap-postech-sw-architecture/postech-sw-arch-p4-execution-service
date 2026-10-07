@@ -47,8 +47,8 @@ if TYPE_CHECKING:
 # seguinte a ultima da tabela (a quinta) leva a linha a `dead`.
 ATRASOS_S: Final[tuple[float, ...]] = (1, 4, 16, 64)
 _RETENCAO_DAS_ENTREGUES: Final = timedelta(days=7)
-# ``dead`` fica para a triagem (redrive) e sai em 30 dias: guarda o envelope
-# inteiro, inclusive o texto livre das observacoes.
+# ``dead`` fica para quem opera conferir e republicar, e sai em 30 dias: guarda
+# o envelope inteiro, inclusive o texto livre das observacoes.
 _RETENCAO_DAS_DEAD: Final = timedelta(days=30)
 
 _CLAIM: Final = text(
