@@ -68,12 +68,15 @@ _EMAIL_PATTERN = re.compile(
 #      11 digitos corridos com shape de CPF e caem no _CPF_PATTERN acima
 #      antes desta regex; campos NOMEADOS telefone/celular/contato sao
 #      mascarados pela denylist abaixo.
-# O numero nao pode encostar em letra, digito, `_` nem hifen: os ids do servico
-# (`ordem_id`, `correlation_id`, `request_id`, ator e alvo) sao UUID, e o v4 traz
-# entre os grupos trechos `dd-dddd-dddd` (`732ffc02-3465-4237-...`) que o split
-# 4-4 casaria. Sem os lookarounds, cerca de 1,4% dos UUID saiam mascarados do log.
+# Os ids do servico (`ordem_id`, `correlation_id`, `request_id`, ator e alvo) sao
+# UUID, e o v4 traz entre os grupos trechos `dd-dddd-dddd` (`732ffc02-3465-4237-...`)
+# que o split 4-4 casaria (cerca de 1,4% dos UUID saiam mascarados). Por isso o
+# numero nao pode vir colado a digito hexadecimal, salvo quando abre com `(` ou
+# `+`, e nao pode continuar em digito. Colado a letra fora de A-F, a hifen ou a
+# espaco (`tel-11 99999-0000`, `tel(11)99999-0000`) continua mascarado; medido
+# com 0 falso positivo em 400 mil UUID v4.
 _TELEFONE_PATTERN = re.compile(
-    r"(?<![\w-])"  # nao colado em palavra nem em id hifenizado (UUID)
+    r"(?:(?<![0-9A-Fa-f])|(?=[(+]))"  # nao colado a digito hexadecimal (UUID)
     r"(?:"
     r"(?:\+55[\s.-]?)?"  # codigo do pais opcional
     r"(?:\(\d{2}\)|\d{2})"  # DDD com ou sem parenteses
@@ -82,7 +85,7 @@ _TELEFONE_PATTERN = re.compile(
     r"|"
     r"\+55[\s.-]?\d{10,11}"  # +55 com numero corrido (sem hifen local)
     r")"
-    r"(?![\w-])"  # idem, do lado direito (tambem barra numero maior)
+    r"(?!\d)"  # nao continua em digito (numero maior)
 )
 
 # Placa antiga (ABC1234, ABC-1234) e Mercosul (ABC1D23) solta em texto: o

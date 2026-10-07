@@ -18,7 +18,7 @@ from src.compartilhado.infraestrutura.logging import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
 
 class TestLogging:
@@ -224,15 +224,34 @@ class TestScrubUuid:
         texto = f"ordem {_UUID_COM_SPLIT_DE_TELEFONE}"
         assert scrub_pii(None, "info", {"event": texto})["event"] == texto
 
-    def test_dez_mil_uuid4_ficam_intactos(self) -> None:
+    @pytest.mark.parametrize(
+        "caixa", [str.lower, str.upper], ids=["minusculas", "maiusculas"]
+    )
+    def test_dez_mil_uuid4_ficam_intactos(self, caixa: Callable[[str], str]) -> None:
         # Antes da correcao cerca de 1,4% dos UUID v4 saiam mascarados.
-        ids = [str(uuid4()) for _ in range(10_000)]
+        ids = [caixa(str(uuid4())) for _ in range(10_000)]
         mascarados = [
             valor
             for valor in ids
             if scrub_pii(None, "info", {"id": valor})["id"] != valor
         ]
         assert mascarados == []
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("tel-11 99999-0000", id="colado-a-hifen"),
+            pytest.param("tel(11)99999-0000", id="colado-a-letra"),
+            pytest.param("ligar+5511999990000", id="mais-55-colado-a-letra"),
+            pytest.param("+5511999990000", id="mais-55-corrido"),
+        ],
+    )
+    def test_telefone_colado_a_letra_ou_hifen_continua_mascarado(
+        self, texto: str
+    ) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": texto})["event"])
+        assert "9999" not in resultado
+        assert "***" in resultado
 
     def test_correlation_id_sai_intacto_no_log_json(
         self, log_capturado: io.StringIO
