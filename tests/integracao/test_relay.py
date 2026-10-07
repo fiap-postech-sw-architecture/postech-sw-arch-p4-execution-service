@@ -658,6 +658,37 @@ def test_claim_segura_o_lote_inteiro_com_o_lease(
     assert com_lease[0] == 3
 
 
+def test_nenhuma_transacao_fica_aberta_durante_o_publish(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    broker_falso: type[_BrokerFalso],
+) -> None:
+    # Com o broker em alarme, o publish espera ate o timeout do bloqueio (30 s):
+    # uma transacao aberta esse tempo cairia no timeout de transacao ociosa do
+    # banco, tambem de 30 s.
+    _gravar(engine)
+    broker_falso.conexoes = 1
+    abertas: list[int] = []
+
+    def contar_transacoes_abertas() -> None:
+        with engine.connect() as conexao:
+            abertas.append(
+                conexao.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() "
+                        "AND pid <> pg_backend_pid() "
+                        "AND state LIKE 'idle in transaction%'"
+                    )
+                ).scalar_one()
+            )
+
+    broker_falso.ao_publicar.append(contar_transacoes_abertas)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(lambda: len(broker_falso.publicadas) == 1)
+    assert abertas == [0]
+
+
 def test_relay_atrasado_nao_publica_linha_que_outra_replica_ja_entregou(
     engine: Engine,
     sinais: Callable[[str], SinaisDoProcesso],
