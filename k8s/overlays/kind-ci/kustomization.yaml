@@ -1,0 +1,18 @@
+# Overlay do CD (job deploy-kind, ADR-042): o do kind com a API em uma replica
+# so, para os tres servicos caberem no runner junto com a plataforma. A imagem
+# vem do run, pelo overlay que o implantar-servicos.sh do platform gera sobre
+# este.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../kind
+
+patches:
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: execution-service-api
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 1

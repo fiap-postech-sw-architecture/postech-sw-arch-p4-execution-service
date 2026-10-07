@@ -1,0 +1,136 @@
+# Relay da outbox para o RabbitMQ (python -m src.relay), /metrics na 9100. Uma
+# replica fixa: o lease com fencing deixaria escalar sem entrega dupla (README,
+# Mensageria). Sondas pelos arquivos em /tmp (a imagem nao tem curl): o
+# heartbeat a cada volta do laco, inclusive reconectando, e o pronto enquanto
+# banco e broker estao conectados.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-service-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: execution-service-relay
+  template:
+    metadata:
+      labels:
+        app: execution-service-relay
+        processo: relay
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      # SIGTERM termina o lote em curso e fecha as conexoes.
+      terminationGracePeriodSeconds: 45
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Espera o Job de migracao da mesma versao (api.yaml).
+        - name: aguarda-migracao
+          image: pytstop-execution-service
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - >-
+              h="$(alembic heads | cut -d' ' -f1)" && [ -n "$h" ]
+              && until [ "$(alembic current 2>/dev/null | cut -d' ' -f1)" = "$h" ];
+              do sleep 2; done
+          env:
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_APP_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://execucao_app:$(POSTGRES_APP_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: relay
+          image: pytstop-execution-service
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "src.relay"]
+          ports:
+            - name: metrics
+              containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: execution-service
+          env:
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: execucao-postgres
+                  key: POSTGRES_APP_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://execucao_app:$(POSTGRES_APP_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+            # Secret da plataforma, regravado a cada make deploy dela.
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq
+                  key: RABBITMQ_URL
+          # Startup pelo heartbeat, e nao pelo pronto: com o broker fora no boot,
+          # o processo fica de pe e fora da prontidao, reconectando com backoff,
+          # em vez de ser reiniciado no fim da janela da sonda.
+          startupProbe:
+            exec:
+              command: ["test", "-f", "/tmp/relay-heartbeat"]
+            periodSeconds: 2
+            failureThreshold: 30
+          # Heartbeat com mais de 90 s: o laco parou. O timeout cobre a subida do
+          # interpretador com a CPU limitada.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import os,sys,time;sys.exit(time.time()-os.path.getmtime('/tmp/relay-heartbeat')>90)
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/relay-pronto"]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

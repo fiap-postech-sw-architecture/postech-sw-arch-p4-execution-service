@@ -1,0 +1,24 @@
+# Overlay do k3s (VM na Azure): ate 3 replicas da API e 5Gi no banco, que aqui
+# fica de pe por dias. A imagem vem por digest, no overlay que o deploy do k3s
+# gera sobre este.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: execution-service-api
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+  - target:
+      kind: StatefulSet
+      name: execucao-postgres
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 5Gi
