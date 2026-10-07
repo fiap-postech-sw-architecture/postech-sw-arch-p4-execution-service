@@ -38,8 +38,8 @@ from src.compartilhado.dominio.exceptions import (
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.infraestrutura.mensageria import amqp, processo, telemetria
 from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_consumidor
-from src.compartilhado.infraestrutura.mensageria import processo, telemetria
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
 from tests.fakes import FakeTransacaoDoComando
@@ -723,6 +723,9 @@ class _CanalFalso:
     def basic_consume(self, fila: str, callback: object) -> None:
         pass
 
+    def confirm_delivery(self) -> None:
+        pass
+
 
 def _rodar_laco(
     monkeypatch: pytest.MonkeyPatch,
@@ -749,6 +752,68 @@ def _rodar_laco(
         backoff,
     ).executar(parar)
     return len(canais), backoff
+
+
+def test_conexao_tem_heartbeat_explicito_e_teto_de_bloqueio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parametros: list[pika.URLParameters] = []
+
+    class _ConexaoDoPika:
+        is_open = True
+
+        def __init__(self, params: pika.URLParameters) -> None:
+            parametros.append(params)
+
+        def channel(self) -> _CanalFalso:
+            return _CanalFalso()
+
+    monkeypatch.setattr(amqp.pika, "BlockingConnection", _ConexaoDoPika)
+    amqp.abrir_canal(_URL)
+    (params,) = parametros
+    assert (params.heartbeat, params.blocked_connection_timeout) == (60, 30.0)
+
+
+def test_topologia_fora_do_alcance_fecha_a_conexao_antes_de_levantar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fechadas: list[bool] = []
+
+    class _ConexaoRecusada:
+        is_open = True
+
+        def __init__(self, _params: object) -> None:
+            pass
+
+        def channel(self) -> Any:
+            raise ChannelClosedByBroker(403, "ACCESS_REFUSED")
+
+        def close(self) -> None:
+            fechadas.append(True)
+
+    monkeypatch.setattr(amqp.pika, "BlockingConnection", _ConexaoRecusada)
+    with pytest.raises(ChannelClosedByBroker):
+        amqp.abrir_canal(_URL)
+    assert fechadas == [True]
+
+
+def test_assinatura_que_falha_fecha_a_conexao_antes_de_levantar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conexao = _ConexaoFalsa([])
+
+    class _CanalQueRecusa(_CanalFalso):
+        def basic_consume(self, fila: str, callback: object) -> None:
+            raise ChannelClosedByBroker(403, "ACCESS_REFUSED")
+
+    monkeypatch.setattr(
+        modulo_consumidor,
+        "abrir_canal",
+        lambda *_a, **_k: (conexao, _CanalQueRecusa()),
+    )
+    with pytest.raises(ChannelClosedByBroker):
+        _consumidor(_Handler())._assinar()
+    assert not conexao.is_open
 
 
 def test_consumidor_assina_com_uma_mensagem_em_voo_por_vez(

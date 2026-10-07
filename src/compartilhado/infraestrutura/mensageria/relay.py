@@ -36,6 +36,7 @@ from pika.exceptions import (
 from prometheus_client import Counter, Gauge
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.compartilhado.infraestrutura.database import argumentos_de_conexao
 from src.compartilhado.infraestrutura.mensageria.amqp import (
     abrir_canal,
     fechar,
@@ -72,16 +73,6 @@ _LOTE: Final = 10
 # Lease maior que o pior caso de um publish (30 s bloqueado pelo broker): outra
 # replica nao reivindica a linha enquanto esta publica.
 _LEASE: Final = timedelta(seconds=60)
-# Conexao dedicada do LISTEN: um socket morto em silencio (failover, NAT) e
-# detectado em cerca de 1 min, em vez de deixar o relay surdo ao NOTIFY.
-_KEEPALIVES: Final = {
-    "keepalives": 1,
-    "keepalives_idle": 30,
-    "keepalives_interval": 10,
-    "keepalives_count": 3,
-    "connect_timeout": 3,
-}
-
 _PUBLICADAS = Counter(
     "pytstop_mensagens_publicadas_total",
     "Mensagens da outbox publicadas com confirmacao do broker.",
@@ -257,8 +248,11 @@ class Relay:
         argumentos, parametros = self._engine.dialect.create_connect_args(
             self._engine.url
         )
+        # Mesmos argumentos de conexao do pool: connect_timeout e socket sem
+        # resposta derrubado (um socket morto em silencio, num failover ou NAT,
+        # deixaria o relay surdo ao NOTIFY).
         conexao = self._engine.dialect.loaded_dbapi.connect(
-            *argumentos, **{**parametros, **_KEEPALIVES}
+            *argumentos, **{**parametros, **argumentos_de_conexao()}
         )
         try:
             conexao.autocommit = True

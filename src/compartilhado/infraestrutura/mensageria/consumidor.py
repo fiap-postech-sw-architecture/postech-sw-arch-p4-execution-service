@@ -34,7 +34,7 @@ import structlog
 from opentelemetry.trace import SpanKind, StatusCode
 from pika.exceptions import AMQPError, ConsumerCancelled, NackError, UnroutableError
 from prometheus_client import Counter
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import (
     DBAPIError,
     InterfaceError,
@@ -108,6 +108,14 @@ _PREFETCH: Final = 1
 _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)
 _TIPO_DESCONHECIDO: Final = "desconhecido"
+# Tetos do banco na transacao da mensagem, abaixo dos da API: o handler roda na
+# thread da conexao AMQP, sem heartbeat, e o pior caso (pool 5 s, conexao 3 s e
+# ate 8 comandos de 5 s, cada espera de lock dentro do comando) fica abaixo do
+# heartbeat de 60 s. Comando que passa do teto vira erro transitorio (retry).
+_TETOS_DO_BANCO: Final = (
+    "SET LOCAL statement_timeout = '5s'",
+    "SET LOCAL lock_timeout = '3s'",
+)
 # O envelope da saga tem poucos KB; acima disto e entrada hostil (JSON aninhado
 # que estoura a recursao do parser ou da validacao), direto para a DLQ.
 _CORPO_MAXIMO: Final = 64 * 1024
@@ -378,6 +386,8 @@ class Consumidor:
         excecao desfaz tudo.
         """
         with self._engine.connect() as conexao, conexao.begin():
+            for teto in _TETOS_DO_BANCO:
+                conexao.execute(text(teto))
             if not registrar_processada(conexao, comando_id):
                 yield None
                 return

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -26,6 +27,7 @@ from src.compartilhado.dominio.exceptions import DependenciaIndisponivelExceptio
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
 )
+from src.compartilhado.infraestrutura.mensageria import amqp
 from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal
 from src.compartilhado.infraestrutura.mensageria.consumidor import (
     NIVEIS_DE_RETRY,
@@ -766,6 +768,75 @@ def test_comando_descartado_grava_o_id_e_a_reentrega_e_duplicada(
         UUID(liberacao["id"]),
         UUID(atrasado["id"]),
     }
+
+
+def test_handler_lento_dentro_do_teto_nao_derruba_a_conexao(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # O handler roda na thread da conexao AMQP, sem heartbeat: mais lento que um
+    # intervalo de heartbeat, mas dentro do teto, ele termina e a mensagem leva
+    # ack na mesma conexao, sem reentrega.
+    monkeypatch.setattr(amqp, "_HEARTBEAT_S", 4)
+    _criar_item(engine, "PEC-VELA", 5)
+    chamadas: list[int] = []
+
+    def lento(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
+    ) -> None:
+        chamadas.append(1)
+        sessao.execute(text("SELECT pg_sleep(3)"))
+        reservar_pecas(envelope, sessao, uow)
+
+    antes = consumidas("ReservarPecas", "processada")
+    with EmSegundoPlano(consumidor({"ReservarPecas": lento})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        _esperar_consumo("ReservarPecas", "processada", antes)
+
+    assert chamadas == [1]
+    assert "consumer_broker_unavailable" not in log_capturado.getvalue()
+
+
+def test_comando_preso_no_banco_e_cortado_pelo_teto_e_vira_retry(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Comando que nao volta (lock, banco lento) e cortado pelo teto da transacao
+    # da mensagem (5 s), antes de o broker dar a conexao por morta por falta de
+    # heartbeat: vira copia de retry, sem reconexao nem reentrega fora da escada.
+    monkeypatch.setattr(amqp, "_HEARTBEAT_S", 8)
+    _criar_item(engine, "PEC-VELA", 5)
+    chamadas: list[int] = []
+
+    def preso_na_primeira(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
+    ) -> None:
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            sessao.execute(text("SELECT pg_sleep(60)"))
+        reservar_pecas(envelope, sessao, uow)
+
+    inicio = time.monotonic()
+    with EmSegundoPlano(consumidor({"ReservarPecas": preso_na_primeira})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        esperar_ate(outbox, prazo_s=12)
+
+    assert time.monotonic() - inicio < 12  # o teto do servidor, 15 s, nao chega
+    assert chamadas == [1, 1]
+    saida = log_capturado.getvalue()
+    assert '"pgcode": "57014"' in saida  # query_canceled pelo statement_timeout
+    assert "consumer_broker_unavailable" not in saida
 
 
 def test_consumidor_reconecta_quando_o_broker_derruba_a_conexao(

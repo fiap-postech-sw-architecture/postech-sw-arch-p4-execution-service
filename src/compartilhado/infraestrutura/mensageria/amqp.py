@@ -23,6 +23,12 @@ EXCHANGE_RETRY: Final = "pytstop.retry"
 # Broker com alarme de memoria ou disco segura os publishers; depois disto a
 # conexao cai e o processo reconecta, em vez de ficar parado sem sinal.
 _BLOQUEIO_MAXIMO_S: Final = 30.0
+# Heartbeat explicito (o padrao do broker, 60 s, sem depender dele): o handler
+# do consumidor roda na thread da conexao e nenhum heartbeat sai enquanto ele
+# roda. O tempo maximo dele fica abaixo disto pelos tetos do banco na
+# transacao da mensagem (consumidor.py), e o broker so derruba a conexao depois
+# de dois heartbeats sem resposta.
+_HEARTBEAT_S: Final = 60
 
 
 def usuario_da_url(url: str) -> str:
@@ -41,6 +47,7 @@ def abrir_canal(
             sem permissao (403); quem chama tenta de novo com backoff.
     """
     parametros = pika.URLParameters(url)
+    parametros.heartbeat = _HEARTBEAT_S
     parametros.blocked_connection_timeout = _BLOQUEIO_MAXIMO_S
     conexao = pika.BlockingConnection(parametros)
     try:

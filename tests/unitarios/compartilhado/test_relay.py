@@ -6,7 +6,7 @@ O caminho com PostgreSQL e RabbitMQ esta em ``tests/integracao/test_relay.py``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
@@ -18,16 +18,24 @@ from pika.exceptions import (
     UnroutableError,
 )
 
+from src.compartilhado.infraestrutura.database import criar_engine
 from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
 from src.compartilhado.infraestrutura.mensageria.outbox import (
     ATRASOS_S,
     LinhaDaOutbox,
     atraso_depois_da_falha,
 )
-from src.compartilhado.infraestrutura.mensageria.processo import Periodico
+from src.compartilhado.infraestrutura.mensageria.processo import (
+    Periodico,
+    SinaisDoProcesso,
+)
 from src.compartilhado.infraestrutura.mensageria.relay import BrokerIndisponivelError
 
 _URL = "amqp://execucao:x@broker.test:5672/%2F"  # gitleaks:allow - nunca conecta
+
+
+def _sinais() -> SinaisDoProcesso:
+    return SinaisDoProcesso.do_processo("teste-relay")
 
 
 @pytest.mark.parametrize(
@@ -207,3 +215,63 @@ def test_queda_no_laco_ocioso_e_broker_indisponivel(
     conexao.erro_nos_eventos = erro
     with pytest.raises(BrokerIndisponivelError):
         broker.manter_viva()
+
+
+def test_ouvinte_do_notify_usa_os_tetos_de_conexao_do_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # connect_timeout e socket sem resposta derrubado tambem na conexao do
+    # LISTEN, fora do pool: sem eles o relay ficaria surdo ao NOTIFY.
+    engine = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
+    argumentos: dict[str, Any] = {}
+
+    class _Cursor:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            pass
+
+        def execute(self, _sql: str) -> None:
+            pass
+
+    class _ConexaoDoDriver:
+        autocommit = False
+
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    def conectar(*_args: object, **kwargs: Any) -> _ConexaoDoDriver:
+        argumentos.update(kwargs)
+        return _ConexaoDoDriver()
+
+    monkeypatch.setattr(engine.dialect.loaded_dbapi, "connect", conectar)
+    relay = modulo_relay.Relay(engine, _URL, _sinais())
+    relay._ouvir()
+    assert argumentos["connect_timeout"] == 3
+    assert argumentos["tcp_user_timeout"] == 10_000
+    assert argumentos["keepalives"] == 1
+
+
+def test_ouvinte_que_falha_no_listen_fecha_a_conexao(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
+    fechadas: list[bool] = []
+
+    class _ConexaoDoDriver:
+        autocommit = False
+
+        def cursor(self) -> Any:
+            raise OSError("LISTEN recusado")
+
+        def close(self) -> None:
+            fechadas.append(True)
+
+    monkeypatch.setattr(
+        engine.dialect.loaded_dbapi, "connect", lambda *_a, **_k: _ConexaoDoDriver()
+    )
+    relay = modulo_relay.Relay(engine, _URL, _sinais())
+    with pytest.raises(OSError, match="LISTEN"):
+        relay._ouvir()
+    assert fechadas == [True]
