@@ -119,6 +119,21 @@ class Execucao(AggregateRoot):
         return self.id
 
     @property
+    def em_andamento(self) -> bool:
+        """Na fila ou em execucao (ainda nao finalizada nem cancelada)."""
+        return self._status in {StatusExecucao.AGUARDANDO, StatusExecucao.EM_EXECUCAO}
+
+    def anonimizar_titular(self) -> bool:
+        """Eliminacao LGPD: placa da copia do retrato pelo marcador.
+
+        Idempotente: False quando nada muda (ja anonimizada, ou sem retrato).
+        """
+        if self._veiculo is None or self._veiculo.anonimizado:
+            return False
+        self._veiculo = self._veiculo.anonimizar()
+        return True
+
+    @property
     def status(self) -> StatusExecucao:
         return self._status
 

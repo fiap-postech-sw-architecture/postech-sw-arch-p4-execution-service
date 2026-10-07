@@ -58,6 +58,11 @@ diagnosticos_table = Table(
     check_de_enum("status", StatusDiagnostico, "ck_diagnosticos_status"),
 )
 
+# AnonimizarVeiculo acha os retratos do veiculo sem varrer a tabela.
+Index(
+    "ix_diagnosticos_veiculo_id",
+    diagnosticos_table.c.veiculo["veiculo_id"].astext,
+)
 # Fila do mecanico: GET /diagnosticos?status=AGUARDANDO por ordem de chegada.
 Index(
     "ix_diagnosticos_status_solicitado_em",

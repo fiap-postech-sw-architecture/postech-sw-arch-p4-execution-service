@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
     from uuid import UUID
 
@@ -60,3 +61,28 @@ class VeiculosPort(Protocol):
 
     def da_ordem(self, ordem_id: UUID) -> Veiculo | None:
         """Retrato (inclusive anonimizado); ``None`` se a ordem nao tem diagnostico."""
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticoAnonimizado:
+    """Diagnostico do veiculo que teve placa e textos livres trocados agora."""
+
+    ordem_id: UUID
+    em_andamento: bool
+
+
+class DiagnosticosDoVeiculoPort(Protocol):
+    """Diagnosticos do contexto vizinho que guardam o retrato do veiculo (LGPD)."""
+
+    def anonimizar(self, veiculo_id: UUID) -> list[DiagnosticoAnonimizado]:
+        """Troca placa e textos livres de cada diagnostico do veiculo.
+
+        Devolve so os que mudaram nesta chamada (idempotente).
+        """
+
+
+class MensagensGuardadasPort(Protocol):
+    """Mensagens ainda guardadas na outbox (pendentes, entregues ou ``dead``)."""
+
+    def anonimizar(self, ordens: Sequence[UUID]) -> int:
+        """Troca o texto livre das mensagens dessas ordens; devolve quantas mudaram."""

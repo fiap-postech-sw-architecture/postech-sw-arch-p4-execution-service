@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -24,6 +25,7 @@ from sqlalchemy.exc import OperationalError
 import src.consumidor
 import src.relay
 from src.compartilhado.dominio.exceptions import DependenciaIndisponivelException
+from src.compartilhado.dominio.veiculo import TEXTO_ELIMINADO, Veiculo
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
 )
@@ -34,7 +36,7 @@ from src.compartilhado.infraestrutura.mensageria.consumidor import (
     Consumidor,
     Resultado,
 )
-from src.compartilhado.infraestrutura.mensageria.contratos import validar
+from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
     SinaisDoProcesso,
 )
@@ -45,8 +47,12 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
 )
 from src.compartilhado.infraestrutura.outbox_mapping import registrar_processada
 from src.consumidor import HANDLERS
+from src.diagnostico.dominio.diagnostico import Diagnostico, ItemDiagnostico, TipoItem
+from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.infraestrutura.seed import semear
 from src.estoque.interfaces.comandos import reservar_pecas
+from src.execucao.dominio.execucao import Execucao, Prioridade
+from src.execucao.infraestrutura.repository import ExecucaoSQLAlchemyRepository
 from tests.integracao.broker import (
     TTL_DE_TESTE_MS,
     EmSegundoPlano,
@@ -286,13 +292,16 @@ def test_saga_cancelada_depois_do_agendamento_passa_por_todos_os_handlers(
         # Repetido (outra eliminacao do mesmo veiculo): nada mais a trocar.
         envelope_de_comando("AnonimizarVeiculo", {"veiculo_id": str(VEICULO_ID)}),
     ]
-    antes = consumidas("AnonimizarVeiculo", "processada")
+    processadas = consumidas("AnonimizarVeiculo", "processada")
+    ignoradas = consumidas("AnonimizarVeiculo", "ignorada")
 
     with EmSegundoPlano(consumidor()):
         # Em ordem, como o orquestrador manda: um comando por resposta.
         for comando in comandos:
             broker.publicar_comando(comando)
-        _esperar_consumo("AnonimizarVeiculo", "processada", antes, vezes=2)
+        _esperar_consumo("AnonimizarVeiculo", "processada", processadas)
+        # O repetido nao tem o que trocar: descartado.
+        _esperar_consumo("AnonimizarVeiculo", "ignorada", ignoradas)
 
     respostas = [
         (linha["tipo"], linha["envelope"]["causation_id"]) for linha in outbox()
@@ -313,6 +322,123 @@ def test_saga_cancelada_depois_do_agendamento_passa_por_todos_os_handlers(
             )
         ).scalars()
         assert list(placas) == [f"ANONIMIZADO:{VEICULO_ID}"] * 2
+
+
+def _diagnostico_concluido(
+    session_factory: sessionmaker[Session], veiculo_id: UUID, placa: str
+) -> UUID:
+    """Diagnostico concluido com texto livre do titular e a copia na execucao."""
+    ordem_id, mecanico, agora = uuid4(), uuid4(), datetime.now(UTC)
+    veiculo = Veiculo(
+        veiculo_id=veiculo_id, placa=placa, marca="VW", modelo="Gol", ano=2019
+    )
+    diagnostico = Diagnostico.solicitar(
+        ordem_id=ordem_id,
+        veiculo=veiculo,
+        descricao_problema=f"Barulho; dona Maria Souza, placa {placa}",
+        agora=agora,
+    )
+    diagnostico.iniciar(mecanico, agora)
+    diagnostico.concluir(
+        mecanico,
+        [ItemDiagnostico(tipo=TipoItem.SERVICO, codigo="SRV-REVISAO", quantidade=1)],
+        "Cliente Maria Souza (rua das Flores, 10)",
+        agora,
+    )
+    execucao = Execucao.agendar(
+        ordem_id=ordem_id, prioridade=Prioridade.NORMAL, veiculo=veiculo, agora=agora
+    )
+    execucao.cancelar(agora)
+    with session_factory() as sessao:
+        DiagnosticoSQLAlchemyRepository(sessao).salvar(diagnostico)
+        ExecucaoSQLAlchemyRepository(sessao).salvar(execucao)
+        sessao.commit()
+    return ordem_id
+
+
+def _concluido_na_outbox(engine: Engine, ordem_id: UUID, status: str) -> None:
+    envelope = json.loads(
+        (CONTRATOS / "exemplos" / "DiagnosticoConcluido.json").read_text()
+    )
+    envelope |= {"id": str(uuid4()), "correlation_id": str(ordem_id)}
+    envelope["dados"] |= {
+        "ordem_id": str(ordem_id),
+        "observacoes": "Cliente Maria Souza (rua das Flores, 10)",
+    }
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
+                "routing_key, envelope, status) VALUES (:id, 'DiagnosticoConcluido', "
+                ":ordem, 'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
+                "CAST(:envelope AS jsonb), :status)"
+            ),
+            {
+                "id": envelope["id"],
+                "ordem": ordem_id,
+                "envelope": json.dumps(envelope),
+                "status": status,
+            },
+        )
+
+
+def test_anonimizar_troca_so_o_veiculo_pedido_inclusive_nas_mensagens_guardadas(
+    broker: Broker,
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    consumidor: Callable[..., Consumidor],
+    log_capturado: io.StringIO,
+) -> None:
+    outro_veiculo = uuid4()
+    alvo = _diagnostico_concluido(session_factory, VEICULO_ID, "BRA2E19")
+    vizinho = _diagnostico_concluido(session_factory, outro_veiculo, "RIO2A18")
+    for status in ("pendente", "entregue", "dead"):
+        _concluido_na_outbox(engine, alvo, status)
+    _concluido_na_outbox(engine, vizinho, "pendente")
+    antes = consumidas("AnonimizarVeiculo", "processada")
+
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(
+            envelope_de_comando("AnonimizarVeiculo", {"veiculo_id": str(VEICULO_ID)})
+        )
+        _esperar_consumo("AnonimizarVeiculo", "processada", antes)
+
+    with engine.connect() as conexao:
+        diagnosticos = {
+            linha.ordem_id: linha
+            for linha in conexao.execute(
+                text(
+                    "SELECT ordem_id, veiculo ->> 'placa' AS placa, "
+                    "descricao_problema, observacoes FROM diagnosticos"
+                )
+            )
+        }
+        execucoes = dict(
+            conexao.execute(
+                text("SELECT ordem_id, veiculo ->> 'placa' FROM execucoes")
+            ).all()
+        )
+        mensagens = conexao.execute(
+            text(
+                "SELECT correlation_id, envelope #>> '{dados,observacoes}' "
+                "FROM outbox ORDER BY id"
+            )
+        ).all()
+    marcador = f"ANONIMIZADO:{VEICULO_ID}"
+    assert diagnosticos[alvo].placa == execucoes[alvo] == marcador
+    assert diagnosticos[alvo].descricao_problema == TEXTO_ELIMINADO
+    assert diagnosticos[alvo].observacoes == TEXTO_ELIMINADO
+    assert diagnosticos[vizinho].placa == execucoes[vizinho] == "RIO2A18"
+    assert "Maria" in diagnosticos[vizinho].observacoes
+    assert mensagens == [(alvo, TEXTO_ELIMINADO)] * 3 + [
+        (vizinho, "Cliente Maria Souza (rua das Flores, 10)")
+    ]
+    (anonimizado,) = [
+        json.loads(linha)
+        for linha in log_capturado.getvalue().splitlines()
+        if '"vehicle_anonymized"' in linha
+    ]
+    assert (anonimizado["retratos"], anonimizado["mensagens"]) == (2, 3)
 
 
 def test_comando_que_nao_corresponde_ao_estado_e_ignorado_sem_dlq(

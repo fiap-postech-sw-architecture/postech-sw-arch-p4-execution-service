@@ -15,6 +15,9 @@ class DiagnosticoRepository(Protocol):
     def salvar(self, diagnostico: Diagnostico) -> None:
         """Adiciona o diagnostico a sessao e faz flush."""
 
+    def do_veiculo(self, veiculo_id: UUID) -> list[Diagnostico]:
+        """Diagnosticos com o retrato do veiculo, travados (SELECT ... FOR UPDATE)."""
+
     def listar(
         self, status: StatusDiagnostico | None, offset: int, limit: int
     ) -> list[Diagnostico]:

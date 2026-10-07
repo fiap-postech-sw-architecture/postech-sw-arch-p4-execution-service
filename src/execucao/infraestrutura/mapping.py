@@ -40,6 +40,8 @@ execucoes_table = Table(
     check_de_enum("prioridade", Prioridade, "ck_execucoes_prioridade"),
 )
 
+# AnonimizarVeiculo acha as copias do retrato do veiculo sem varrer a tabela.
+Index("ix_execucoes_veiculo_id", execucoes_table.c.veiculo["veiculo_id"].astext)
 # GET /fila e a posicao filtram por status (so AGUARDANDO esta na fila).
 Index("ix_execucoes_status", execucoes_table.c.status)
 

@@ -10,12 +10,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from src.compartilhado.aplicacao.lgpd import AnonimizarVeiculo
-from src.execucao.aplicacao.use_cases import AgendarExecucao, CancelarExecucao
+from src.execucao.aplicacao.use_cases import (
+    AgendarExecucao,
+    AnonimizarVeiculo,
+    CancelarExecucao,
+)
 from src.execucao.dominio.execucao import Prioridade
 from src.execucao.infraestrutura.adapters import (
+    DiagnosticosDoVeiculoSQLAlchemy,
     EstoqueSQLAlchemyAdapter,
-    RetratosDoVeiculoSQLAlchemy,
+    MensagensGuardadasSQLAlchemy,
     VeiculosSQLAlchemy,
 )
 from src.execucao.infraestrutura.repository import (
@@ -61,6 +65,9 @@ def anonimizar_veiculo(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
     dados = envelope["dados"]
-    AnonimizarVeiculo(RetratosDoVeiculoSQLAlchemy(sessao), uow).executar(
-        UUID(dados["veiculo_id"])
-    )
+    AnonimizarVeiculo(
+        ExecucaoSQLAlchemyRepository(sessao),
+        DiagnosticosDoVeiculoSQLAlchemy(sessao),
+        MensagensGuardadasSQLAlchemy(sessao),
+        uow,
+    ).executar(UUID(dados["veiculo_id"]))

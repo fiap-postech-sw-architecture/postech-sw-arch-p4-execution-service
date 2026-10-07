@@ -152,6 +152,13 @@ class DiagnosticosEmMemoria:
         self.diagnosticos[diagnostico.ordem_id] = diagnostico
         self.salvos += 1
 
+    def do_veiculo(self, veiculo_id: UUID) -> list[Diagnostico]:
+        return [
+            d
+            for d in self.diagnosticos.values()
+            if d.veiculo is not None and d.veiculo.veiculo_id == veiculo_id
+        ]
+
     def _filtrados(self, status: StatusDiagnostico | None) -> list[Diagnostico]:
         return sorted(
             (d for d in self.diagnosticos.values() if status in (None, d.status)),
@@ -170,12 +177,21 @@ class DiagnosticosEmMemoria:
 class ExecucoesEmMemoria:
     def __init__(self, *execucoes: Execucao) -> None:
         self.execucoes: dict[UUID, Execucao] = {e.ordem_id: e for e in execucoes}
+        self.salvas: list[UUID] = []
 
     def obter(self, ordem_id: UUID, *, com_lock: bool = False) -> Execucao | None:
         return self.execucoes.get(ordem_id)
 
     def salvar(self, execucao: Execucao) -> None:
         self.execucoes[execucao.ordem_id] = execucao
+        self.salvas.append(execucao.ordem_id)
+
+    def do_veiculo(self, veiculo_id: UUID) -> list[Execucao]:
+        return [
+            e
+            for e in self.execucoes.values()
+            if e.veiculo is not None and e.veiculo.veiculo_id == veiculo_id
+        ]
 
 
 class FilaFixa:

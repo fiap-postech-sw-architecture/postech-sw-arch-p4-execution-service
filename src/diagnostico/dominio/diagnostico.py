@@ -15,6 +15,7 @@ from src.compartilhado.dominio.maquina_de_estados import validar_transicao
 from src.compartilhado.dominio.quantidade import quantidade_valida
 from src.compartilhado.dominio.texto import texto_valido
 from src.compartilhado.dominio.value_object import ValueObject
+from src.compartilhado.dominio.veiculo import TEXTO_ELIMINADO
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -296,6 +297,26 @@ class Diagnostico(AggregateRoot):
             return
         self._transicionar(StatusDiagnostico.DESCARTADO)
         self._descartado_em = agora
+
+    @property
+    def em_andamento(self) -> bool:
+        """Ainda espera o mecanico (AGUARDANDO ou EM_ANDAMENTO)."""
+        return self._status in _ANTES_DA_CONCLUSAO
+
+    def anonimizar_titular(self) -> bool:
+        """Eliminacao LGPD: placa do retrato e textos livres pelos marcadores.
+
+        Descricao do problema e observacoes podem trazer nome, endereco ou a
+        placa do titular. Idempotente: False quando nada muda (ja anonimizado,
+        ou a lapide, sem retrato).
+        """
+        if self._veiculo is None or self._veiculo.anonimizado:
+            return False
+        self._veiculo = self._veiculo.anonimizar()
+        self._descricao_problema = TEXTO_ELIMINADO
+        if self._observacoes:
+            self._observacoes = TEXTO_ELIMINADO
+        return True
 
     def _transicionar(self, para: StatusDiagnostico) -> None:
         validar_transicao(_TRANSICOES, self._status, para, agregado="Diagnostico")

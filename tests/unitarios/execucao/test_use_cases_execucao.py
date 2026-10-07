@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -20,9 +21,10 @@ from src.estoque.aplicacao.use_cases import ReservarPecas
 from src.estoque.dominio.item_estoque import ItemEstoque
 from src.estoque.dominio.reserva import ItemReserva, StatusReserva
 from src.estoque.dominio.sku import Sku
-from src.execucao.aplicacao.ports import ItemDaFila
+from src.execucao.aplicacao.ports import DiagnosticoAnonimizado, ItemDaFila
 from src.execucao.aplicacao.use_cases import (
     AgendarExecucao,
+    AnonimizarVeiculo,
     CancelarExecucao,
     FinalizarExecucao,
     IniciarExecucao,
@@ -433,3 +435,99 @@ class TestCausaDosFatosDoMecanico:
             ("ExecucaoIniciada", comando),
             ("ExecucaoFinalizada", comando),
         ]
+
+
+class _DiagnosticosDoVeiculo:
+    """Port do contexto vizinho: devolve os anonimizados e registra os pedidos."""
+
+    def __init__(self, *anonimizados: DiagnosticoAnonimizado) -> None:
+        self._anonimizados = list(anonimizados)
+        self.pedidos: list[UUID] = []
+
+    def anonimizar(self, veiculo_id: UUID) -> list[DiagnosticoAnonimizado]:
+        self.pedidos.append(veiculo_id)
+        anonimizados, self._anonimizados = self._anonimizados, []
+        return anonimizados
+
+
+class _MensagensGuardadas:
+    def __init__(self) -> None:
+        self.ordens: list[list[UUID]] = []
+
+    def anonimizar(self, ordens: Sequence[UUID]) -> int:
+        self.ordens.append(list(ordens))
+        return len(ordens)
+
+
+def _com_retrato(veiculo: Veiculo, status: str = "cancelada") -> Execucao:
+    execucao = Execucao.agendar(
+        ordem_id=uuid4(),
+        prioridade=Prioridade.NORMAL,
+        veiculo=veiculo,
+        agora=datetime.now(UTC),
+    )
+    if status == "cancelada":
+        execucao.cancelar(datetime.now(UTC))
+    return execucao
+
+
+class TestAnonimizarVeiculo:
+    def test_troca_as_copias_do_veiculo_e_os_textos_das_mensagens(self) -> None:
+        outro = Veiculo(
+            veiculo_id=uuid4(), placa="RIO2A18", marca="VW", modelo="Gol", ano=2019
+        )
+        alvo, vizinha = _com_retrato(VEICULO), _com_retrato(outro)
+        execucoes = ExecucoesEmMemoria(alvo, vizinha)
+        diagnostico = DiagnosticoAnonimizado(ordem_id=uuid4(), em_andamento=False)
+        diagnosticos, mensagens = (
+            _DiagnosticosDoVeiculo(diagnostico),
+            _MensagensGuardadas(),
+        )
+        uow = FakeTransacaoDoComando()
+
+        trocados = AnonimizarVeiculo(execucoes, diagnosticos, mensagens, uow).executar(
+            VEICULO.veiculo_id
+        )
+
+        assert trocados == 2
+        assert alvo.veiculo is not None
+        assert alvo.veiculo.placa == f"ANONIMIZADO:{VEICULO.veiculo_id}"
+        assert vizinha.veiculo == outro
+        assert execucoes.salvas == [alvo.ordem_id]
+        assert diagnosticos.pedidos == [VEICULO.veiculo_id]
+        assert mensagens.ordens == [[diagnostico.ordem_id]]
+        assert (uow.eventos, uow.descartado) == ([], False)
+
+    def test_repetido_nao_muda_nada_e_descarta_o_comando(self) -> None:
+        execucoes = ExecucoesEmMemoria(_com_retrato(VEICULO))
+        uow = FakeTransacaoDoComando()
+        caso = AnonimizarVeiculo(
+            execucoes, _DiagnosticosDoVeiculo(), _MensagensGuardadas(), uow
+        )
+        assert caso.executar(VEICULO.veiculo_id) == 1
+        assert caso.executar(VEICULO.veiculo_id) == 0
+        assert uow.descartado
+        assert len(execucoes.salvas) == 1
+
+    def test_registro_ainda_em_andamento_e_anonimizado_com_aviso(self) -> None:
+        # O OS so elimina cliente sem OS ativa: se a premissa falhar, a placa
+        # sai do mesmo jeito, e o log diz quais ordens estavam em andamento.
+        na_fila = _com_retrato(VEICULO, status="aguardando")
+        diagnostico = DiagnosticoAnonimizado(ordem_id=uuid4(), em_andamento=True)
+        with capture_logs() as logs:
+            AnonimizarVeiculo(
+                ExecucoesEmMemoria(na_fila),
+                _DiagnosticosDoVeiculo(diagnostico),
+                _MensagensGuardadas(),
+                FakeTransacaoDoComando(),
+            ).executar(VEICULO.veiculo_id)
+        (aviso,) = [
+            log
+            for log in logs
+            if log["event"] == "vehicle_anonymized_while_in_progress"
+        ]
+        assert aviso["log_level"] == "warning"
+        assert set(aviso["ordens"]) == {
+            str(diagnostico.ordem_id),
+            str(na_fila.ordem_id),
+        }

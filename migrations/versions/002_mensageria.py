@@ -79,9 +79,16 @@ def upgrade() -> None:
     )
     op.add_column("diagnosticos", sa.Column("solicitacao_id", sa.Uuid()))
     op.add_column("execucoes", sa.Column("agendamento_id", sa.Uuid()))
+    # AnonimizarVeiculo acha os retratos do veiculo sem varrer as tabelas.
+    for tabela in ("diagnosticos", "execucoes"):
+        op.create_index(
+            f"ix_{tabela}_veiculo_id", tabela, [sa.text("(veiculo ->> 'veiculo_id')")]
+        )
 
 
 def downgrade() -> None:
+    for tabela in ("execucoes", "diagnosticos"):
+        op.drop_index(f"ix_{tabela}_veiculo_id", table_name=tabela)
     op.drop_column("execucoes", "agendamento_id")
     op.drop_column("diagnosticos", "solicitacao_id")
     op.drop_table("mensagens_processadas")

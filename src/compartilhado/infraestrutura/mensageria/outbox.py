@@ -47,6 +47,9 @@ if TYPE_CHECKING:
 # seguinte a ultima da tabela (a quinta) leva a linha a `dead`.
 ATRASOS_S: Final[tuple[float, ...]] = (1, 4, 16, 64)
 _RETENCAO_DAS_ENTREGUES: Final = timedelta(days=7)
+# ``dead`` fica para a triagem (redrive) e sai em 30 dias: guarda o envelope
+# inteiro, inclusive o texto livre das observacoes.
+_RETENCAO_DAS_DEAD: Final = timedelta(days=30)
 
 _CLAIM: Final = text(
     "SELECT o.id, o.tipo, o.correlation_id, o.exchange, o.routing_key, "
@@ -89,7 +92,8 @@ _LIBERAR: Final = text(
 )
 _LIMPAR_LOTE: Final = text(
     "DELETE FROM outbox WHERE id IN (SELECT id FROM outbox "
-    "WHERE status = 'entregue' AND entregue_em < now() - :retencao "
+    "WHERE (status = 'entregue' AND entregue_em < now() - :entregues) "
+    "OR (status = 'dead' AND criado_em < now() - :dead) "
     "ORDER BY id LIMIT :lote)"
 )
 _CONTAR: Final = text("SELECT count(*) FROM outbox WHERE status = :status")
@@ -204,14 +208,19 @@ class Outbox:
             )
 
     def limpar(self, lote: int = LOTE_DA_LIMPEZA) -> int:
-        """Apaga as entregues ha mais de 7 dias, em lotes; devolve quantas."""
+        """Apaga, em lotes, as entregues ha mais de 7 dias e as ``dead`` de 30.
+
+        Devolve quantas apagou.
+        """
         apagadas = 0
+        parametros = {
+            "entregues": _RETENCAO_DAS_ENTREGUES,
+            "dead": _RETENCAO_DAS_DEAD,
+            "lote": lote,
+        }
         while True:
             with self._engine.begin() as conexao:
-                deste_lote: int = conexao.execute(
-                    _LIMPAR_LOTE,
-                    {"retencao": _RETENCAO_DAS_ENTREGUES, "lote": lote},
-                ).rowcount
+                deste_lote: int = conexao.execute(_LIMPAR_LOTE, parametros).rowcount
             apagadas += deste_lote
             if deste_lote < lote:
                 return apagadas

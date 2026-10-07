@@ -28,9 +28,11 @@ if TYPE_CHECKING:
         UnitOfWorkDoComando,
     )
     from src.execucao.aplicacao.ports import (
+        DiagnosticosDoVeiculoPort,
         EstoquePort,
         FilaDeExecucaoPort,
         ItemDaFila,
+        MensagensGuardadasPort,
         VeiculosPort,
     )
     from src.execucao.dominio.repository import ExecucaoRepository
@@ -264,3 +266,60 @@ class FinalizarExecucao:
                 mecanico_id=str(responsavel),
             )
         return execucao
+
+
+class AnonimizarVeiculo:
+    """Comando ``AnonimizarVeiculo`` (LGPD; fora da saga e sem resposta, RFC-004 5.3).
+
+    O OS Service, dono do cadastro, elimina os dados do titular e manda apagar
+    as copias daqui: a placa de cada retrato do veiculo (diagnostico e copia na
+    execucao) vira ``ANONIMIZADO:{veiculo_id}`` e os textos livres dos
+    diagnosticos dele (descricao do problema e observacoes, que podem trazer
+    nome, endereco ou a placa), inclusive as observacoes das mensagens ainda
+    guardadas na outbox, viram o marcador da eliminacao. Marca, modelo e ano
+    ficam: nao identificam o titular. Idempotente: repetido, nada muda e o
+    comando e descartado. O OS so elimina cliente sem OS ativa; registro ainda
+    em andamento e anonimizado do mesmo jeito, com aviso no log.
+    """
+
+    def __init__(
+        self,
+        execucoes: ExecucaoRepository,
+        diagnosticos: DiagnosticosDoVeiculoPort,
+        mensagens: MensagensGuardadasPort,
+        uow: UnitOfWorkDoComando,
+    ) -> None:
+        self._execucoes = execucoes
+        self._diagnosticos = diagnosticos
+        self._mensagens = mensagens
+        self._uow = uow
+
+    def executar(self, veiculo_id: UUID) -> int:
+        """Devolve quantos retratos mudaram (diagnosticos e execucoes)."""
+        with self._uow:
+            diagnosticos = self._diagnosticos.anonimizar(veiculo_id)
+            execucoes = [
+                execucao
+                for execucao in self._execucoes.do_veiculo(veiculo_id)
+                if execucao.anonimizar_titular()
+            ]
+            for execucao in execucoes:
+                self._execucoes.salvar(execucao)
+            mensagens = self._mensagens.anonimizar(
+                [diagnostico.ordem_id for diagnostico in diagnosticos]
+            )
+            if not (diagnosticos or execucoes):
+                self._uow.descartar()
+        em_andamento = [str(d.ordem_id) for d in diagnosticos if d.em_andamento] + [
+            str(e.ordem_id) for e in execucoes if e.em_andamento
+        ]
+        if em_andamento:
+            # O OS so elimina cliente sem OS ativa: premissa violada.
+            _log.warning("vehicle_anonymized_while_in_progress", ordens=em_andamento)
+        _log.info(
+            "vehicle_anonymized",
+            veiculo_id=str(veiculo_id),
+            retratos=len(diagnosticos) + len(execucoes),
+            mensagens=mensagens,
+        )
+        return len(diagnosticos) + len(execucoes)

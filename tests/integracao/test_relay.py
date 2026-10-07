@@ -425,6 +425,27 @@ def test_retencao_apaga_entregues_e_processadas_antigas(
     assert spans.get_finished_spans() == ()
 
 
+def test_dead_sai_em_30_dias_com_o_texto_livre_do_envelope(engine: Engine) -> None:
+    with engine.begin() as conexao:
+        for dias in (31, 29):
+            conexao.execute(
+                text(
+                    "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
+                    "routing_key, envelope, status, criado_em) VALUES "
+                    "(gen_random_uuid(), 'DiagnosticoConcluido', gen_random_uuid(), "
+                    "'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
+                    "'{}', 'dead', now() - make_interval(days => :dias))"
+                ),
+                {"dias": dias},
+            )
+    assert Outbox(engine).limpar() == 1
+    with engine.connect() as conexao:
+        restantes = conexao.execute(
+            text("SELECT now() - criado_em < interval '30 days' FROM outbox")
+        ).scalars()
+        assert list(restantes) == [True]
+
+
 def test_limpeza_apaga_em_lotes_de_transacao_curta(engine: Engine) -> None:
     with engine.begin() as conexao:
         for _ in range(5):

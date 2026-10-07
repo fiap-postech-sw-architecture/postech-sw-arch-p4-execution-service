@@ -42,6 +42,15 @@ class ExecucaoSQLAlchemyRepository:
         ):
             self._session.flush()
 
+    def do_veiculo(self, veiculo_id: UUID) -> list[Execucao]:
+        stmt = (
+            select(Execucao)
+            .where(_t.c.veiculo["veiculo_id"].astext == str(veiculo_id))
+            .order_by(_t.c.ordem_id)
+            .with_for_update()
+        )
+        return list(self._session.scalars(stmt))
+
 
 class FilaDeExecucaoSQLAlchemy:
     """Read model da fila: ``alta`` antes, chegada asc, ``ordem_id`` desempata."""

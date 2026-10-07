@@ -19,6 +19,9 @@ TAMANHO_MAXIMO_TEXTO: Final = 100
 # Marcador da eliminacao LGPD, o mesmo do p3 (PlacaAnonimizada): unico por
 # veiculo e sem nada do titular.
 PREFIXO_ANONIMIZADO: Final = "ANONIMIZADO:"
+# Texto livre (descricao do problema, observacoes) depois da eliminacao: pode
+# ter trazido nome, endereco ou a placa do titular.
+TEXTO_ELIMINADO: Final = "[removido na eliminacao de dados pessoais]"
 
 
 @dataclass(frozen=True, slots=True)

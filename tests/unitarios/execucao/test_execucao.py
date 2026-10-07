@@ -10,6 +10,7 @@ from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
     TransicaoStatusInvalidaException,
 )
+from src.compartilhado.dominio.veiculo import Veiculo
 from src.execucao.dominio.execucao import Execucao, Prioridade, StatusExecucao
 
 if TYPE_CHECKING:
@@ -179,3 +180,25 @@ def test_estado_incoerente_e_recusado_na_construcao(
             _enfileirada_em=AGORA,
             _mecanico_id=mecanico,
         )
+
+
+class TestAnonimizarTitular:
+    def test_troca_so_a_placa_da_copia_do_retrato(self) -> None:
+        veiculo = Veiculo(
+            veiculo_id=uuid4(), placa="ABC1D23", marca="Fiat", modelo="Uno", ano=2015
+        )
+        execucao = Execucao.agendar(
+            ordem_id=uuid4(),
+            prioridade=Prioridade.NORMAL,
+            veiculo=veiculo,
+            agora=datetime.now(UTC),
+        )
+        assert execucao.em_andamento
+        assert execucao.anonimizar_titular()
+        assert execucao.veiculo == veiculo.anonimizar()
+        assert not execucao.anonimizar_titular()
+
+    def test_sem_retrato_nao_muda(self) -> None:
+        lapide = Execucao.lapide(ordem_id=uuid4(), agora=datetime.now(UTC))
+        assert not lapide.em_andamento
+        assert not lapide.anonimizar_titular()
