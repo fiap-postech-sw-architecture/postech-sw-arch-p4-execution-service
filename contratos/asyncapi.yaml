@@ -12,7 +12,7 @@ info:
     segue schemas/<tipo>.schema.json. Exemplos completos em exemplos/.
     Routing key: comando.<servico de destino>.<acao> ou
     evento.<servico de origem>.<fato>, com o nome da mensagem em snake_case.
-    Retry: cada fila tem uma fila de retry por atraso, <fila>.retry.1s,
+    Retry: cada fila tem cinco filas de retry, uma por atraso, <fila>.retry.1s,
     .retry.5s, .retry.15s, .retry.60s e .retry.300s, com o TTL fixo na fila. O
     consumidor republica a cópia, sem expiration, no exchange pytstop.retry
     (topic, com permissão de tópico só para as filas de retry da própria fila),
@@ -622,7 +622,7 @@ channels:
   execucao.comandos:
     address: execucao.comandos
     title: "Fila de comandos da Execução"
-    description: "Fila quorum ligada por comando.execucao.#. Retry pelo exchange pytstop.retry nas filas execucao.comandos.retry.1s a execucao.comandos.retry.300s (routing key = nome da fila de retry) e DLQ em execucao.comandos.dlq."
+    description: "Fila quorum ligada por comando.execucao.#. Retry pelo exchange pytstop.retry nas filas execucao.comandos.retry.1s, execucao.comandos.retry.5s, execucao.comandos.retry.15s, execucao.comandos.retry.60s e execucao.comandos.retry.300s (uma por atraso; routing key = nome da fila de retry) e DLQ em execucao.comandos.dlq."
     messages:
       SolicitarDiagnostico:
         $ref: '#/components/messages/SolicitarDiagnostico'
@@ -651,7 +651,7 @@ channels:
   billing.comandos:
     address: billing.comandos
     title: "Fila de comandos do Billing"
-    description: "Fila quorum ligada por comando.billing.#. Retry pelo exchange pytstop.retry nas filas billing.comandos.retry.1s a billing.comandos.retry.300s (routing key = nome da fila de retry) e DLQ em billing.comandos.dlq."
+    description: "Fila quorum ligada por comando.billing.#. Retry pelo exchange pytstop.retry nas filas billing.comandos.retry.1s, billing.comandos.retry.5s, billing.comandos.retry.15s, billing.comandos.retry.60s e billing.comandos.retry.300s (uma por atraso; routing key = nome da fila de retry) e DLQ em billing.comandos.dlq."
     messages:
       GerarOrcamento:
         $ref: '#/components/messages/GerarOrcamento'
@@ -674,7 +674,7 @@ channels:
   os.eventos:
     address: os.eventos
     title: "Fila de eventos do OS Service"
-    description: "Fila quorum ligada por evento.billing.# e evento.execucao.#. Retry pelo exchange pytstop.retry nas filas os.eventos.retry.1s a os.eventos.retry.300s (routing key = nome da fila de retry) e DLQ em os.eventos.dlq."
+    description: "Fila quorum ligada por evento.billing.# e evento.execucao.#. Retry pelo exchange pytstop.retry nas filas os.eventos.retry.1s, os.eventos.retry.5s, os.eventos.retry.15s, os.eventos.retry.60s e os.eventos.retry.300s (uma por atraso; routing key = nome da fila de retry) e DLQ em os.eventos.dlq."
     messages:
       DiagnosticoIniciado:
         $ref: '#/components/messages/DiagnosticoIniciado'
