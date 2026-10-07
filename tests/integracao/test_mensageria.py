@@ -985,9 +985,16 @@ def test_consumidor_reconecta_quando_o_broker_derruba_a_conexao(
     assert not pronto.exists()  # encerramento gracioso tira a prontidao
 
 
-@pytest.mark.parametrize("modulo", [src.relay, src.consumidor])
+@pytest.mark.parametrize(
+    ("modulo", "processo"),
+    [
+        pytest.param(src.relay, "relay", id="relay"),
+        pytest.param(src.consumidor, "consumidor", id="consumidor"),
+    ],
+)
 def test_processo_sobe_com_o_ambiente_e_para_no_sinal(
     modulo: Any,
+    processo: str,
     broker: Broker,
     database_url: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -1001,12 +1008,12 @@ def test_processo_sobe_com_o_ambiente_e_para_no_sinal(
     monkeypatch.setattr(modulo, "servir_metricas", lambda: chamadas.append("metricas"))
     monkeypatch.setattr(modulo, "configurar_logging", lambda: chamadas.append("log"))
     monkeypatch.setattr(
-        modulo, "configurar_telemetria", lambda: chamadas.append("trace")
+        modulo, "configurar_telemetria", lambda nome: chamadas.append(f"trace {nome}")
     )
 
     modulo.main()
 
-    assert chamadas == ["log", "trace", "metricas"]
+    assert chamadas == ["log", f"trace {processo}", "metricas"]
 
 
 @pytest.mark.parametrize(

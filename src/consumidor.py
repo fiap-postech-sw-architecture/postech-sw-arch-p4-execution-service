@@ -55,7 +55,7 @@ HANDLERS: Final[Mapping[str, HandlerDeComando]] = {
 
 def main() -> None:
     configurar_logging()
-    configurar_telemetria()
+    configurar_telemetria("consumidor")
     engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     consumidor = Consumidor(
         engine,

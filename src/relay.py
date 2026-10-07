@@ -26,7 +26,7 @@ _log = structlog.get_logger(__name__)
 
 def main() -> None:
     configurar_logging()
-    configurar_telemetria()
+    configurar_telemetria("relay")
     engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
     relay = Relay(
         engine,

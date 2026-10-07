@@ -10,14 +10,18 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import pika
 import pytest
 import structlog
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc import trace_exporter
 from opentelemetry.sdk.trace import TracerProvider
 from pika.exceptions import (
     ChannelClosedByBroker,
@@ -47,7 +51,6 @@ from tests.fakes import FakeTransacaoDoComando
 if TYPE_CHECKING:
     import io
     from collections.abc import Callable, Iterator, Mapping
-    from pathlib import Path
 
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
@@ -57,6 +60,7 @@ if TYPE_CHECKING:
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
 
 _COMANDO = (CONTRATOS / "exemplos" / "ReservarPecas.json").read_bytes()
+RAIZ = Path(__file__).resolve().parents[3]
 _URL = "amqp://execucao:x@broker.test:5672/%2F"  # gitleaks:allow - nunca conecta
 
 
@@ -167,36 +171,45 @@ class _ExportadorFalso:
         return True
 
 
-def test_provedor_sem_otel_enabled_nao_exporta(monkeypatch: pytest.MonkeyPatch) -> None:
+def _exportador_falso(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_ExportadorFalso, "criados", [])
-    monkeypatch.setattr(telemetria, "OTLPSpanExporter", _ExportadorFalso)
-    provedor = telemetria.criar_provedor({})
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", _ExportadorFalso)
+
+
+def test_provedor_sem_otel_enabled_nao_exporta(monkeypatch: pytest.MonkeyPatch) -> None:
+    _exportador_falso(monkeypatch)
+    provedor = telemetria.criar_provedor({}, processo="relay")
     assert provedor.resource.attributes["service.name"] == "execution-service"
+    assert provedor.resource.attributes["pytstop.processo"] == "relay"
     assert _ExportadorFalso.criados == []
 
 
 @pytest.mark.parametrize(
     ("endpoint", "inseguro"),
-    [("http://jaeger:4317", True), ("https://otlp.exemplo:4317", False)],
+    [
+        pytest.param("http://jaeger:4317", True, id="http"),
+        pytest.param("https://otlp.exemplo:4317", False, id="https"),
+    ],
 )
 def test_provedor_com_otel_enabled_exporta_por_otlp(
     monkeypatch: pytest.MonkeyPatch, endpoint: str, inseguro: bool
 ) -> None:
-    monkeypatch.setattr(_ExportadorFalso, "criados", [])
-    monkeypatch.setattr(telemetria, "OTLPSpanExporter", _ExportadorFalso)
+    _exportador_falso(monkeypatch)
     provedor = telemetria.criar_provedor(
         {
             "OTEL_ENABLED": "true",
             "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
             "OTEL_SERVICE_NAME": "execution-service-relay",
             "PYTSTOP_GIT_SHA": "0123456789abcdef",
-        }
+        },
+        processo="consumidor",
     )
     provedor.shutdown()
     assert _ExportadorFalso.criados == [{"endpoint": endpoint, "insecure": inseguro}]
     atributos = provedor.resource.attributes
     assert atributos["service.name"] == "execution-service-relay"
     assert atributos["service.version"] == "0123456789ab"
+    assert atributos["pytstop.processo"] == "consumidor"
 
 
 def test_configurar_telemetria_instala_o_provider_do_processo(
@@ -204,9 +217,23 @@ def test_configurar_telemetria_instala_o_provider_do_processo(
 ) -> None:
     instalados: list[object] = []
     monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
-    telemetria.configurar_telemetria()
+    telemetria.configurar_telemetria("relay")
     (provedor,) = instalados
     assert isinstance(provedor, TracerProvider)
+    assert provedor.resource.attributes["pytstop.processo"] == "relay"
+
+
+def test_contexto_de_trace_nao_carrega_o_sdk_nem_o_grpc() -> None:
+    # A UoW da API importa a telemetria: o SDK e o exportador so carregam no
+    # relay e no consumidor (criar_provedor).
+    codigo = (
+        "import sys\n"
+        "import src.compartilhado.infraestrutura.unit_of_work\n"
+        "carregados = [m for m in sys.modules if m.startswith(('grpc', "
+        "'opentelemetry.sdk', 'opentelemetry.exporter'))]\n"
+        "assert carregados == [], carregados\n"
+    )
+    subprocess.run([sys.executable, "-c", codigo], check=True, cwd=RAIZ)  # noqa: S603 - comando fixo do teste
 
 
 # --- desfecho de cada mensagem no consumidor ----------------------------------
