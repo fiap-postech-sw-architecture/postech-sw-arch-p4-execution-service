@@ -16,6 +16,7 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import best_match
 
@@ -84,6 +85,23 @@ def validar(envelope: Mapping[str, Any]) -> None:
         msg = f"tipo sem contrato: {tipo}"
         raise MensagemInvalidaError(msg)
     _conferir(validadores[tipo], envelope["dados"], "dados")
+
+
+@cache
+def _produtores() -> dict[str, str]:
+    asyncapi = yaml.safe_load((CONTRATOS / "asyncapi.yaml").read_text(encoding="utf-8"))
+    return {
+        operacao["messages"][0]["$ref"].rsplit("/", 1)[-1]: operacao["bindings"][
+            "amqp"
+        ]["userId"]
+        for operacao in asyncapi["operations"].values()
+        if operacao["action"] == "send"
+    }
+
+
+def produtor(tipo: str) -> str | None:
+    """Usuario do RabbitMQ que publica o tipo: o ``userId`` da operacao no AsyncAPI."""
+    return _produtores().get(tipo)
 
 
 def routing_key(tipo: str) -> str:

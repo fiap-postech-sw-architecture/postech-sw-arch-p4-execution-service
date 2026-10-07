@@ -291,6 +291,8 @@ def configurar_logging(stream: TextIO | None = None) -> None:
     root.handlers = [handler]
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
+    # O pika loga cada conexao aberta e fechada em INFO; queda e erro seguem.
+    logging.getLogger("pika").setLevel(logging.WARNING)
     _religar_loggers_do_uvicorn()
 
 

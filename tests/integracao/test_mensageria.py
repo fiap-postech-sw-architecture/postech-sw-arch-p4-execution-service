@@ -31,7 +31,10 @@ from src.compartilhado.infraestrutura.database import (
 )
 from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
 from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal
-from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
+from src.compartilhado.infraestrutura.mensageria.consumidor import (
+    NIVEIS_DE_RETRY,
+    Consumidor,
+)
 from src.compartilhado.infraestrutura.mensageria.contratos import validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
     Backoff,
@@ -49,14 +52,22 @@ from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
     ReservaSQLAlchemyRepository,
 )
+from src.estoque.infraestrutura.seed import semear
 from src.estoque.interfaces.comandos import reservar_pecas
-from tests.integracao.broker import EmSegundoPlano, envelope_de_comando, esperar_ate
+from tests.integracao.broker import (
+    TTL_DE_TESTE_MS,
+    EmSegundoPlano,
+    envelope_de_comando,
+    esperar_ate,
+)
 
 if TYPE_CHECKING:
     import io
     from collections.abc import Callable, Mapping
     from pathlib import Path
 
+    import respx
+    from fastapi.testclient import TestClient
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
     )
@@ -66,7 +77,6 @@ if TYPE_CHECKING:
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
     from tests.integracao.broker import Broker
 
-_RAPIDO = (20, 20, 20, 20, 20)
 VEICULO_ID = UUID("3277db7e-8283-4dd9-89e7-df3eeacb8710")
 
 
@@ -86,15 +96,13 @@ def consumidor(
     session_factory: sessionmaker[Session],
     sinais: Callable[[str], SinaisDoProcesso],
 ) -> Callable[..., Consumidor]:
-    def _criar(
-        handlers: Mapping[str, Any] = HANDLERS, atrasos_ms: tuple[int, ...] = _RAPIDO
-    ) -> Consumidor:
+    def _criar(handlers: Mapping[str, Any] = HANDLERS) -> Consumidor:
         return Consumidor(
             session_factory,
             broker.url("execucao"),
             handlers,
             sinais("consumidor"),
-            atrasos_ms=atrasos_ms,
+            Backoff(0.1, 0.5),
         )
 
     return _criar
@@ -388,22 +396,24 @@ class _FalhaTransitoria:
         self._real = real
 
     def __call__(
-        self, dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
     ) -> None:
         self.chamadas += 1
         if self.chamadas <= self._vezes:
             raise OperationalError("SELECT 1", {}, Exception("conexao caiu"))
-        self._real(dados, sessao, uow)
+        self._real(envelope, sessao, uow)
 
 
-def test_erro_transitorio_volta_pela_retry_e_o_efeito_acontece_uma_vez(
+def test_erro_transitorio_passa_pelas_cinco_filas_de_retry_e_o_efeito_e_unico(
     broker: Broker,
     engine: Engine,
     consumidor: Callable[..., Consumidor],
     outbox: Callable[[], list[dict[str, Any]]],
 ) -> None:
+    # Cinco falhas: a copia passa por retry.1s, 5s, 15s, 60s e 300s (TTL de
+    # teste curto) e a sexta entrega processa.
     _criar_item(engine, "PEC-VELA", 5)
-    handler = _FalhaTransitoria(2, reservar_pecas)
+    handler = _FalhaTransitoria(5, reservar_pecas)
     antes = consumidas("ReservarPecas", "retry")
 
     with EmSegundoPlano(consumidor({"ReservarPecas": handler})):
@@ -412,36 +422,58 @@ def test_erro_transitorio_volta_pela_retry_e_o_efeito_acontece_uma_vez(
         )
         esperar_ate(outbox)
 
-    assert handler.chamadas == 3
-    assert consumidas("ReservarPecas", "retry") == antes + 2
+    assert handler.chamadas == 6
+    assert consumidas("ReservarPecas", "retry") == antes + 5
     assert _saldo(engine, "PEC-VELA") == (5, 2)
     assert broker.contar("execucao.comandos.dlq") == 0
 
 
-def test_copia_de_retry_leva_expiration_tentativa_e_usuario_do_consumidor(
+def test_copia_vai_para_a_fila_de_retry_do_nivel_sem_expiration(
     broker: Broker, consumidor: Callable[..., Consumidor]
 ) -> None:
+    # A fila do segundo nivel segura a copia para o teste ler: a primeira falha
+    # passou pela retry.1s e voltou; a segunda para na retry.5s.
     comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
-    atrasos = (60000, 60000, 60000, 60000, 60000)
-    handler = _FalhaTransitoria(1, reservar_pecas)
+    handler = _FalhaTransitoria(2, reservar_pecas)
     antes = consumidas("ReservarPecas", "retry")
+    segundo_nivel = "execucao.comandos.retry.5s"
+    broker.redeclarar_retry(segundo_nivel, 600_000)
+    try:
+        with EmSegundoPlano(consumidor({"ReservarPecas": handler})):
+            with tracer.start_as_current_span("publish ReservarPecas"):
+                cabecalho = contexto_atual()
+            broker.publicar_comando(comando, headers=cabecalho)
+            _esperar_consumo("ReservarPecas", "retry", antes, vezes=2)
+        props, corpo = esperar_ate(lambda: broker.pegar(segundo_nivel))
+    finally:
+        broker.redeclarar_retry(segundo_nivel, TTL_DE_TESTE_MS)
 
-    with EmSegundoPlano(consumidor({"ReservarPecas": handler}, atrasos)):
-        with tracer.start_as_current_span("publish ReservarPecas"):
-            cabecalho = contexto_atual()
-        broker.publicar_comando(comando, headers=cabecalho)
-        _esperar_consumo("ReservarPecas", "retry", antes)
-
-    props, corpo = esperar_ate(lambda: broker.pegar("execucao.comandos.retry"))
     assert json.loads(corpo) == comando
-    assert props.expiration == "60000"
-    assert props.headers["x-tentativa"] == 1
+    assert props.expiration is None
+    assert props.headers["x-tentativa"] == 2
     assert props.headers["traceparent"] == cabecalho["traceparent"]
     assert (props.user_id, props.message_id) == ("execucao", comando["id"])
     assert broker.contar("execucao.comandos") == 0  # a original recebeu ack
 
 
-def test_quinta_tentativa_que_falha_vai_para_a_dlq(
+def test_chave_de_retry_fora_das_filas_de_atraso_e_recusada_pelo_broker(
+    broker: Broker,
+) -> None:
+    # Permissao de topico do usuario execucao: so as cinco filas de retry dele.
+    with (
+        pytest.raises(ChannelClosedByBroker) as recusa,
+        broker.canal("execucao") as canal,
+    ):
+        canal.basic_publish(
+            exchange="pytstop.retry",
+            routing_key="execucao.comandos",
+            body=b"{}",
+            properties=pika.BasicProperties(user_id="execucao"),
+        )
+    assert recusa.value.reply_code == 403
+
+
+def test_falha_depois_da_quinta_copia_vai_para_a_dlq(
     broker: Broker, consumidor: Callable[..., Consumidor]
 ) -> None:
     handler = _FalhaTransitoria(99, reservar_pecas)
@@ -511,7 +543,7 @@ def test_erro_permanente_vai_direto_para_a_dlq(
     assert json.loads(corpo) == comando
     assert "x-tentativa" not in (props.headers or {})
     assert outbox() == []
-    assert broker.contar("execucao.comandos.retry") == 0
+    assert [broker.contar(fila) for fila in NIVEIS_DE_RETRY] == [0] * 5
 
 
 def test_mensagem_de_quem_nao_e_o_orquestrador_vai_direto_para_a_dlq(
@@ -526,11 +558,9 @@ def test_mensagem_de_quem_nao_e_o_orquestrador_vai_direto_para_a_dlq(
     with broker.canal("execucao") as canal:
         canal.basic_publish(
             exchange="pytstop.retry",
-            routing_key="execucao.comandos",
+            routing_key="execucao.comandos.retry.1s",
             body=json.dumps(forjado).encode(),
-            properties=pika.BasicProperties(
-                user_id="execucao", type="ReservarPecas", expiration="10"
-            ),
+            properties=pika.BasicProperties(user_id="execucao", type="ReservarPecas"),
             mandatory=True,
         )
     do_admin = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
@@ -553,14 +583,16 @@ def test_segunda_entrega_simultanea_do_mesmo_comando_desfaz_o_proprio_efeito(
     _criar_item(engine, "PEC-VELA", 5)
     comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
 
-    def concorrente(dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork) -> None:
+    def concorrente(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    ) -> None:
         with session_factory() as outra:
             copia = SQLAlchemyUnitOfWork(
                 lambda: outra, mensagem_de_origem=UUID(comando["id"])
             )
             with copia:
                 copia.commit()
-        reservar_pecas(dados, sessao, uow)
+        reservar_pecas(envelope, sessao, uow)
 
     antes = consumidas("ReservarPecas", "duplicada")
     with EmSegundoPlano(consumidor({"ReservarPecas": concorrente})):
@@ -638,7 +670,7 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
 
     (linha,) = outbox()
     assert linha["status"] == "pendente"
-    assert linha["ultimo_erro"].startswith("UnroutableError")
+    assert linha["ultimo_erro"] == "UnroutableError"
 
 
 def test_quinta_falha_de_publicacao_vira_dead(
@@ -901,7 +933,8 @@ def test_recusa_do_broker_conta_tentativa_e_o_canal_e_reaberto(
 
     recusada = outbox()[0]
     assert recusada["status"] == "pendente"
-    assert "ACCESS_REFUSED" in recusada["ultimo_erro"]
+    # Texto fixo: classe e codigo, nada do que o broker devolveu.
+    assert recusada["ultimo_erro"] == "ChannelClosedByBroker (403)"
 
 
 @pytest.mark.parametrize(
@@ -932,3 +965,114 @@ def test_limpeza_que_falha_nao_derruba_o_consumidor(
     with EmSegundoPlano(consumidor):
         esperar_ate((tmp_path / "pronto").exists)
     assert "processed_messages_cleanup_failed" in log_capturado.getvalue()
+
+
+def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+    tmp_path: Path,
+) -> None:
+    # Fila apagada (ou failover): o broker manda Basic.Cancel e o pika nao
+    # levanta erro; sem tratar, o processo seguiria pronto sem consumir nada.
+    _criar_item(engine, "PEC-VELA", 5)
+    pronto = tmp_path / "consumidor-pronto"
+    with EmSegundoPlano(consumidor()):
+        esperar_ate(pronto.exists)
+        with broker.canal() as canal:
+            canal.queue_delete("execucao.comandos")
+        try:
+            esperar_ate(lambda: not pronto.exists())
+        finally:
+            with broker.canal() as canal:
+                canal.queue_declare(
+                    "execucao.comandos",
+                    durable=True,
+                    arguments={"x-queue-type": "quorum"},
+                )
+                canal.queue_bind(
+                    "execucao.comandos", "pytstop.comandos", "comando.execucao.#"
+                )
+        esperar_ate(pronto.exists)
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        esperar_ate(outbox)
+
+
+def test_fatos_do_mecanico_levam_a_causa_do_comando_que_abriu_o_fluxo(
+    api: TestClient,
+    autenticar: Callable[..., dict[str, str]],
+    billing: respx.MockRouter,
+    broker: Broker,
+    session_factory: sessionmaker[Session],
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # O orquestrador casa as respostas pelo causation_id: o que o mecanico faz
+    # pela API responde ao SolicitarDiagnostico ou ao AgendarExecucao.
+    semear(session_factory)
+    billing.post("/api/v1/precos/validacao").respond(200, json={"invalidos": []})
+    mecanico = autenticar("mecanico", uuid4())
+    ordem_id = uuid4()
+    ordem = {"ordem_id": str(ordem_id)}
+    solicitacao = envelope_de_comando(
+        "SolicitarDiagnostico",
+        {
+            **ordem,
+            "veiculo_id": str(VEICULO_ID),
+            "veiculo": {
+                "placa": "BRA2E19",
+                "marca": "VW",
+                "modelo": "Gol",
+                "ano": 2019,
+            },
+            "descricao_problema": "Freio chiando",
+        },
+    )
+    reserva = envelope_de_comando(
+        "ReservarPecas",
+        {**ordem, "pecas": [{"sku": "PEC-PASTILHA-FREIO", "quantidade": 1}]},
+    )
+    agendamento = envelope_de_comando(
+        "AgendarExecucao", {**ordem, "prioridade": "normal"}
+    )
+    repetido = envelope_de_comando("AgendarExecucao", {**ordem, "prioridade": "alta"})
+    diagnostico = f"/api/v1/diagnosticos/{ordem_id}"
+    execucao = f"/api/v1/execucoes/{ordem_id}"
+
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(solicitacao)
+        esperar_ate(
+            lambda: api.post(f"{diagnostico}/inicio", headers=mecanico).is_success
+        )
+        conclusao = api.post(
+            f"{diagnostico}/conclusao",
+            headers=mecanico,
+            json={
+                "itens": [
+                    {"tipo": "peca", "codigo": "PEC-PASTILHA-FREIO", "quantidade": 1}
+                ],
+                "observacoes": "",
+            },
+        )
+        assert conclusao.status_code == 200, conclusao.text
+        for comando in (reserva, agendamento, repetido):
+            broker.publicar_comando(comando)
+        esperar_ate(lambda: len(outbox()) == 5)
+    assert api.post(f"{execucao}/inicio", headers=mecanico).status_code == 200
+    assert api.post(f"{execucao}/finalizacao", headers=mecanico).status_code == 200
+
+    causas = [(linha["tipo"], linha["envelope"]["causation_id"]) for linha in outbox()]
+    assert causas == [
+        ("DiagnosticoIniciado", solicitacao["id"]),
+        ("DiagnosticoConcluido", solicitacao["id"]),
+        ("PecasReservadas", reserva["id"]),
+        ("ExecucaoAgendada", agendamento["id"]),
+        # Reenvio com id novo: a resposta republicada leva o id do reenvio...
+        ("ExecucaoAgendada", repetido["id"]),
+        # ...e o fato do mecanico, o do comando que abriu a execucao.
+        ("ExecucaoIniciada", agendamento["id"]),
+        ("ExecucaoFinalizada", agendamento["id"]),
+    ]

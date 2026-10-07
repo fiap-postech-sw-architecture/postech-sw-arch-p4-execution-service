@@ -33,7 +33,6 @@ from prometheus_client import Counter, Gauge
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.compartilhado.infraestrutura.logging import redigir_pii_erro
 from src.compartilhado.infraestrutura.mensageria.amqp import (
     abrir_canal,
     fechar,
@@ -352,8 +351,10 @@ class Relay:
         self, conexao: Connection, linha: _Linha, falha: AMQPChannelError
     ) -> None:
         tentativas = linha.tentativas + 1
-        # repr: classe e codigo do broker (ex.: "(406) 'PRECONDITION_FAILED ...'").
-        erro = redigir_pii_erro(repr(falha))
+        # Texto fixo (classe e codigo do broker): a excecao do pika pode carregar
+        # a mensagem devolvida, com a placa.
+        codigo = getattr(falha, "reply_code", None)
+        erro = type(falha).__name__ + (f" ({codigo})" if codigo else "")
         if tentativas > len(_ATRASOS_S):
             conexao.execute(
                 _MARCAR_DEAD, {"id": linha.id, "tentativas": tentativas, "erro": erro}

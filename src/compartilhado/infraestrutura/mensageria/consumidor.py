@@ -1,19 +1,21 @@
 """Consumidor dos comandos da saga (ADR-036): origem, contrato, idempotencia e retry.
 
-Cada mensagem da fila do servico abre um span CONSUMER filho da publicacao, tem
-o envelope conferido pelo contrato e a origem pelo ``user_id`` (comandos so vem
-do orquestrador; a copia de retry, com ``x-tentativa``, vem do proprio
-consumidor) e vai ao handler do tipo, com ``mensagens_processadas`` gravada na
-mesma transacao do efeito. Desfecho:
+Cada mensagem da fila do servico abre um span CONSUMER filho da publicacao (os
+logs do handler saem dentro dele), tem o envelope conferido pelo contrato e a
+origem pelo ``user_id`` (o produtor do tipo no AsyncAPI; a copia de retry, com
+``x-tentativa``, vem do proprio consumidor) e vai ao handler do tipo, com
+``mensagens_processadas`` gravada na mesma transacao do efeito. Desfecho:
 
 - processada, ignorada (o comando nao corresponde ao estado atual e o handler o
   descarta, regra dos participantes da saga) ou duplicada (``id`` ja
   processado): ack;
-- erro transitorio (banco, rede, dependencia): copia em ``pytstop.retry`` com a
-  routing key = fila, ``expiration`` crescente e ``x-tentativa`` + 1, confirmada
-  pelo broker antes do ack da original;
-- erro permanente (contrato, tipo, versao, origem ou dado recusado pelo
-  dominio) ou cinco tentativas esgotadas: ``basic_reject`` sem requeue (DLQ).
+- erro transitorio (banco, rede, dependencia fora): copia em ``pytstop.retry``,
+  sem ``expiration``, com ``x-tentativa`` + 1 e a routing key da fila de retry do
+  nivel da nova tentativa (``<fila>.retry.1s`` ate ``.300s``, cujo TTL devolve a
+  copia a fila), confirmada pelo broker antes do ack da original;
+- erro permanente (contrato, tipo, versao, origem, dado recusado pelo dominio
+  ou erro nao classificado) ou falha depois da quinta copia: ``basic_reject``
+  sem requeue (DLQ).
 """
 
 from __future__ import annotations
@@ -27,10 +29,16 @@ from uuid import UUID
 
 import structlog
 from opentelemetry.trace import SpanKind, StatusCode
-from pika.exceptions import AMQPError
+from pika.exceptions import AMQPError, ConsumerCancelled
 from prometheus_client import Counter
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import DBAPIError, SQLAlchemyError
+from sqlalchemy.exc import (
+    DBAPIError,
+    InterfaceError,
+    OperationalError,
+    SQLAlchemyError,
+)
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
@@ -48,6 +56,7 @@ from src.compartilhado.infraestrutura.mensageria.amqp import (
 )
 from src.compartilhado.infraestrutura.mensageria.contratos import (
     MensagemInvalidaError,
+    produtor,
     validar,
 )
 from src.compartilhado.infraestrutura.mensageria.processo import Backoff
@@ -76,25 +85,30 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 
-# ``x-tentativa`` 1 a 5: espera na ``.retry`` antes de voltar a fila (RFC-004).
-ATRASOS_MS: Final = (1000, 5000, 15000, 60000, 300000)
 FILA: Final = "execucao.comandos"
-# Todo comando que o servico consome vem do orquestrador (usuario ``os``).
-_PRODUTOR: Final = "os"
+# Fila de retry de cada tentativa (x-tentativa 1 a 5); o atraso e o TTL dela.
+NIVEIS_DE_RETRY: Final = tuple(
+    f"{FILA}.retry.{atraso}" for atraso in ("1s", "5s", "15s", "60s", "300s")
+)
 _PREFETCH: Final = 5
 # Volta do laco: limite para notar o pedido de parada e tocar o heartbeat.
 _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)
 _LIMPEZA_A_CADA_S: Final = 3600.0
 _TIPO_DESCONHECIDO: Final = "desconhecido"
-# Erro de dominio que passa com o tempo: dependencia fora ou a corrida que a
-# releitura nao resolveu. O resto dos erros de dominio e estado, nao falha.
-_DOMINIO_TRANSITORIO: Final = (
+# Erro que passa com o tempo: banco ou rede fora, dependencia fora ou a corrida
+# que a releitura nao resolveu. Erro de dominio fora daqui e estado, nao falha;
+# o resto (defeito, dado que o banco recusa) vai direto para a DLQ.
+_TRANSITORIOS: Final = (
+    OperationalError,
+    InterfaceError,
+    PoolTimeoutError,
+    OSError,
     DependenciaIndisponivelException,
     EntidadeDuplicadaException,
 )
 
-# Recebe o ``dados`` ja validado e roda o caso de uso na sessao e UoW da mensagem.
+# Recebe o envelope ja validado e roda o caso de uso na sessao e UoW da mensagem.
 type HandlerDeComando = Callable[[Mapping[str, Any], Session, UnitOfWork], None]
 
 
@@ -116,7 +130,7 @@ _CONSUMIDAS = Counter(
 def _tentativa(headers: Mapping[str, Any]) -> int:
     """``x-tentativa`` da copia de retry (0 na primeira entrega)."""
     tentativa = headers.get("x-tentativa", 0)
-    if type(tentativa) is not int or tentativa < 0:
+    if type(tentativa) is not int or not 0 <= tentativa <= len(NIVEIS_DE_RETRY):
         msg = "header x-tentativa invalido"
         raise MensagemInvalidaError(msg)
     return tentativa
@@ -131,29 +145,29 @@ class Consumidor:
         rabbitmq_url: str,
         handlers: Mapping[str, HandlerDeComando],
         sinais: SinaisDoProcesso,
-        *,
-        atrasos_ms: tuple[int, ...] = ATRASOS_MS,
+        backoff: Backoff | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._url = rabbitmq_url
         self._usuario = usuario_da_url(rabbitmq_url)
         self._handlers = handlers
         self._sinais = sinais
-        self._atrasos_ms = atrasos_ms
-        self._backoff = Backoff()
+        self._backoff = backoff or Backoff()
         self._conexao: BlockingConnection | None = None
+        self._cancelado = False
         self._proxima_limpeza = time.monotonic()
 
     def executar(self, parar: threading.Event) -> None:
-        """Laco principal: a mensagem em curso termina antes de ``parar`` valer."""
+        """Laco principal: a mensagem em curso termina antes de ``parar`` valer.
+
+        Broker fora, copia de retry recusada (o canal fecha) ou assinatura
+        cancelada pelo broker: loga, fecha e assina de novo com backoff.
+        """
         try:
             while not parar.is_set():
                 self._sinais.heartbeat()
                 try:
-                    if self._conexao is None:
-                        self._conexao = self._assinar()
-                    self._sinais.pronto()
-                    self._conexao.process_data_events(time_limit=_TICK_S)
+                    self._consumir()
                     self._backoff.reiniciar()
                 except AMQPError as exc:
                     self._sinais.indisponivel()
@@ -169,14 +183,31 @@ class Consumidor:
             self._conexao = None
             self._sinais.indisponivel()
 
+    def _consumir(self) -> None:
+        if self._conexao is None:
+            self._conexao = self._assinar()
+        self._sinais.pronto()
+        self._conexao.process_data_events(time_limit=_TICK_S)
+        if self._cancelado:
+            # O pika so avisa pelo callback; sem isto o processo seguiria vivo
+            # e pronto sem receber nada.
+            msg = "assinatura cancelada pelo broker"
+            raise ConsumerCancelled(msg)
+
     def _assinar(self) -> BlockingConnection:
         conexao, canal = abrir_canal(
             self._url, filas=(FILA,), exchanges=(EXCHANGE_RETRY,)
         )
+        self._cancelado = False
         canal.basic_qos(prefetch_count=_PREFETCH)
+        canal.add_on_cancel_callback(self._ao_ser_cancelado)
         canal.basic_consume(FILA, self._ao_receber)
         _log.info("consumer_subscribed", fila=FILA)
         return conexao
+
+    def _ao_ser_cancelado(self, _frame: object) -> None:
+        # Fila apagada ou failover: o broker cancela o consumidor (Basic.Cancel).
+        self._cancelado = True
 
     def _ao_receber(
         self,
@@ -238,24 +269,25 @@ class Consumidor:
     def _abrir(
         self, user_id: str | None, corpo: bytes, tentativa: int
     ) -> dict[str, Any]:
-        """Envelope valido de um tipo com handler, vindo do produtor esperado.
+        """Envelope valido de um tipo com handler, vindo do produtor do tipo.
 
         Raises:
             MensagemInvalidaError: erro permanente (vai para a DLQ).
         """
-        # Na copia de retry o user_id e o do proprio consumidor, que a republicou;
-        # a conferencia do produtor ja aconteceu na primeira entrega.
-        if user_id != _PRODUTOR and not (tentativa and user_id == self._usuario):
-            msg = f"user_id {user_id!r} nao e o produtor dos comandos"
-            raise MensagemInvalidaError(msg)
         try:
             envelope: dict[str, Any] = json.loads(corpo)
         except (ValueError, RecursionError) as exc:
             msg = "corpo nao e JSON valido"
             raise MensagemInvalidaError(msg) from exc
         validar(envelope)
-        if envelope["tipo"] not in self._handlers:
-            msg = f"tipo sem handler neste servico: {envelope['tipo']}"
+        tipo = envelope["tipo"]
+        if tipo not in self._handlers:
+            msg = f"tipo sem handler neste servico: {tipo}"
+            raise MensagemInvalidaError(msg)
+        # Na copia de retry o user_id e o do proprio consumidor, que a republicou;
+        # a conferencia do produtor ja aconteceu na primeira entrega.
+        if user_id != produtor(tipo) and not (tentativa and user_id == self._usuario):
+            msg = f"user_id {user_id!r} nao e o produtor de {tipo}"
             raise MensagemInvalidaError(msg)
         return envelope
 
@@ -264,17 +296,18 @@ class Consumidor:
             return self._rodar_handler(envelope)
         except MensagemJaProcessadaError:
             return Resultado.DUPLICADA
-        except ValorInvalidoError:
-            # So a classe: a mensagem pode ecoar o dado recebido.
-            _log.warning("command_rejected_by_domain")
-            return Resultado.DLQ
-        except _DOMINIO_TRANSITORIO as exc:
+        except _TRANSITORIOS as exc:
             return self._falha_transitoria(exc, tentativa)
         except DomainException as exc:
             _log.info("command_ignored", codigo=exc.codigo)
             return Resultado.IGNORADA
-        except Exception as exc:  # noqa: BLE001 - banco, rede ou defeito: retry ate a DLQ
-            return self._falha_transitoria(exc, tentativa)
+        except ValorInvalidoError:
+            # So a classe: a mensagem pode ecoar o dado recebido.
+            _log.warning("command_rejected_by_domain")
+            return Resultado.DLQ
+        except Exception as exc:  # noqa: BLE001 - nao classificado: DLQ, nunca ack
+            _log.error("command_failed", **_descricao_do_erro(exc))
+            return Resultado.DLQ
 
     def _rodar_handler(self, envelope: Mapping[str, Any]) -> Resultado:
         mensagem_id = UUID(envelope["id"])
@@ -285,17 +318,14 @@ class Consumidor:
             if sessao.execute(processada).first() is not None:
                 return Resultado.DUPLICADA
             uow = SQLAlchemyUnitOfWork(lambda: sessao, mensagem_de_origem=mensagem_id)
-            self._handlers[envelope["tipo"]](envelope["dados"], sessao, uow)
+            self._handlers[envelope["tipo"]](envelope, sessao, uow)
             return Resultado.PROCESSADA if uow.comitou else Resultado.IGNORADA
 
-    def _falha_transitoria(self, exc: Exception, tentativa: int) -> Resultado:
-        esgotou = tentativa >= len(self._atrasos_ms)
+    @staticmethod
+    def _falha_transitoria(exc: Exception, tentativa: int) -> Resultado:
+        esgotou = tentativa >= len(NIVEIS_DE_RETRY)
         evento = "message_retries_exhausted" if esgotou else "message_failed_will_retry"
-        if isinstance(exc, DBAPIError):
-            # Sem a mensagem do driver: o DETAIL do Postgres traz a linha inteira.
-            _log.warning(evento, **descrever_erro_de_banco(exc))
-        else:
-            _log.warning(evento, exc_info=exc)
+        _log.warning(evento, **_descricao_do_erro(exc))
         return Resultado.DLQ if esgotou else Resultado.RETRY
 
     def _nova_tentativa(
@@ -306,24 +336,23 @@ class Consumidor:
         corpo: bytes,
         tentativa: int,
     ) -> None:
-        """Copia em ``pytstop.retry``; sem confirmacao, a original fica sem ack.
+        """Copia na fila de retry do nivel; sem confirmacao, a original fica sem ack.
 
         Raises:
-            AMQPError: copia sem rota, recusada ou broker fora; o laco reconecta
-                e o broker reentrega a original.
+            AMQPError: copia sem rota, recusada (o canal fecha) ou broker fora; o
+                laco reconecta com backoff e o broker reentrega a original.
         """
         contexto = {
             k: v for k, v in headers.items() if k in {"traceparent", "tracestate"}
         }
         canal.basic_publish(
             exchange=EXCHANGE_RETRY,
-            routing_key=FILA,
+            routing_key=NIVEIS_DE_RETRY[tentativa - 1],
             body=corpo,
             properties=propriedades(
                 envelope,
                 usuario=self._usuario,
                 headers={**contexto, "x-tentativa": tentativa},
-                expiration=str(self._atrasos_ms[tentativa - 1]),
             ),
             mandatory=True,
         )
@@ -351,3 +380,10 @@ class Consumidor:
             _log.warning("processed_messages_cleanup_failed", error=type(exc).__name__)
             return
         _log.info("processed_messages_cleanup", apagadas=apagadas)
+
+
+def _descricao_do_erro(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, DBAPIError):
+        # Sem a mensagem do driver: o DETAIL do Postgres traz a linha inteira.
+        return dict(descrever_erro_de_banco(exc))
+    return {"exc_info": exc}

@@ -53,12 +53,53 @@
       }
     },
     {
-      "name": "billing.comandos.retry",
+      "name": "billing.comandos.retry.1s",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
       "arguments": {
-        "x-queue-type": "quorum"
+        "x-queue-type": "quorum",
+        "x-message-ttl": 1000
+      }
+    },
+    {
+      "name": "billing.comandos.retry.5s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 5000
+      }
+    },
+    {
+      "name": "billing.comandos.retry.15s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 15000
+      }
+    },
+    {
+      "name": "billing.comandos.retry.60s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 60000
+      }
+    },
+    {
+      "name": "billing.comandos.retry.300s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 300000
       }
     },
     {
@@ -80,12 +121,53 @@
       }
     },
     {
-      "name": "execucao.comandos.retry",
+      "name": "execucao.comandos.retry.1s",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
       "arguments": {
-        "x-queue-type": "quorum"
+        "x-queue-type": "quorum",
+        "x-message-ttl": 1000
+      }
+    },
+    {
+      "name": "execucao.comandos.retry.5s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 5000
+      }
+    },
+    {
+      "name": "execucao.comandos.retry.15s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 15000
+      }
+    },
+    {
+      "name": "execucao.comandos.retry.60s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 60000
+      }
+    },
+    {
+      "name": "execucao.comandos.retry.300s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 300000
       }
     },
     {
@@ -107,12 +189,53 @@
       }
     },
     {
-      "name": "os.eventos.retry",
+      "name": "os.eventos.retry.1s",
       "vhost": "/",
       "durable": true,
       "auto_delete": false,
       "arguments": {
-        "x-queue-type": "quorum"
+        "x-queue-type": "quorum",
+        "x-message-ttl": 1000
+      }
+    },
+    {
+      "name": "os.eventos.retry.5s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 5000
+      }
+    },
+    {
+      "name": "os.eventos.retry.15s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 15000
+      }
+    },
+    {
+      "name": "os.eventos.retry.60s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 60000
+      }
+    },
+    {
+      "name": "os.eventos.retry.300s",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 300000
       }
     },
     {
@@ -171,43 +294,40 @@
     {
       "vhost": "/",
       "name": "retry-billing.comandos",
-      "pattern": "^billing\\.comandos\\.retry$",
+      "pattern": "^billing\\.comandos\\.retry\\.",
       "apply-to": "queues",
       "priority": 0,
       "definition": {
         "dead-letter-exchange": "",
         "dead-letter-routing-key": "billing.comandos",
         "dead-letter-strategy": "at-least-once",
-        "overflow": "reject-publish",
-        "message-ttl": 300000
+        "overflow": "reject-publish"
       }
     },
     {
       "vhost": "/",
       "name": "retry-execucao.comandos",
-      "pattern": "^execucao\\.comandos\\.retry$",
+      "pattern": "^execucao\\.comandos\\.retry\\.",
       "apply-to": "queues",
       "priority": 0,
       "definition": {
         "dead-letter-exchange": "",
         "dead-letter-routing-key": "execucao.comandos",
         "dead-letter-strategy": "at-least-once",
-        "overflow": "reject-publish",
-        "message-ttl": 300000
+        "overflow": "reject-publish"
       }
     },
     {
       "vhost": "/",
       "name": "retry-os.eventos",
-      "pattern": "^os\\.eventos\\.retry$",
+      "pattern": "^os\\.eventos\\.retry\\.",
       "apply-to": "queues",
       "priority": 0,
       "definition": {
         "dead-letter-exchange": "",
         "dead-letter-routing-key": "os.eventos",
         "dead-letter-strategy": "at-least-once",
-        "overflow": "reject-publish",
-        "message-ttl": 300000
+        "overflow": "reject-publish"
       }
     },
     {
@@ -257,25 +377,121 @@
     {
       "source": "pytstop.retry",
       "vhost": "/",
-      "destination": "billing.comandos.retry",
+      "destination": "billing.comandos.retry.1s",
       "destination_type": "queue",
-      "routing_key": "billing.comandos",
+      "routing_key": "billing.comandos.retry.1s",
       "arguments": {}
     },
     {
       "source": "pytstop.retry",
       "vhost": "/",
-      "destination": "execucao.comandos.retry",
+      "destination": "billing.comandos.retry.5s",
       "destination_type": "queue",
-      "routing_key": "execucao.comandos",
+      "routing_key": "billing.comandos.retry.5s",
       "arguments": {}
     },
     {
       "source": "pytstop.retry",
       "vhost": "/",
-      "destination": "os.eventos.retry",
+      "destination": "billing.comandos.retry.15s",
       "destination_type": "queue",
-      "routing_key": "os.eventos",
+      "routing_key": "billing.comandos.retry.15s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "billing.comandos.retry.60s",
+      "destination_type": "queue",
+      "routing_key": "billing.comandos.retry.60s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "billing.comandos.retry.300s",
+      "destination_type": "queue",
+      "routing_key": "billing.comandos.retry.300s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "execucao.comandos.retry.1s",
+      "destination_type": "queue",
+      "routing_key": "execucao.comandos.retry.1s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "execucao.comandos.retry.5s",
+      "destination_type": "queue",
+      "routing_key": "execucao.comandos.retry.5s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "execucao.comandos.retry.15s",
+      "destination_type": "queue",
+      "routing_key": "execucao.comandos.retry.15s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "execucao.comandos.retry.60s",
+      "destination_type": "queue",
+      "routing_key": "execucao.comandos.retry.60s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "execucao.comandos.retry.300s",
+      "destination_type": "queue",
+      "routing_key": "execucao.comandos.retry.300s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "os.eventos.retry.1s",
+      "destination_type": "queue",
+      "routing_key": "os.eventos.retry.1s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "os.eventos.retry.5s",
+      "destination_type": "queue",
+      "routing_key": "os.eventos.retry.5s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "os.eventos.retry.15s",
+      "destination_type": "queue",
+      "routing_key": "os.eventos.retry.15s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "os.eventos.retry.60s",
+      "destination_type": "queue",
+      "routing_key": "os.eventos.retry.60s",
+      "arguments": {}
+    },
+    {
+      "source": "pytstop.retry",
+      "vhost": "/",
+      "destination": "os.eventos.retry.300s",
+      "destination_type": "queue",
+      "routing_key": "os.eventos.retry.300s",
       "arguments": {}
     },
     {

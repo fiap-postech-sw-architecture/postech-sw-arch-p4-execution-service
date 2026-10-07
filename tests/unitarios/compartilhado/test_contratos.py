@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -14,10 +15,12 @@ import src.diagnostico.aplicacao.events
 import src.estoque.aplicacao.events
 import src.execucao.aplicacao.events  # noqa: F401 - registra as subclasses
 from src.compartilhado.aplicacao.integration_event import IntegrationEvent
+from src.compartilhado.infraestrutura.mensageria.consumidor import NIVEIS_DE_RETRY
 from src.compartilhado.infraestrutura.mensageria.contratos import (
     CONTRATOS,
     MensagemInvalidaError,
     envelope_do_evento,
+    produtor,
     routing_key,
     tipos_com_contrato,
     validar,
@@ -65,10 +68,37 @@ def test_comandos_consumidos_sao_do_orquestrador_e_eventos_sao_deste_servico() -
         assert _exemplo(tipo)["origem"] == "execution-service", tipo
 
 
+def test_produtor_de_cada_tipo_vem_do_asyncapi() -> None:
+    assert {produtor(tipo) for tipo in HANDLERS} == {"os"}
+    assert {produtor(tipo) for tipo in _eventos_do_servico()} == {"execucao"}
+    assert produtor("Inexistente") is None
+
+
+def test_filas_de_retry_do_consumidor_sao_as_da_topologia_copiada() -> None:
+    definicoes = json.loads((CONTRATOS / "rabbitmq" / "definitions.json").read_text())
+    filas = {q["name"]: q["arguments"] for q in definicoes["queues"]}
+    ligadas = {
+        (b["source"], b["routing_key"], b["destination"])
+        for b in definicoes["bindings"]
+    }
+    for fila, segundos in zip(NIVEIS_DE_RETRY, (1, 5, 15, 60, 300), strict=True):
+        assert filas[fila]["x-message-ttl"] == segundos * 1000
+        assert ("pytstop.retry", fila, fila) in ligadas
+    permissoes = json.loads((CONTRATOS / "rabbitmq" / "permissoes.json").read_text())
+    (escrita,) = [
+        p["write"]
+        for p in permissoes["topic_permissions"]
+        if p["user"] == "execucao" and p["exchange"] == "pytstop.retry"
+    ]
+    assert all(re.search(escrita, fila) for fila in NIVEIS_DE_RETRY)
+    assert not re.search(escrita, "execucao.comandos")
+
+
 def test_campos_dos_eventos_sao_os_do_schema() -> None:
     for tipo, classe in _eventos_do_servico().items():
         schema = json.loads((CONTRATOS / "schemas" / f"{tipo}.schema.json").read_text())
-        campos = {f.name for f in fields(classe)} - {"id", "ocorrido_em"}
+        envelope = {"id", "ocorrido_em", "causation_id"}
+        campos = {f.name for f in fields(classe)} - envelope
         assert campos == set(schema["required"]) == set(schema["properties"]), tipo
 
 

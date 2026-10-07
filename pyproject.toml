@@ -23,6 +23,7 @@ dependencies = [
     "rfc3339-validator>=0.1.4",
     "opentelemetry-sdk>=1.45.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.1",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -37,6 +38,7 @@ dev = [
     "bandit>=1.9.4",
     "import-linter>=2.14",
     "types-jsonschema>=4.26.0",
+    "types-pyyaml>=6.0.12",
 ]
 
 [tool.uv]

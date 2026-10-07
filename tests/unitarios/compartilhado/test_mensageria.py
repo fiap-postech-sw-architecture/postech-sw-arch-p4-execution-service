@@ -10,20 +10,24 @@ from __future__ import annotations
 import json
 import os
 import signal
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import pika
 import pytest
+import structlog
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
+from pika.exceptions import ChannelClosedByBroker
 from prometheus_client import REGISTRY
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
+from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_consumidor
 from src.compartilhado.infraestrutura.mensageria import processo, telemetria
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
@@ -31,9 +35,12 @@ from src.compartilhado.infraestrutura.unit_of_work import MensagemJaProcessadaEr
 
 if TYPE_CHECKING:
     import io
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
     from sqlalchemy.orm import Session
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
@@ -117,6 +124,20 @@ def test_contexto_w3c_so_dentro_de_span() -> None:
     contexto = telemetria.contexto_de({**portador, "x-tentativa": 2, "nulo": None})
     lido = trace.get_current_span(contexto).get_span_context()
     assert lido.span_id == span.get_span_context().span_id
+
+
+def test_tracestate_acima_do_limite_w3c_e_descartado() -> None:
+    traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    grande = ",".join(f"v{i}=" + "x" * 20 for i in range(30))  # 30 membros, >512
+    assert len(grande) > 512
+    contexto = telemetria.contexto_de(
+        {"traceparent": traceparent, "tracestate": grande}
+    )
+    lido = trace.get_current_span(contexto).get_span_context()
+    assert lido.span_id == 0xB7AD6B7169203331
+    assert len(lido.trace_state) == 0
+    pequeno = telemetria.contexto_de({"traceparent": traceparent, "tracestate": "a=1"})
+    assert trace.get_current_span(pequeno).get_span_context().trace_state["a"] == "1"
 
 
 class _ExportadorFalso:
@@ -203,8 +224,13 @@ class _Entrega:
 class _Sessao:
     """Sessao falsa: ``processada`` diz se o id ja esta em mensagens_processadas."""
 
+    rowcount = 0  # limpeza da retencao: nada a apagar
+
     def __init__(self, processada: bool = False) -> None:
         self._processada = processada
+
+    def connection(self) -> _Sessao:
+        return self
 
     def __enter__(self) -> Self:
         return self
@@ -231,14 +257,26 @@ class _Sessao:
 class _Handler:
     def __init__(self, erro: Exception | None = None) -> None:
         self.chamadas = 0
+        self.envelopes: list[Mapping[str, Any]] = []
         self._erro = erro
 
     def __call__(
-        self, dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+        self, envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
     ) -> None:
         self.chamadas += 1
+        self.envelopes.append(envelope)
+        structlog.get_logger("teste.handler").info("handler_ran")
         if self._erro is not None:
             raise self._erro
+
+
+def _consumidor(handler: _Handler, processada: bool = False) -> Consumidor:
+    return Consumidor(
+        lambda: _Sessao(processada),  # type: ignore[arg-type,return-value]
+        _URL,
+        {"ReservarPecas": handler},
+        processo.SinaisDoProcesso.do_processo("teste"),
+    )
 
 
 def _consumir(
@@ -250,16 +288,9 @@ def _consumir(
     processada: bool = False,
     tipo: str = "ReservarPecas",
 ) -> _Canal:
-    consumidor = Consumidor(
-        lambda: _Sessao(processada),  # type: ignore[arg-type,return-value]
-        _URL,
-        {"ReservarPecas": handler},
-        processo.SinaisDoProcesso.do_processo("teste"),
-        atrasos_ms=(10, 20, 30, 40, 50),
-    )
     canal = _Canal()
     props = pika.BasicProperties(user_id=user_id, type=tipo, headers=headers)
-    consumidor._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
+    _consumidor(handler, processada)._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
     return canal
 
 
@@ -285,7 +316,7 @@ def test_desfechos_com_ack(erro: Exception | None, resultado: str) -> None:
     handler = _Handler(erro)
     canal = _consumir(handler)
     assert (canal.acks, canal.rejeicoes, canal.publicadas) == ([7], [], [])
-    assert handler.chamadas == 1
+    assert handler.envelopes == [json.loads(_COMANDO)]
     assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
@@ -301,10 +332,12 @@ def test_id_ja_processado_recebe_ack_sem_chamar_o_handler() -> None:
     [
         pytest.param(DependenciaIndisponivelException("fora"), id="dependencia"),
         pytest.param(OperationalError("SELECT 1", {}, Exception()), id="banco"),
-        pytest.param(RuntimeError("defeito"), id="inesperado"),
+        pytest.param(ConnectionResetError(), id="rede"),
     ],
 )
-def test_erro_transitorio_publica_copia_na_retry_e_da_ack(erro: Exception) -> None:
+def test_erro_transitorio_publica_copia_no_primeiro_nivel_e_da_ack(
+    erro: Exception,
+) -> None:
     traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
     canal = _consumir(
         _Handler(erro), headers={"traceparent": traceparent, "x-death": ["..."]}
@@ -312,21 +345,36 @@ def test_erro_transitorio_publica_copia_na_retry_e_da_ack(erro: Exception) -> No
     (copia,) = canal.publicadas
     assert (copia["exchange"], copia["routing_key"]) == (
         "pytstop.retry",
-        "execucao.comandos",
+        "execucao.comandos.retry.1s",
     )
     assert copia["body"] == _COMANDO
     assert copia["mandatory"] is True
     props = copia["properties"]
-    assert props.expiration == "10"
+    assert props.expiration is None  # o atraso e o TTL da fila do nivel
     assert props.headers == {"traceparent": traceparent, "x-tentativa": 1}
     assert props.user_id == "execucao"
     assert props.message_id == json.loads(_COMANDO)["id"]
     assert canal.acks == [7]
 
 
-def test_quinta_copia_que_falha_vai_para_a_dlq() -> None:
+@pytest.mark.parametrize(
+    ("tentativa", "nivel"),
+    [(1, "5s"), (2, "15s"), (3, "60s"), (4, "300s")],
+)
+def test_cada_tentativa_vai_para_a_fila_do_proprio_atraso(
+    tentativa: int, nivel: str
+) -> None:
     canal = _consumir(
-        _Handler(RuntimeError()), user_id="execucao", headers={"x-tentativa": 5}
+        _Handler(OSError()), user_id="execucao", headers={"x-tentativa": tentativa}
+    )
+    (copia,) = canal.publicadas
+    assert copia["routing_key"] == f"execucao.comandos.retry.{nivel}"
+    assert copia["properties"].headers["x-tentativa"] == tentativa + 1
+
+
+def test_falha_depois_da_quinta_copia_vai_para_a_dlq() -> None:
+    canal = _consumir(
+        _Handler(OSError()), user_id="execucao", headers={"x-tentativa": 5}
     )
     assert (canal.rejeicoes, canal.acks, canal.publicadas) == ([(7, False)], [], [])
 
@@ -340,12 +388,17 @@ def test_quinta_copia_que_falha_vai_para_a_dlq() -> None:
         pytest.param({"user_id": "execucao"}, None, id="proprio-usuario-sem-tentativa"),
         pytest.param({"headers": {"x-tentativa": "1"}}, None, id="tentativa-texto"),
         pytest.param({"headers": {"x-tentativa": -1}}, None, id="tentativa-negativa"),
+        pytest.param({"headers": {"x-tentativa": 6}}, None, id="tentativa-acima-de-5"),
         pytest.param(
             {"corpo": (CONTRATOS / "exemplos" / "LiberarReserva.json").read_bytes()},
             None,
             id="tipo-sem-handler",
         ),
         pytest.param({}, ValorInvalidoError("placa"), id="dado-recusado-pelo-dominio"),
+        pytest.param({}, RuntimeError("defeito"), id="erro-nao-classificado"),
+        pytest.param(
+            {}, IntegrityError("INSERT", {}, Exception()), id="banco-recusa-o-dado"
+        ),
     ],
 )
 def test_erro_permanente_vai_direto_para_a_dlq(
@@ -369,16 +422,112 @@ def test_tipo_fora_do_mapa_vira_label_desconhecido() -> None:
     assert _consumidas("desconhecido", "ignorada") == antes + 1
 
 
-def test_log_do_erro_inesperado_leva_o_traceback_e_o_de_banco_nao(
-    log_capturado: io.StringIO,
+def test_logs_do_handler_saem_no_span_do_consumidor_e_sem_dado(
+    log_capturado: io.StringIO, spans: InMemorySpanExporter
 ) -> None:
     _consumir(_Handler(RuntimeError("defeito")))
     _consumir(_Handler(OperationalError("SELECT placa", {}, Exception("ABC1234"))))
     eventos = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
-    falhas = [e for e in eventos if e["event"] == "message_failed_will_retry"]
-    assert "RuntimeError: defeito" in falhas[0]["exception"]
-    assert falhas[1]["error"] == "OperationalError"
+    processos = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
+
+    handler = [e for e in eventos if e["event"] == "handler_ran"]
+    assert [e["span_id"] for e in handler] == [
+        f"{s.context.span_id:016x}" for s in processos
+    ]
+    assert handler[0]["correlation_id"] == json.loads(_COMANDO)["correlation_id"]
+    (falha,) = [e for e in eventos if e["event"] == "command_failed"]
+    assert "RuntimeError: defeito" in falha["exception"]
+    (retry,) = [e for e in eventos if e["event"] == "message_failed_will_retry"]
+    assert retry["error"] == "OperationalError"
     assert "ABC1234" not in log_capturado.getvalue()
-    consumo = [e for e in eventos if e["event"] == "message_consumed"]
-    assert consumo[0]["correlation_id"] == json.loads(_COMANDO)["correlation_id"]
-    assert consumo[0]["trace_id"]
+
+
+# --- laco do consumidor (sem broker) ------------------------------------------
+
+
+class _BackoffGravado(processo.Backoff):
+    def __init__(self) -> None:
+        super().__init__(0.0, 0.0)
+        self.esperas = 0
+
+    def esperar(self, parar: threading.Event) -> None:
+        self.esperas += 1
+
+
+class _ConexaoFalsa:
+    """Uma volta do laco por chamada; ``passos`` diz o que cada volta faz."""
+
+    def __init__(self, passos: list[Callable[[], None]]) -> None:
+        self._passos = passos
+        self.is_open = True
+
+    def process_data_events(self, time_limit: float) -> None:
+        self._passos.pop(0)()
+
+    def close(self) -> None:
+        self.is_open = False
+
+
+class _CanalFalso:
+    def __init__(self) -> None:
+        self.ao_cancelar: Callable[[object], None] | None = None
+
+    def basic_qos(self, prefetch_count: int) -> None:
+        pass
+
+    def add_on_cancel_callback(self, callback: Callable[[object], None]) -> None:
+        self.ao_cancelar = callback
+
+    def basic_consume(self, fila: str, callback: object) -> None:
+        pass
+
+
+def _rodar_laco(
+    monkeypatch: pytest.MonkeyPatch,
+    primeira_volta: Callable[[_CanalFalso], None],
+    tmp_path: Path,
+) -> tuple[int, _BackoffGravado]:
+    """Primeira conexao: ``primeira_volta``; a segunda conexao pede a parada."""
+    parar = threading.Event()
+    canais: list[_CanalFalso] = []
+
+    def abrir(*_: object, **__: object) -> tuple[_ConexaoFalsa, _CanalFalso]:
+        canal = _CanalFalso()
+        canais.append(canal)
+        volta = (lambda: primeira_volta(canal)) if len(canais) == 1 else parar.set
+        return _ConexaoFalsa([volta]), canal
+
+    monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
+    backoff = _BackoffGravado()
+    Consumidor(
+        lambda: _Sessao(),  # type: ignore[arg-type,return-value]
+        _URL,
+        {},
+        processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto"),
+        backoff,
+    ).executar(parar)
+    return len(canais), backoff
+
+
+def test_assinatura_cancelada_pelo_broker_vira_nova_assinatura(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, log_capturado: io.StringIO
+) -> None:
+    def cancelar(canal: _CanalFalso) -> None:
+        assert canal.ao_cancelar is not None
+        canal.ao_cancelar(object())  # Basic.Cancel: o pika so chama o callback
+
+    assinaturas, backoff = _rodar_laco(monkeypatch, cancelar, tmp_path)
+    assert (assinaturas, backoff.esperas) == (2, 1)
+    assert '"error": "ConsumerCancelled"' in log_capturado.getvalue()
+
+
+def test_copia_recusada_pelo_broker_reconecta_com_backoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, log_capturado: io.StringIO
+) -> None:
+    def recusar(_canal: _CanalFalso) -> None:
+        # basic_publish da copia num canal que o broker fechou (403 ou 406).
+        raise ChannelClosedByBroker(403, "ACCESS_REFUSED")
+
+    assinaturas, backoff = _rodar_laco(monkeypatch, recusar, tmp_path)
+    assert (assinaturas, backoff.esperas) == (2, 1)
+    assert '"error": "ChannelClosedByBroker"' in log_capturado.getvalue()

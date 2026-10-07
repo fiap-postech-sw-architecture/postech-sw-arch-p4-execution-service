@@ -34,7 +34,7 @@
       "user": "os",
       "vhost": "/",
       "exchange": "pytstop.retry",
-      "write": "^os\\.eventos$",
+      "write": "^os\\.eventos\\.retry\\.(1|5|15|60|300)s$",
       "read": "^$"
     },
     {
@@ -48,7 +48,7 @@
       "user": "billing",
       "vhost": "/",
       "exchange": "pytstop.retry",
-      "write": "^billing\\.comandos$",
+      "write": "^billing\\.comandos\\.retry\\.(1|5|15|60|300)s$",
       "read": "^$"
     },
     {
@@ -62,7 +62,7 @@
       "user": "execucao",
       "vhost": "/",
       "exchange": "pytstop.retry",
-      "write": "^execucao\\.comandos$",
+      "write": "^execucao\\.comandos\\.retry\\.(1|5|15|60|300)s$",
       "read": "^$"
     }
   ]

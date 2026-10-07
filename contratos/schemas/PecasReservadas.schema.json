@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PecasReservadas (dados)",
-  "description": "Campo dados da mensagem PecasReservadas (evento, execution-service -> os-service). Reserva feita; o OS segue para o pagamento.) Reserva feita; a OS passa a AGUARDANDO_PAGAMENTO, e o OS pede o pagamento ao Billing.",
+  "description": "Campo dados da mensagem PecasReservadas (evento, execution-service -> os-service). Reserva feita; a OS passa a AGUARDANDO_PAGAMENTO, e o OS pede o pagamento ao Billing.",
   "type": "object",
   "required": [
     "ordem_id",

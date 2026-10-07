@@ -24,6 +24,7 @@ from pika.exceptions import AMQPError
 from testcontainers.core.container import DockerContainer
 
 from src.compartilhado.infraestrutura.mensageria.amqp import propriedades
+from src.compartilhado.infraestrutura.mensageria.consumidor import NIVEIS_DE_RETRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -38,9 +39,12 @@ SENHAS = {
     "billing": "pytstop-billing-demo-2026",  # gitleaks:allow
     "execucao": "pytstop-execucao-demo-2026",  # gitleaks:allow
 }
+# Nos testes o atraso de cada fila de retry cai para 100 ms (o TTL e argumento
+# da fila): a copia volta logo, pelo mesmo caminho do broker de verdade.
+TTL_DE_TESTE_MS = 100
 FILAS_DO_SERVICO = (
     "execucao.comandos",
-    "execucao.comandos.retry",
+    *NIVEIS_DE_RETRY,
     "execucao.comandos.dlq",
     "os.eventos",
 )
@@ -127,6 +131,17 @@ class Broker:
             for fila in FILAS_DO_SERVICO:
                 canal.queue_purge(fila)
 
+    def redeclarar_retry(self, fila: str, ttl_ms: int) -> None:
+        """Recria a fila de retry com outro TTL (argumento imutavel da fila)."""
+        with self.canal() as canal:
+            canal.queue_delete(fila)
+            canal.queue_declare(
+                fila,
+                durable=True,
+                arguments={"x-queue-type": "quorum", "x-message-ttl": ttl_ms},
+            )
+            canal.queue_bind(fila, "pytstop.retry", routing_key=fila)
+
     def rabbitmqctl(self, *argumentos: str) -> str:
         codigo, saida = self.container.get_wrapped_container().exec_run(
             ["rabbitmqctl", *argumentos], user="999:999"
@@ -172,6 +187,8 @@ def subir_broker() -> tuple[DockerContainer, Broker]:
         ["sh", "/scripts/criar-usuarios.sh"], environment=ambiente, user="999:999"
     )
     assert codigo == 0, saida.decode()
+    for fila in NIVEIS_DE_RETRY:
+        broker.redeclarar_retry(fila, TTL_DE_TESTE_MS)
     return container, broker
 
 
