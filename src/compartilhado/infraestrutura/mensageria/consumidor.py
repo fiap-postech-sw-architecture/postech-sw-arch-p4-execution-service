@@ -72,6 +72,7 @@ from src.compartilhado.infraestrutura.mensageria.processo import (
     Periodico,
 )
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
+    contexto_atual,
     contexto_de,
     tracer,
 )
@@ -308,9 +309,7 @@ class Consumidor:
         ) as span:
             resultado, envelope, tentativa = self._processar(props, corpo)
             if resultado is Resultado.RETRY and envelope is not None:
-                resultado = self._nova_tentativa(
-                    canal, envelope, headers, corpo, tentativa + 1
-                )
+                resultado = self._nova_tentativa(canal, envelope, corpo, tentativa + 1)
             span.set_attribute("pytstop.resultado", resultado.value)
             if resultado in {Resultado.RETRY, Resultado.DLQ}:
                 span.set_status(StatusCode.ERROR, resultado.value)
@@ -445,7 +444,6 @@ class Consumidor:
         self,
         canal: BlockingChannel,
         envelope: Mapping[str, Any],
-        headers: Mapping[str, Any],
         corpo: bytes,
         tentativa: int,
     ) -> Resultado:
@@ -460,9 +458,6 @@ class Consumidor:
                 broker reentrega a original.
         """
         fila = NIVEIS_DE_RETRY[tentativa - 1]
-        contexto = {
-            k: v for k, v in headers.items() if k in {"traceparent", "tracestate"}
-        }
         try:
             canal.basic_publish(
                 exchange=EXCHANGE_RETRY,
@@ -471,7 +466,10 @@ class Consumidor:
                 properties=propriedades(
                     envelope,
                     usuario=self._usuario,
-                    headers={**contexto, "x-tentativa": tentativa},
+                    # Contexto do span deste consumo, nao o header recebido: a
+                    # proxima passada e filha dele no mesmo trace, e um
+                    # tracestate acima do limite do W3C nao segue adiante.
+                    headers={**contexto_atual(), "x-tentativa": tentativa},
                 ),
                 mandatory=True,
             )

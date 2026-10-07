@@ -474,7 +474,11 @@ def test_erro_transitorio_publica_copia_no_primeiro_nivel_e_da_ack(
     assert copia["mandatory"] is True
     props = copia["properties"]
     assert props.expiration is None  # o atraso e o TTL da fila do nivel
-    assert props.headers == {"traceparent": traceparent, "x-tentativa": 1}
+    # A copia leva o contexto do span do consumo: mesmo trace, filha dele.
+    assert set(props.headers) == {"traceparent", "x-tentativa"}
+    assert props.headers["x-tentativa"] == 1
+    assert props.headers["traceparent"].split("-")[1] == traceparent.split("-")[1]
+    assert props.headers["traceparent"] != traceparent
     assert props.user_id == "execucao"
     assert props.message_id == json.loads(_COMANDO)["id"]
     # A original so recebe ack depois da copia confirmada.
@@ -511,6 +515,16 @@ def test_copia_de_retry_sem_canal_deixa_a_original_sem_ack_e_sem_reject(
     with pytest.raises(type(erro)):
         _consumir(_Handler(OSError()), canal=canal)
     assert (canal.acks, canal.rejeicoes) == ([], [])
+
+
+def test_tracestate_acima_do_limite_nao_segue_para_a_copia_de_retry() -> None:
+    traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    grande = ",".join(f"v{i}=" + "x" * 20 for i in range(30))
+    canal = _consumir(
+        _Handler(OSError()), headers={"traceparent": traceparent, "tracestate": grande}
+    )
+    (copia,) = canal.publicadas
+    assert "tracestate" not in copia["properties"].headers
 
 
 @pytest.mark.parametrize(

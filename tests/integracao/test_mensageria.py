@@ -734,7 +734,11 @@ def test_copia_vai_para_a_fila_de_retry_do_nivel_sem_expiration(
     assert json.loads(corpo) == comando
     assert props.expiration is None
     assert props.headers["x-tentativa"] == 2
-    assert props.headers["traceparent"] == cabecalho["traceparent"]
+    # Mesmo trace do comando publicado: a copia e filha do span do consumo.
+    assert (
+        props.headers["traceparent"].split("-")[1]
+        == (cabecalho["traceparent"].split("-")[1])
+    )
     assert (props.user_id, props.message_id) == ("execucao", comando["id"])
     assert broker.contar("execucao.comandos") == 0  # a original recebeu ack
 
