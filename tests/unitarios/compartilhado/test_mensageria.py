@@ -157,7 +157,7 @@ class _ExportadorFalso:
 
 
 def test_provedor_sem_otel_enabled_nao_exporta(monkeypatch: pytest.MonkeyPatch) -> None:
-    _ExportadorFalso.criados = []
+    monkeypatch.setattr(_ExportadorFalso, "criados", [])
     monkeypatch.setattr(telemetria, "OTLPSpanExporter", _ExportadorFalso)
     provedor = telemetria.criar_provedor({})
     assert provedor.resource.attributes["service.name"] == "execution-service"
@@ -171,7 +171,7 @@ def test_provedor_sem_otel_enabled_nao_exporta(monkeypatch: pytest.MonkeyPatch) 
 def test_provedor_com_otel_enabled_exporta_por_otlp(
     monkeypatch: pytest.MonkeyPatch, endpoint: str, inseguro: bool
 ) -> None:
-    _ExportadorFalso.criados = []
+    monkeypatch.setattr(_ExportadorFalso, "criados", [])
     monkeypatch.setattr(telemetria, "OTLPSpanExporter", _ExportadorFalso)
     provedor = telemetria.criar_provedor(
         {

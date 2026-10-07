@@ -305,7 +305,7 @@ class Consumidor:
             # So a classe: a mensagem pode ecoar o dado recebido.
             _log.warning("command_rejected_by_domain")
             return Resultado.DLQ
-        except Exception as exc:  # noqa: BLE001 - nao classificado: DLQ, nunca ack
+        except Exception as exc:  # noqa: BLE001 - nao classificado vai para a DLQ
             _log.error("command_failed", **_descricao_do_erro(exc))
             return Resultado.DLQ
 

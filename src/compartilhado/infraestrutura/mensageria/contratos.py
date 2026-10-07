@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from src.compartilhado.aplicacao.integration_event import IntegrationEvent
 
 CONTRATOS: Final = Path(__file__).resolve().parents[4] / "contratos"
-ORIGEM: Final = "execution-service"
+SERVICO: Final = "execution-service"
 VERSAO: Final = 1
 EXCHANGE_EVENTOS: Final = "pytstop.eventos"
 _ENVELOPE: Final = "envelope"
@@ -124,7 +124,7 @@ def envelope_do_evento(
         "id": str(evento.id),
         "tipo": evento.tipo,
         "versao": VERSAO,
-        "origem": ORIGEM,
+        "origem": SERVICO,
         "correlation_id": str(evento.ordem_id),
         "causation_id": None if causation_id is None else str(causation_id),
         "ocorrido_em": evento.ocorrido_em.astimezone(UTC).isoformat(),

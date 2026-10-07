@@ -168,22 +168,25 @@ def _gravar(uow: SQLAlchemyUnitOfWork, evento: IntegrationEvent) -> None:
 
 def test_outra_entrega_do_mesmo_comando_ja_comitada_vira_excecao_propria() -> None:
     uow, sessao = _uow(_SessaoFake(recusa_pgcode="23505"), mensagem_de_origem=uuid4())
+    evento = ReservaLiberadaEvent(ordem_id=uuid4())
     with pytest.raises(MensagemJaProcessadaError):
-        _gravar(uow, ReservaLiberadaEvent(ordem_id=uuid4()))
+        _gravar(uow, evento)
     assert sessao.chamadas == [("rollback",), ("close",)]
     assert not uow.comitou
 
 
 def test_outra_violacao_de_integridade_sobe_como_esta() -> None:
     uow, _ = _uow(_SessaoFake(recusa_pgcode="23502"), mensagem_de_origem=uuid4())
+    evento = ReservaLiberadaEvent(ordem_id=uuid4())
     with pytest.raises(IntegrityError):
-        _gravar(uow, ReservaLiberadaEvent(ordem_id=uuid4()))
+        _gravar(uow, evento)
 
 
 def test_evento_fora_do_contrato_nao_e_gravado() -> None:
     uow, sessao = _uow()
+    evento = ForaDoContratoEvent(ordem_id=uuid4())
     with pytest.raises(MensagemInvalidaError, match="tipo sem contrato"):
-        _gravar(uow, ForaDoContratoEvent(ordem_id=uuid4()))
+        _gravar(uow, evento)
     assert sessao.chamadas == [("rollback",), ("close",)]
 
 

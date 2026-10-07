@@ -64,11 +64,7 @@ def fechar(conexao: BlockingConnection | None) -> None:
 
 
 def propriedades(
-    envelope: Mapping[str, Any],
-    *,
-    usuario: str,
-    headers: Mapping[str, Any],
-    expiration: str | None = None,
+    envelope: Mapping[str, Any], *, usuario: str, headers: Mapping[str, Any]
 ) -> pika.BasicProperties:
     """Propriedades AMQP do envelope (RFC-004, secao 5.2), persistente."""
     return pika.BasicProperties(
@@ -79,5 +75,4 @@ def propriedades(
         content_type="application/json",
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=dict(headers),
-        expiration=expiration,
     )

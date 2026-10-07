@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
+import yaml
 
 import src.diagnostico.aplicacao.events
 import src.estoque.aplicacao.events
@@ -66,6 +67,14 @@ def test_comandos_consumidos_sao_do_orquestrador_e_eventos_sao_deste_servico() -
         assert _exemplo(tipo)["origem"] == "os-service", tipo
     for tipo in _eventos_do_servico():
         assert _exemplo(tipo)["origem"] == "execution-service", tipo
+
+
+def test_consumidor_trata_exatamente_o_que_o_asyncapi_poe_na_fila() -> None:
+    asyncapi = yaml.safe_load((CONTRATOS / "asyncapi.yaml").read_text())
+    consumo = asyncapi["operations"]["consumirExecucaoComandos"]
+    tipos = {mensagem["$ref"].rsplit("/", 1)[-1] for mensagem in consumo["messages"]}
+    assert consumo["channel"] == {"$ref": "#/channels/execucao.comandos"}
+    assert tipos == set(HANDLERS)
 
 
 def test_produtor_de_cada_tipo_vem_do_asyncapi() -> None:

@@ -460,16 +460,12 @@ def test_chave_de_retry_fora_das_filas_de_atraso_e_recusada_pelo_broker(
     broker: Broker,
 ) -> None:
     # Permissao de topico do usuario execucao: so as cinco filas de retry dele.
+    props = pika.BasicProperties(user_id="execucao")
     with (
-        pytest.raises(ChannelClosedByBroker) as recusa,
         broker.canal("execucao") as canal,
+        pytest.raises(ChannelClosedByBroker) as recusa,
     ):
-        canal.basic_publish(
-            exchange="pytstop.retry",
-            routing_key="execucao.comandos",
-            body=b"{}",
-            properties=pika.BasicProperties(user_id="execucao"),
-        )
+        canal.basic_publish("pytstop.retry", "execucao.comandos", b"{}", props)
     assert recusa.value.reply_code == 403
 
 
@@ -725,6 +721,7 @@ def test_retencao_apaga_entregues_e_processadas_antigas(
     relay: Callable[..., Relay],
     consumidor: Callable[..., Consumidor],
     outbox: Callable[[], list[dict[str, Any]]],
+    spans: InMemorySpanExporter,
 ) -> None:
     agora = datetime.now(UTC)
     with engine.begin() as conexao:
@@ -761,6 +758,8 @@ def test_retencao_apaga_entregues_e_processadas_antigas(
         esperar_ate(lambda: processadas() == 1)
 
     assert sorted(linha["status"] for linha in outbox()) == ["dead", "entregue"]
+    # Varias voltas do relay sem nada a publicar: nenhum span de laco ocioso.
+    assert spans.get_finished_spans() == ()
 
 
 @pytest.mark.parametrize("modulo", [src.relay, src.consumidor])
@@ -948,8 +947,9 @@ def test_recusa_do_broker_conta_tentativa_e_o_canal_e_reaberto(
 def test_conferencia_da_topologia_fora_do_alcance_falha_e_fecha_a_conexao(
     broker: Broker, exchanges: tuple[str, ...], filas: tuple[str, ...]
 ) -> None:
+    url = broker.url("execucao")
     with pytest.raises(ChannelClosedByBroker):
-        abrir_canal(broker.url("execucao"), exchanges=exchanges, filas=filas)
+        abrir_canal(url, exchanges=exchanges, filas=filas)
 
 
 def test_limpeza_que_falha_nao_derruba_o_consumidor(
