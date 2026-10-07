@@ -77,9 +77,11 @@ class Backoff:
 
     O atraso dobra a cada falha seguida, ate o teto, e volta ao inicio no
     sucesso; o sorteio faz as replicas que perderam o broker juntas nao
-    voltarem juntas. Com o teto de 30 s e a conexao do pika (ate 15 s), o
-    heartbeat do processo fica no maximo cerca de 45 s sem toque, abaixo do
-    minuto que a sonda de liveness tolera.
+    voltarem juntas. O laco toca o heartbeat antes da tentativa e de novo
+    quando ela falha, entao ele fica sem toque no maximo o maior entre a espera
+    (teto de 30 s) e a tentativa (15 s da pilha do pika, ou o tempo do resolver,
+    que o pika nao limita), abaixo do minuto do healthcheck do compose e dos
+    90 s da liveness do Kubernetes.
     """
 
     def __init__(self, inicial_s: float = 1.0, teto_s: float = 30.0) -> None:
