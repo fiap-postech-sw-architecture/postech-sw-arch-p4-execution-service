@@ -26,10 +26,15 @@ from pika.exceptions import (
     UnroutableError,
 )
 from prometheus_client import REGISTRY
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
+    EntidadeDuplicadaException,
+    EntidadeNaoEncontradaException,
+    RespostaInvalidaDaDependenciaException,
+    TransicaoStatusInvalidaException,
     ValorInvalidoError,
     ViolacaoRegraDeNegocioException,
 )
@@ -468,11 +473,6 @@ def test_falha_depois_da_quinta_copia_vai_para_a_dlq() -> None:
             None,
             id="tipo-sem-handler",
         ),
-        pytest.param({}, ValorInvalidoError("placa"), id="dado-recusado-pelo-dominio"),
-        pytest.param({}, RuntimeError("defeito"), id="erro-nao-classificado"),
-        pytest.param(
-            {}, IntegrityError("INSERT", {}, Exception()), id="banco-recusa-o-dado"
-        ),
     ],
 )
 def test_erro_permanente_vai_direto_para_a_dlq(
@@ -480,6 +480,66 @@ def test_erro_permanente_vai_direto_para_a_dlq(
 ) -> None:
     canal = _consumir(_Handler(erro), **kwargs)
     assert (canal.rejeicoes, canal.acks, canal.publicadas) == ([(7, False)], [], [])
+
+
+@pytest.mark.parametrize(
+    ("erro", "resultado"),
+    [
+        pytest.param(
+            OperationalError("SELECT 1", {}, Exception()), "retry", id="banco-timeout"
+        ),
+        pytest.param(
+            InterfaceError("SELECT 1", {}, Exception()), "retry", id="conexao-fechada"
+        ),
+        pytest.param(PoolTimeoutError("pool cheio"), "retry", id="pool-cheio"),
+        pytest.param(ConnectionResetError(), "retry", id="rede"),
+        pytest.param(TimeoutError(), "retry", id="timeout-de-socket"),
+        pytest.param(
+            DependenciaIndisponivelException("fora"), "retry", id="dependencia-fora"
+        ),
+        pytest.param(
+            EntidadeDuplicadaException("corrida"), "retry", id="corrida-nao-resolvida"
+        ),
+        pytest.param(ValorInvalidoError("placa"), "dlq", id="dominio-recusa-o-dado"),
+        pytest.param(
+            RespostaInvalidaDaDependenciaException("4xx"),
+            "dlq",
+            id="dependencia-recusa",
+        ),
+        pytest.param(
+            IntegrityError("INSERT", {}, Exception()), "dlq", id="banco-recusa-o-dado"
+        ),
+        pytest.param(RuntimeError("defeito"), "dlq", id="erro-nao-classificado"),
+        pytest.param(
+            TransicaoStatusInvalidaException(),
+            "ignorada",
+            id="transicao-fora-do-estado",
+        ),
+        pytest.param(
+            ViolacaoRegraDeNegocioException(), "ignorada", id="regra-do-estado"
+        ),
+        pytest.param(
+            EntidadeNaoEncontradaException(), "ignorada", id="entidade-ausente"
+        ),
+    ],
+)
+def test_classificacao_de_cada_erro_do_handler(erro: Exception, resultado: str) -> None:
+    # Transitorio nunca vira ack silencioso: copia confirmada, depois o ack.
+    antes = _consumidas("ReservarPecas", resultado)
+    transacoes = _Transacoes()
+    canal = _consumir(_Handler(erro), transacoes=transacoes)
+    passos = {
+        "retry": ["copia", "ack"],
+        "dlq": ["reject"],
+        "ignorada": ["ack"],
+    }
+    assert canal.passos == passos[resultado]
+    assert [c["routing_key"] for c in canal.publicadas] == (
+        ["execucao.comandos.retry.1s"] if resultado == "retry" else []
+    )
+    # So o comando ignorado comita (o id fica gravado); o resto desfaz tudo.
+    assert transacoes.comitadas == (1 if resultado == "ignorada" else 0)
+    assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
 def test_copia_de_retry_do_proprio_consumidor_e_aceita() -> None:

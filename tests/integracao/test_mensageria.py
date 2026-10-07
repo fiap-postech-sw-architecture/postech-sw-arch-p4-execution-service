@@ -25,6 +25,7 @@ from sqlalchemy.exc import OperationalError
 
 import src.consumidor
 import src.relay
+from src.compartilhado.dominio.exceptions import DependenciaIndisponivelException
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
 )
@@ -594,6 +595,73 @@ def test_header_que_o_pika_nao_le_vai_para_a_dlq_sem_levar_a_mensagem_de_tras(
     assert resposta["envelope"]["causation_id"] == valida["id"]
     assert broker.contar("execucao.comandos.dlq") == 1
     assert _saldo(engine, "PEC-VELA") == (5, 2)
+
+
+def test_erro_nao_classificado_vai_direto_para_a_dlq_sem_passar_pelo_retry(
+    broker: Broker, consumidor: Callable[..., Consumidor]
+) -> None:
+    def defeito(*_: object) -> None:
+        raise RuntimeError("defeito do handler")
+
+    antes = consumidas("ReservarPecas", "dlq")
+    with EmSegundoPlano(consumidor({"ReservarPecas": defeito})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        _esperar_consumo("ReservarPecas", "dlq", antes)
+
+    props, _ = esperar_ate(lambda: broker.pegar("execucao.comandos.dlq"))
+    assert "x-tentativa" not in (props.headers or {})
+    assert [broker.contar(fila) for fila in NIVEIS_DE_RETRY] == [0] * 5
+
+
+def test_x_tentativa_acima_do_limite_vai_direto_para_a_dlq(
+    broker: Broker, engine: Engine, consumidor: Callable[..., Consumidor]
+) -> None:
+    # Copia forjada com x-tentativa 6: nao roda o handler.
+    _criar_item(engine, "PEC-VELA", 5)
+    antes = consumidas("ReservarPecas", "dlq")
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4())),
+            headers={"x-tentativa": 6},
+        )
+        _esperar_consumo("ReservarPecas", "dlq", antes)
+    assert _saldo(engine, "PEC-VELA") == (5, 0)
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(OSError("rede"), id="rede"),
+        pytest.param(DependenciaIndisponivelException("fora"), id="dependencia-fora"),
+    ],
+)
+def test_rede_e_dependencia_fora_passam_pelo_retry_no_broker_real(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+    erro: Exception,
+) -> None:
+    _criar_item(engine, "PEC-VELA", 5)
+    tentativas: list[int] = []
+
+    def falha_uma_vez(
+        envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
+    ) -> None:
+        tentativas.append(1)
+        if len(tentativas) == 1:
+            raise erro
+        reservar_pecas(envelope, sessao, uow)
+
+    with EmSegundoPlano(consumidor({"ReservarPecas": falha_uma_vez})):
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        esperar_ate(outbox)
+    assert len(tentativas) == 2
+    assert broker.contar("execucao.comandos.dlq") == 0
 
 
 def test_mensagem_de_quem_nao_e_o_orquestrador_vai_direto_para_a_dlq(

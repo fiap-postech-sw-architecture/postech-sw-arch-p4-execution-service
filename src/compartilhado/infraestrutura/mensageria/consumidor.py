@@ -48,6 +48,7 @@ from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
     DomainException,
     EntidadeDuplicadaException,
+    RespostaInvalidaDaDependenciaException,
     ValorInvalidoError,
 )
 from src.compartilhado.infraestrutura.database import (
@@ -105,9 +106,12 @@ _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)
 _LIMPEZA_A_CADA_S: Final = 3600.0
 _TIPO_DESCONHECIDO: Final = "desconhecido"
-# Erro que passa com o tempo: banco ou rede fora, dependencia fora ou a corrida
-# que a releitura nao resolveu. Erro de dominio fora daqui e estado, nao falha;
-# o resto (defeito, dado que o banco recusa) vai direto para a DLQ.
+# Erro que passa com o tempo, e vira copia de retry: banco fora, conexao
+# fechada, pool cheio ou timeout (lock e statement timeout, deadlock e falha de
+# serializacao chegam como OperationalError), rede, dependencia fora e a corrida
+# que a releitura nao resolveu (a entrega seguinte cai na regra de repeticao e
+# republica o desfecho). Erro do broker no ack, no reject ou na copia sai do
+# callback: o laco reconecta e a original volta.
 _TRANSITORIOS: Final = (
     OperationalError,
     InterfaceError,
@@ -116,6 +120,10 @@ _TRANSITORIOS: Final = (
     DependenciaIndisponivelException,
     EntidadeDuplicadaException,
 )
+# Erro que repetir nao muda, direto para a DLQ: dado recusado pelo dominio ou
+# pela dependencia. O resto da ``DomainException`` e estado (comando ignorado) e
+# qualquer erro nao classificado tambem vai para a DLQ.
+_PERMANENTES: Final = (ValorInvalidoError, RespostaInvalidaDaDependenciaException)
 
 # Recebe o envelope ja validado e roda o caso de uso na sessao e na unidade de
 # trabalho da mensagem; quem comita e o consumidor.
@@ -311,9 +319,9 @@ class Consumidor:
             return self._rodar_handler(envelope)
         except _TRANSITORIOS as exc:
             return self._falha_transitoria(exc, tentativa)
-        except ValorInvalidoError:
+        except _PERMANENTES as exc:
             # So a classe: a mensagem pode ecoar o dado recebido.
-            _log.warning("command_rejected_by_domain")
+            _log.warning("command_rejected_by_domain", error=type(exc).__name__)
             return Resultado.DLQ
         except Exception as exc:  # noqa: BLE001 - nao classificado vai para a DLQ
             _log.error("command_failed", **_descricao_do_erro(exc))
@@ -326,7 +334,7 @@ class Consumidor:
             sessao, transacao = aberta
             try:
                 self._handlers[envelope["tipo"]](envelope, sessao, transacao)
-            except _TRANSITORIOS:
+            except (*_TRANSITORIOS, *_PERMANENTES):
                 raise
             except DomainException as exc:
                 # Fora do estado: nada do handler fica, mas o id fica gravado
