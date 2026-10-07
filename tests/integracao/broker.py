@@ -43,6 +43,10 @@ SENHAS = {
 # Nos testes o atraso de cada fila de retry cai para 100 ms (o TTL e argumento
 # da fila): a copia volta logo, pelo mesmo caminho do broker de verdade.
 TTL_DE_TESTE_MS = 100
+_ARGUMENTOS_DAS_FILAS = {
+    fila["name"]: fila["arguments"]
+    for fila in json.loads((_RABBITMQ / "definitions.json").read_text())["queues"]
+}
 FILAS_DO_SERVICO = (
     "execucao.comandos",
     *NIVEIS_DE_RETRY,
@@ -141,14 +145,15 @@ class Broker:
                 canal.queue_purge(fila)
 
     def redeclarar_retry(self, fila: str, ttl_ms: int) -> None:
-        """Recria a fila de retry com outro TTL (argumento imutavel da fila)."""
+        """Recria a fila de retry com outro TTL (argumento imutavel da fila).
+
+        Os demais argumentos sao os do ``definitions.json``: um argumento novo
+        no platform vale tambem aqui, e so o ``x-message-ttl`` muda.
+        """
+        argumentos = {**_ARGUMENTOS_DAS_FILAS[fila], "x-message-ttl": ttl_ms}
         with self.canal() as canal:
             canal.queue_delete(fila)
-            canal.queue_declare(
-                fila,
-                durable=True,
-                arguments={"x-queue-type": "quorum", "x-message-ttl": ttl_ms},
-            )
+            canal.queue_declare(fila, durable=True, arguments=argumentos)
             canal.queue_bind(fila, "pytstop.retry", routing_key=fila)
 
     def rabbitmqctl(self, *argumentos: str) -> str:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -44,7 +44,8 @@ def test_socket_sem_resposta_e_derrubado_pelo_cliente(engine: Engine) -> None:
     # Banco que some sem fechar o socket nao segura um comando por minutos.
     conexao = engine.raw_connection()
     try:
-        parametros = conexao.driver_connection.get_dsn_parameters()  # type: ignore[union-attr]
+        driver = cast("Any", conexao.driver_connection)  # conexao do psycopg2
+        parametros = driver.get_dsn_parameters()
     finally:
         conexao.close()
     assert parametros["tcp_user_timeout"] == "10000"

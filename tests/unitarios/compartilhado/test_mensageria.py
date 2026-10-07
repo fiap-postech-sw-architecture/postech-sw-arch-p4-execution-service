@@ -15,7 +15,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 import pika
 import pytest
@@ -23,6 +23,7 @@ import structlog
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc import trace_exporter
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import StatusCode
 from pika.exceptions import (
     ChannelClosedByBroker,
     NackError,
@@ -33,6 +34,8 @@ from prometheus_client import REGISTRY
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
+import src.consumidor
+import src.relay
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
     EntidadeDuplicadaException,
@@ -55,6 +58,8 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
     )
+    from pika.adapters.blocking_connection import BlockingChannel
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session
 
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWorkDoComando
@@ -62,6 +67,7 @@ if TYPE_CHECKING:
 _COMANDO = (CONTRATOS / "exemplos" / "ReservarPecas.json").read_bytes()
 RAIZ = Path(__file__).resolve().parents[3]
 _URL = "amqp://execucao:x@broker.test:5672/%2F"  # gitleaks:allow - nunca conecta
+_BANCO_FALSO = "postgresql://x:y@127.0.0.1:1/nada"  # gitleaks:allow - nunca conecta
 
 
 # --- sinais do processo -----------------------------------------------------
@@ -93,6 +99,11 @@ class _Espera:
         return False
 
 
+def _evento(espera: _Espera) -> threading.Event:
+    # Fake so com o wait que o Backoff usa.
+    return cast("threading.Event", espera)
+
+
 def test_backoff_sorteia_ate_o_atraso_que_dobra_ate_o_teto_e_reinicia(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,9 +116,9 @@ def test_backoff_sorteia_ate_o_atraso_que_dobra_ate_o_teto_e_reinicia(
     monkeypatch.setattr(processo.random, "uniform", metade)
     backoff, espera = processo.Backoff(1.0, 5.0), _Espera()
     for _ in range(5):
-        backoff.esperar(espera)  # type: ignore[arg-type]
+        backoff.esperar(_evento(espera))
     backoff.reiniciar()
-    backoff.esperar(espera)  # type: ignore[arg-type]
+    backoff.esperar(_evento(espera))
     assert sorteios == [(0, 1.0), (0, 2.0), (0, 4.0), (0, 5.0), (0, 5.0), (0, 1.0)]
     assert espera.esperas == [0.5, 1.0, 2.0, 2.5, 2.5, 0.5]
 
@@ -115,7 +126,7 @@ def test_backoff_sorteia_ate_o_atraso_que_dobra_ate_o_teto_e_reinicia(
 def test_backoff_sem_sorteio_falso_fica_entre_zero_e_o_atraso() -> None:
     backoff, espera = processo.Backoff(1.0, 4.0), _Espera()
     for _ in range(50):
-        backoff.esperar(espera)  # type: ignore[arg-type]
+        backoff.esperar(_evento(espera))
     assert all(0 <= valor <= 4.0 for valor in espera.esperas)
     assert len(set(espera.esperas)) > 1  # replicas nao voltam juntas
 
@@ -133,7 +144,11 @@ def test_sigterm_liga_a_parada() -> None:
 
 
 @pytest.mark.parametrize(
-    ("ambiente", "porta"), [({}, 9100), ({"METRICS_PORT": "9200"}, 9200)]
+    ("ambiente", "porta"),
+    [
+        pytest.param({}, 9100, id="padrao"),
+        pytest.param({"METRICS_PORT": "9200"}, 9200, id="do-ambiente"),
+    ],
 )
 def test_metricas_na_porta_metrics(
     monkeypatch: pytest.MonkeyPatch, ambiente: dict[str, str], porta: int
@@ -354,13 +369,30 @@ class _Handler:
 
 def _consumidor(handler: _Handler, transacoes: _Transacoes | None = None) -> Consumidor:
     consumidor = Consumidor(
-        _Sessao(),  # type: ignore[arg-type]  # engine falsa: so a limpeza a usa
+        _engine_falsa(),
         _URL,
         {"ReservarPecas": handler},
         processo.SinaisDoProcesso.do_processo("teste"),
     )
-    consumidor._transacao = transacoes or _Transacoes()  # type: ignore[method-assign]
+    # A transacao da mensagem em memoria (a de verdade e testada no Postgres).
+    vars(consumidor)["_transacao"] = transacoes or _Transacoes()
     return consumidor
+
+
+def _engine_falsa() -> Engine:
+    # So a limpeza da retencao usa o engine fora da transacao da mensagem.
+    return cast("Engine", _Sessao())
+
+
+def _receber(
+    consumidor: Consumidor, canal: _Canal, props: pika.BasicProperties, corpo: bytes
+) -> None:
+    consumidor._ao_receber(
+        cast("BlockingChannel", canal),
+        cast("pika.spec.Basic.Deliver", _Entrega()),
+        props,
+        corpo,
+    )
 
 
 def _consumir(
@@ -375,7 +407,7 @@ def _consumir(
 ) -> _Canal:
     canal = canal or _Canal()
     props = pika.BasicProperties(user_id=user_id, type=tipo, headers=headers)
-    _consumidor(handler, transacoes)._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
+    _receber(_consumidor(handler, transacoes), canal, props, corpo)
     return canal
 
 
@@ -483,7 +515,12 @@ def test_copia_de_retry_sem_canal_deixa_a_original_sem_ack_e_sem_reject(
 
 @pytest.mark.parametrize(
     ("tentativa", "nivel"),
-    [(1, "5s"), (2, "15s"), (3, "60s"), (4, "300s")],
+    [
+        pytest.param(1, "5s", id="segunda-falha-5s"),
+        pytest.param(2, "15s", id="terceira-falha-15s"),
+        pytest.param(3, "60s", id="quarta-falha-60s"),
+        pytest.param(4, "300s", id="quinta-falha-300s"),
+    ],
 )
 def test_cada_tentativa_vai_para_a_fila_do_proprio_atraso(
     tentativa: int, nivel: str
@@ -661,7 +698,7 @@ def test_atributos_do_span_sao_so_messaging_com_ids_conferidos(
         message_id=corpo["id"],
         correlation_id="x" * 10_000,  # nao e UUID: fica fora do span
     )
-    _consumidor(_Handler())._ao_receber(canal, _Entrega(), props, _COMANDO)  # type: ignore[arg-type]
+    _receber(_consumidor(_Handler()), canal, props, _COMANDO)
     (span,) = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
     assert dict(span.attributes or {}) == {
         "messaging.system": "rabbitmq",
@@ -669,6 +706,26 @@ def test_atributos_do_span_sao_so_messaging_com_ids_conferidos(
         "messaging.message.id": corpo["id"],
         "pytstop.resultado": "processada",
     }
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        pytest.param(None, None, id="ausente"),
+        pytest.param(7, None, id="nao-e-texto"),
+        pytest.param("z" * 36, None, id="36-caracteres-sem-forma-de-uuid"),
+        pytest.param("y" * 37, None, id="longo-demais"),
+        pytest.param(
+            "3277DB7E-8283-4DD9-89E7-DF3EEACB8710",
+            "3277db7e-8283-4dd9-89e7-df3eeacb8710",
+            id="uuid-canonico",
+        ),
+    ],
+)
+def test_so_o_que_tem_forma_de_uuid_entra_no_log_e_no_span(
+    valor: object, esperado: str | None
+) -> None:
+    assert modulo_consumidor._uuid_ou_none(valor) == esperado
 
 
 def test_log_de_mensagem_rejeitada_nao_carrega_o_corpo(
@@ -680,9 +737,7 @@ def test_log_de_mensagem_rejeitada_nao_carrega_o_corpo(
     props = pika.BasicProperties(
         user_id="os", type="ReservarPecas", message_id="y" * 5_000
     )
-    _consumidor(_Handler())._ao_receber(  # type: ignore[arg-type]
-        canal, _Entrega(), props, json.dumps(corpo).encode()
-    )
+    _receber(_consumidor(_Handler()), canal, props, json.dumps(corpo).encode())
     saida = log_capturado.getvalue()
     (rejeicao,) = [
         json.loads(linha)
@@ -726,6 +781,94 @@ def test_logs_do_handler_saem_no_span_do_consumidor_e_sem_dado(
     (retry,) = [e for e in eventos if e["event"] == "message_failed_will_retry"]
     assert retry["error"] == "OperationalError"
     assert "ABC1234" not in log_capturado.getvalue()
+
+
+def test_trace_id_do_log_e_o_do_span_do_consumidor(
+    log_capturado: io.StringIO, spans: InMemorySpanExporter
+) -> None:
+    _consumir(_Handler())
+    (processo_,) = [
+        s for s in spans.get_finished_spans() if s.name.startswith("process")
+    ]
+    eventos = [json.loads(linha) for linha in log_capturado.getvalue().splitlines()]
+    (handler,) = [e for e in eventos if e["event"] == "handler_ran"]
+    assert handler["trace_id"] == f"{processo_.context.trace_id:032x}"
+
+
+@pytest.mark.parametrize(
+    ("erro", "status"),
+    [
+        pytest.param(OSError(), StatusCode.ERROR, id="retry"),
+        pytest.param(RuntimeError("defeito"), StatusCode.ERROR, id="dlq"),
+        pytest.param(None, StatusCode.UNSET, id="processada"),
+        pytest.param(
+            ViolacaoRegraDeNegocioException(), StatusCode.UNSET, id="ignorada"
+        ),
+    ],
+)
+def test_span_do_consumidor_marca_erro_so_em_retry_e_dlq(
+    spans: InMemorySpanExporter, erro: Exception | None, status: StatusCode
+) -> None:
+    _consumir(_Handler(erro))
+    (span,) = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
+    assert span.status.status_code is status
+
+
+class _ProcessoFalso:
+    """Relay ou Consumidor no main(): registra como foi montado e executado."""
+
+    criados: ClassVar[list[_ProcessoFalso]] = []
+
+    def __init__(self, *args: Any) -> None:
+        self.args = args
+        self.parar: Any = None
+        type(self).criados.append(self)
+
+    def executar(self, parar: Any) -> None:
+        self.parar = parar
+
+
+class _EngineFalsa:
+    disposta = False
+
+    def dispose(self) -> None:
+        type(self).disposta = True
+
+
+@pytest.mark.parametrize(
+    ("modulo", "classe", "nome"),
+    [
+        pytest.param(src.relay, "Relay", "relay", id="relay"),
+        pytest.param(src.consumidor, "Consumidor", "consumidor", id="consumidor"),
+    ],
+)
+def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
+    modulo: Any, classe: str, nome: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arquivos de sinal trocados (o healthcheck do compose nao os acharia) ou
+    # main sem executar o processo passavam no teste de subida.
+    parado = threading.Event()
+    monkeypatch.setattr(_ProcessoFalso, "criados", [])
+    monkeypatch.setattr(_EngineFalsa, "disposta", False)
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://x:y@127.0.0.1:1/nada"
+    )  # gitleaks:allow
+    monkeypatch.setenv("RABBITMQ_URL", _URL)
+    monkeypatch.setattr(modulo, classe, _ProcessoFalso)
+    monkeypatch.setattr(modulo, "criar_engine", lambda _url: _EngineFalsa())
+    monkeypatch.setattr(modulo, "parada_por_sinal", lambda: parado)
+    monkeypatch.setattr(modulo, "configurar_logging", lambda: None)
+    monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: None)
+    monkeypatch.setattr(modulo, "servir_metricas", lambda: None)
+
+    modulo.main()
+
+    (processo_,) = _ProcessoFalso.criados
+    sinais = next(a for a in processo_.args if isinstance(a, processo.SinaisDoProcesso))
+    assert sinais._heartbeat.name == f"{nome}-heartbeat"
+    assert sinais._pronto.name == f"{nome}-pronto"
+    assert processo_.parar is parado
+    assert _EngineFalsa.disposta
 
 
 # --- laco do consumidor (sem broker) ------------------------------------------
@@ -790,7 +933,7 @@ def _rodar_laco(
     monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
     backoff = _BackoffGravado()
     Consumidor(
-        _Sessao(),  # type: ignore[arg-type]  # engine falsa: so a limpeza a usa
+        _engine_falsa(),
         _URL,
         {},
         processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto"),

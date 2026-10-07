@@ -10,6 +10,7 @@ import structlog
 from structlog.testing import capture_logs
 
 import src.compartilhado.aplicacao.responsavel as responsavel
+import src.execucao.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     OperacaoNaoPermitidaException,
@@ -511,9 +512,12 @@ class TestAnonimizarVeiculo:
         assert uow.descartado
         assert len(execucoes.salvas) == 1
 
-    def test_registro_ainda_em_andamento_e_anonimizado_com_aviso(self) -> None:
+    def test_registro_ainda_em_andamento_e_anonimizado_com_aviso(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # O OS so elimina cliente sem OS ativa: se a premissa falhar, a placa
         # sai do mesmo jeito, e o log diz quais ordens estavam em andamento.
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         na_fila = _com_retrato(VEICULO, status="aguardando")
         diagnostico = DiagnosticoAnonimizado(ordem_id=uuid4(), em_andamento=True)
         with capture_logs() as logs:

@@ -281,6 +281,26 @@ class TestScrubUuid:
         assert "9999" not in resultado
         assert "***" in resultado
 
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("tel 11 99999-0000x", id="colado-a-letra-depois"),
+            pytest.param("tel 11 99999-0000-ramal", id="colado-a-hifen-depois"),
+            pytest.param("fone(11)99999-0000", id="hexa-colado-ao-parentese"),
+            pytest.param("cafe+5511999990000", id="hexa-colado-ao-mais"),
+        ],
+    )
+    def test_telefone_colado_depois_ou_aberto_por_parentese_ou_mais_e_mascarado(
+        self, texto: str
+    ) -> None:
+        resultado = str(scrub_pii(None, "info", {"event": texto})["event"])
+        assert "9999" not in resultado
+        assert "***" in resultado
+
+    def test_numero_que_continua_em_digito_nao_e_telefone(self) -> None:
+        texto = "protocolo 11 99999-00001"
+        assert scrub_pii(None, "info", {"event": texto})["event"] == texto
+
     def test_correlation_id_sai_intacto_no_log_json(
         self, log_capturado: io.StringIO
     ) -> None:

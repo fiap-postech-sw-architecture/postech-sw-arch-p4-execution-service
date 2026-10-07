@@ -5,7 +5,9 @@ O caminho com PostgreSQL e RabbitMQ esta em ``tests/integracao/test_relay.py``.
 
 from __future__ import annotations
 
+import ast
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Self
 from uuid import uuid4
 
@@ -32,6 +34,7 @@ from src.compartilhado.infraestrutura.mensageria.processo import (
 from src.compartilhado.infraestrutura.mensageria.relay import BrokerIndisponivelError
 
 _URL = "amqp://execucao:x@broker.test:5672/%2F"  # gitleaks:allow - nunca conecta
+_MENSAGERIA = Path(modulo_relay.__file__).parent
 
 
 def _sinais() -> SinaisDoProcesso:
@@ -275,3 +278,41 @@ def test_ouvinte_que_falha_no_listen_fecha_a_conexao(
     with pytest.raises(OSError, match="LISTEN"):
         relay._ouvir()
     assert fechadas == [True]
+
+
+@pytest.mark.parametrize(
+    "modulo",
+    [
+        pytest.param("relay", id="relay"),
+        pytest.param("outbox", id="outbox"),
+        pytest.param("consumidor", id="consumidor"),
+    ],
+)
+def test_vencimento_e_retencao_usam_o_relogio_do_banco(modulo: str) -> None:
+    # Com o relogio do processo, uma linha recem-gravada (default now() do
+    # banco) parecia do futuro para o claim: vencimento, lease e retencao sao
+    # sempre now() do banco; o processo so usa o monotonico para as janelas.
+    fonte = (_MENSAGERIA / f"{modulo}.py").read_text()
+    chamadas = {
+        f"{no.func.value.id}.{no.func.attr}"
+        for no in ast.walk(ast.parse(fonte))
+        if isinstance(no, ast.Call)
+        and isinstance(no.func, ast.Attribute)
+        and isinstance(no.func.value, ast.Name)
+    }
+    assert chamadas.isdisjoint({"datetime.now", "datetime.utcnow", "time.time"})
+
+
+def test_canal_que_nao_reabre_e_broker_indisponivel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker, conexao = _broker(
+        monkeypatch, _Canal(ChannelClosedByBroker(404, "NOT_FOUND"))
+    )
+
+    def sem_canal() -> _Canal:
+        raise StreamLostError("caiu junto")
+
+    monkeypatch.setattr(conexao, "channel", sem_canal)
+    with pytest.raises(BrokerIndisponivelError):
+        broker.publicar(_linha())

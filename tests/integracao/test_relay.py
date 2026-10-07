@@ -18,11 +18,16 @@ from uuid import UUID, uuid4
 import pytest
 from prometheus_client import REGISTRY
 from sqlalchemy import event, text
+from sqlalchemy.exc import OperationalError
 
 from src.compartilhado.infraestrutura.database import criar_engine
 from src.compartilhado.infraestrutura.mensageria import amqp
+from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_consumidor
 from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
-from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
+from src.compartilhado.infraestrutura.mensageria.contratos import (
+    CONTRATOS,
+    MensagemInvalidaError,
+)
 from src.compartilhado.infraestrutura.mensageria.outbox import Outbox
 from src.compartilhado.infraestrutura.mensageria.processo import (
     Backoff,
@@ -444,6 +449,40 @@ def test_dead_sai_em_30_dias_com_o_texto_livre_do_envelope(engine: Engine) -> No
             text("SELECT now() - criado_em < interval '30 days' FROM outbox")
         ).scalars()
         assert list(restantes) == [True]
+
+
+def test_limpeza_das_processadas_tambem_apaga_em_lotes(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(modulo_consumidor, "LOTE_DA_LIMPEZA", 2)
+    with engine.begin() as conexao:
+        for _ in range(5):
+            conexao.execute(
+                text(
+                    "INSERT INTO mensagens_processadas (mensagem_id, processada_em) "
+                    "VALUES (gen_random_uuid(), now() - interval '31 days')"
+                )
+            )
+    apagamentos: list[str] = []
+
+    def contar(_conn: object, _cursor: object, sql: str, *_: object) -> None:
+        if sql.startswith("DELETE FROM mensagens_processadas"):
+            apagamentos.append(sql)
+
+    event.listen(engine, "before_cursor_execute", contar)
+    try:
+        with EmSegundoPlano(consumidor()):
+            esperar_ate(lambda: len(apagamentos) == 3)
+    finally:
+        event.remove(engine, "before_cursor_execute", contar)
+    with engine.connect() as conexao:
+        restantes = conexao.execute(
+            text("SELECT count(*) FROM mensagens_processadas")
+        ).scalar_one()
+    assert restantes == 0
 
 
 def test_limpeza_apaga_em_lotes_de_transacao_curta(engine: Engine) -> None:
@@ -877,3 +916,148 @@ def test_heartbeat_bate_a_cada_lote_de_um_dreno_longo(
     with EmSegundoPlano(_relay_falso(engine, sinais)):
         esperar_ate(lambda: len(broker_falso.publicadas) == 25)
     assert existia[0::10] == [True, True, True]  # 1a linha de cada lote
+
+
+def test_bloqueio_no_meio_do_lote_devolve_as_linhas_que_sobraram(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+) -> None:
+    for _ in range(3):
+        _gravar(engine)
+    broker_falso.conexoes = 1
+
+    def bloqueia_depois_da_primeira() -> None:
+        broker_falso.bloqueada = True
+
+    broker_falso.ao_publicar.append(bloqueia_depois_da_primeira)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(lambda: len(broker_falso.publicadas) == 1)
+        # As duas que sobraram voltam a valer ja, sem tentativa.
+        esperar_ate(
+            lambda: (
+                [(r["status"], r["tentativas"]) for r in outbox()][1:]
+                == [("pendente", 0), ("pendente", 0)]
+            )
+        )
+        with engine.connect() as conexao:
+            vencidas = conexao.execute(
+                text(
+                    "SELECT count(*) FROM outbox WHERE status = 'pendente' "
+                    "AND proxima_tentativa_em <= now()"
+                )
+            ).scalar_one()
+        assert vencidas == 2
+        broker_falso.ao_publicar.clear()
+        broker_falso.bloqueada = False
+        esperar_ate(lambda: len(broker_falso.publicadas) == 3)
+
+
+def test_falha_registrada_depois_de_perder_a_linha_nao_grava_nada(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A publicacao falhou, mas o lease venceu nesse meio tempo e outra replica
+    # reivindicou a linha: a tentativa nao e contada por cima dela.
+    broker_falso.conexoes = 1
+    _gravar(engine)
+
+    def outra_replica_pega_e_falha(
+        _self: _BrokerFalso, linha: LinhaDaOutbox
+    ) -> str | None:
+        with engine.begin() as conexao:
+            conexao.execute(
+                text(
+                    "UPDATE outbox SET proxima_tentativa_em = now() + interval '1 hour'"
+                )
+            )
+        return "UnroutableError"
+
+    monkeypatch.setattr(_BrokerFalso, "publicar", outra_replica_pega_e_falha)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(
+            lambda: (
+                "message_publish_failed_after_losing_the_lease"
+                in log_capturado.getvalue()
+            )
+        )
+    (linha,) = outbox()
+    assert (linha["status"], linha["tentativas"], linha["ultimo_erro"]) == (
+        "pendente",
+        0,
+        None,
+    )
+
+
+def test_dead_de_envelope_invalido_tambem_respeita_o_fencing(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker_falso.conexoes = 1
+    _gravar(engine, envelope={})
+
+    def outra_replica_pega_no_meio(_envelope: object) -> None:
+        with engine.begin() as conexao:
+            conexao.execute(
+                text(
+                    "UPDATE outbox SET proxima_tentativa_em = now() + interval '1 hour'"
+                )
+            )
+        msg = "envelope fora do contrato"
+        raise MensagemInvalidaError(msg)
+
+    monkeypatch.setattr(modulo_relay, "validar", outra_replica_pega_no_meio)
+    voltas = _contar_claims(monkeypatch)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(lambda: len(voltas) >= 3)
+    assert outbox()[0]["status"] == "pendente"
+    assert "message_dead" not in log_capturado.getvalue()
+
+
+def _contar_claims(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    reivindicar = Outbox.reivindicar
+    voltas: list[int] = []
+
+    def contando(self: Outbox, lote: int, lease: timedelta) -> Any:
+        voltas.append(1)
+        return reivindicar(self, lote, lease)
+
+    monkeypatch.setattr(Outbox, "reivindicar", contando)
+    return voltas
+
+
+def test_banco_fora_ao_devolver_e_ao_limpar_nao_derruba_o_relay(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Sem conseguir devolver o lease, as linhas voltam quando ele vencer; sem
+    # conseguir limpar, a limpeza fica para a proxima janela. O relay segue.
+    for _ in range(2):
+        _gravar(engine)
+
+    def banco_fora(*_: object, **__: object) -> int:
+        raise OperationalError("UPDATE", {}, Exception("banco fora"))
+
+    monkeypatch.setattr(Outbox, "liberar", banco_fora)
+    monkeypatch.setattr(Outbox, "limpar", banco_fora)
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        # A primeira conexao cai no primeiro publish: a devolucao falha.
+        esperar_ate(lambda: "outbox_lease_return_failed" in log_capturado.getvalue())
+        esperar_ate(lambda: "outbox_cleanup_failed" in log_capturado.getvalue())
+        with engine.begin() as conexao:
+            conexao.execute(text("UPDATE outbox SET proxima_tentativa_em = now()"))
+        esperar_ate(lambda: len(broker_falso.publicadas) == 2)
+    assert [linha["status"] for linha in outbox()] == ["entregue", "entregue"]

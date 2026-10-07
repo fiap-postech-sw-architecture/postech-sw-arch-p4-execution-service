@@ -227,35 +227,85 @@ def test_comando_repetido_com_id_novo_republica_o_desfecho_registrado(
     assert _saldo(engine, "PEC-VELA") == (5, 2)
 
 
+def _solicitacao(ordem_id: UUID) -> dict[str, Any]:
+    return {
+        "ordem_id": str(ordem_id),
+        "veiculo_id": str(VEICULO_ID),
+        "veiculo": {"placa": "BRA2E19", "marca": "VW", "modelo": "Gol", "ano": 2019},
+        "descricao_problema": "Barulho na suspensao",
+    }
+
+
+@pytest.mark.parametrize(
+    ("compensacao", "original", "dados", "resposta", "tabela", "status"),
+    [
+        pytest.param(
+            "LiberarReserva",
+            "ReservarPecas",
+            lambda ordem: _reservar(ordem),
+            "ReservaLiberada",
+            "reservas",
+            "LIBERADA",
+            id="reserva",
+        ),
+        pytest.param(
+            "CancelarExecucao",
+            "AgendarExecucao",
+            lambda ordem: {"ordem_id": str(ordem), "prioridade": "normal"},
+            "ExecucaoCancelada",
+            "execucoes",
+            "CANCELADA",
+            id="execucao",
+        ),
+        pytest.param(
+            "DescartarDiagnostico",
+            "SolicitarDiagnostico",
+            _solicitacao,
+            "DiagnosticoDescartado",
+            "diagnosticos",
+            "DESCARTADO",
+            id="diagnostico",
+        ),
+    ],
+)
 def test_compensacao_antes_do_original_grava_lapide_e_o_original_e_descartado(
     broker: Broker,
     engine: Engine,
     consumidor: Callable[..., Consumidor],
     outbox: Callable[[], list[dict[str, Any]]],
+    compensacao: str,
+    original: str,
+    dados: Callable[[UUID], dict[str, Any]],
+    resposta: str,
+    tabela: str,
+    status: str,
 ) -> None:
     _criar_item(engine, "PEC-VELA", 5)
     ordem_id = uuid4()
-    liberacao = envelope_de_comando(
-        "LiberarReserva", {"ordem_id": str(ordem_id), "motivo": "cancelamento"}
+    lapide = envelope_de_comando(
+        compensacao, {"ordem_id": str(ordem_id), "motivo": "cancelamento"}
     )
-    reserva = envelope_de_comando("ReservarPecas", _reservar(ordem_id))
-    antes = consumidas("ReservarPecas", "ignorada")
+    atrasado = envelope_de_comando(original, dados(ordem_id))
+    antes = consumidas(original, "ignorada")
 
     with EmSegundoPlano(consumidor()):
-        broker.publicar_comando(liberacao)
+        broker.publicar_comando(lapide)
         esperar_ate(outbox)
-        broker.publicar_comando(reserva)
-        _esperar_consumo("ReservarPecas", "ignorada", antes)
+        broker.publicar_comando(atrasado)
+        _esperar_consumo(original, "ignorada", antes)
 
-    (resposta,) = outbox()
-    assert resposta["tipo"] == "ReservaLiberada"
-    assert resposta["envelope"]["causation_id"] == liberacao["id"]
+    (linha,) = outbox()
+    assert (linha["tipo"], linha["envelope"]["causation_id"]) == (
+        resposta,
+        lapide["id"],
+    )
     assert _saldo(engine, "PEC-VELA") == (5, 0)
     with engine.connect() as conexao:
-        status = conexao.execute(
-            text("SELECT status FROM reservas WHERE ordem_id = :o"), {"o": ordem_id}
+        gravado = conexao.execute(
+            text(f"SELECT status FROM {tabela} WHERE ordem_id = :o"),  # noqa: S608 - tabela do parametro do teste
+            {"o": ordem_id},
         ).scalar_one()
-    assert status == "LIBERADA"
+    assert gravado == status
 
 
 def test_saga_cancelada_depois_do_agendamento_passa_por_todos_os_handlers(
@@ -536,6 +586,69 @@ def test_sku_fora_do_formato_do_billing_vira_faltante_e_nao_vai_para_a_dlq(
     assert _saldo(engine, "PEC-VELA") == (5, 0)
 
 
+def test_solicitar_diagnostico_grava_o_retrato_e_a_descricao_do_comando(
+    broker: Broker, engine: Engine, consumidor: Callable[..., Consumidor]
+) -> None:
+    ordem_id = uuid4()
+    comando = envelope_de_comando(
+        "SolicitarDiagnostico",
+        {
+            "ordem_id": str(ordem_id),
+            "veiculo_id": str(VEICULO_ID),
+            "veiculo": {
+                "placa": "BRA2E19",
+                "marca": "Fiat",
+                "modelo": "Uno",
+                "ano": 2011,
+            },
+            "descricao_problema": "Barulho no cambio",
+        },
+    )
+    antes = consumidas("SolicitarDiagnostico", "processada")
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(comando)
+        _esperar_consumo("SolicitarDiagnostico", "processada", antes)
+    with engine.connect() as conexao:
+        linha = conexao.execute(
+            text("SELECT veiculo, descricao_problema, solicitacao_id FROM diagnosticos")
+        ).one()
+    assert linha.veiculo == {
+        "veiculo_id": str(VEICULO_ID),
+        "placa": "BRA2E19",
+        "marca": "Fiat",
+        "modelo": "Uno",
+        "ano": 2011,
+    }
+    assert linha.descricao_problema == "Barulho no cambio"
+    assert str(linha.solicitacao_id) == comando["id"]
+
+
+def test_agendar_execucao_grava_a_prioridade_do_comando(
+    broker: Broker, engine: Engine, consumidor: Callable[..., Consumidor]
+) -> None:
+    _criar_item(engine, "PEC-VELA", 5)
+    ordem_id = uuid4()
+    antes = consumidas("AgendarExecucao", "processada")
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(
+            envelope_de_comando("SolicitarDiagnostico", _solicitacao(ordem_id))
+        )
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(ordem_id))
+        )
+        broker.publicar_comando(
+            envelope_de_comando(
+                "AgendarExecucao", {"ordem_id": str(ordem_id), "prioridade": "alta"}
+            )
+        )
+        _esperar_consumo("AgendarExecucao", "processada", antes)
+    with engine.connect() as conexao:
+        prioridade = conexao.execute(
+            text("SELECT prioridade FROM execucoes")
+        ).scalar_one()
+    assert prioridade == "alta"
+
+
 def test_comando_que_nao_corresponde_ao_estado_e_ignorado_sem_dlq(
     broker: Broker,
     engine: Engine,
@@ -654,6 +767,61 @@ def test_copia_de_retry_sem_rota_leva_a_original_para_a_dlq(
     assert "x-tentativa" not in (props.headers or {})
     assert handler.chamadas == 1
     assert (outbox(), _saldo(engine, "PEC-VELA")) == ([], (5, 0))
+
+
+def test_cada_copia_de_retry_vai_para_a_fila_do_proprio_nivel_no_broker_real(
+    broker: Broker, consumidor: Callable[..., Consumidor]
+) -> None:
+    # O x-death so guarda o ultimo salto: uma fila espia ligada as cinco chaves
+    # de retry ve cada copia.
+    espia = "execucao.comandos.espia-de-teste"
+    with broker.canal() as canal:
+        canal.queue_declare(espia, durable=True, arguments={"x-queue-type": "quorum"})
+        canal.queue_bind(
+            espia, "pytstop.retry", routing_key="execucao.comandos.retry.*"
+        )
+    antes = consumidas("ReservarPecas", "dlq")
+    chaves: list[str] = []
+    try:
+        handler = _FalhaTransitoria(99, reservar_pecas)
+        with EmSegundoPlano(consumidor({"ReservarPecas": handler})):
+            broker.publicar_comando(
+                envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+            )
+            _esperar_consumo("ReservarPecas", "dlq", antes)
+        with broker.canal() as canal:
+            while True:
+                metodo, _props, _corpo = canal.basic_get(espia, auto_ack=True)
+                if metodo is None:
+                    break
+                chaves.append(metodo.routing_key)
+    finally:
+        with broker.canal() as canal:
+            canal.queue_delete(espia)
+    assert chaves == list(NIVEIS_DE_RETRY)
+
+
+def test_copia_de_1s_nao_espera_a_de_300s_com_os_ttl_da_definicao(
+    broker: Broker,
+) -> None:
+    # Uma fila por atraso: a copia de 300 s publicada antes nao segura a de 1 s
+    # (numa fila so, com expiration, so expira quem esta na cabeca). Os TTL da
+    # definition voltam so neste teste; o fixture os reduz para 100 ms.
+    segura, rapida = "execucao.comandos.retry.300s", "execucao.comandos.retry.1s"
+    broker.redeclarar_retry(segura, 300_000)
+    broker.redeclarar_retry(rapida, 1_000)
+    props = pika.BasicProperties(user_id="execucao", headers={"x-tentativa": 1})
+    try:
+        with broker.canal("execucao") as canal:
+            canal.basic_publish("pytstop.retry", segura, b"{}", props, mandatory=True)
+            canal.basic_publish("pytstop.retry", rapida, b"{}", props, mandatory=True)
+        inicio = time.monotonic()
+        esperar_ate(lambda: broker.pegar("execucao.comandos"), prazo_s=5)
+        assert time.monotonic() - inicio < 4  # cerca de 1 s, nao 300 s
+        assert broker.contar(segura) == 1
+    finally:
+        broker.redeclarar_retry(segura, TTL_DE_TESTE_MS)
+        broker.redeclarar_retry(rapida, TTL_DE_TESTE_MS)
 
 
 def test_chave_de_retry_fora_das_filas_de_atraso_e_recusada_pelo_broker(

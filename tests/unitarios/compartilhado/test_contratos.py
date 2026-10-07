@@ -147,6 +147,44 @@ def test_routing_key_e_o_tipo_em_snake_case() -> None:
     )
 
 
+def _canais_publicados_pela_execucao() -> list[tuple[str, str]]:
+    asyncapi = yaml.safe_load((CONTRATOS / "asyncapi.yaml").read_text())
+    return sorted(
+        (
+            operacao["messages"][0]["$ref"].rsplit("/", 1)[-1],
+            asyncapi["channels"][operacao["channel"]["$ref"].rsplit("/", 1)[-1]][
+                "address"
+            ],
+        )
+        for operacao in asyncapi["operations"].values()
+        if operacao["action"] == "send"
+        and operacao["bindings"]["amqp"]["userId"] == "execucao"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tipo", "canal"), _canais_publicados_pela_execucao(), ids=lambda v: str(v)
+)
+def test_routing_key_de_cada_evento_e_o_canal_do_asyncapi(
+    tipo: str, canal: str
+) -> None:
+    # Routing key errada vira mensagem sem rota e, cinco tentativas depois, dead.
+    assert routing_key(tipo) == canal
+
+
+def test_execucao_publica_todos_os_eventos_do_servico() -> None:
+    assert {tipo for tipo, _ in _canais_publicados_pela_execucao()} == set(
+        _eventos_do_servico()
+    )
+
+
+@pytest.mark.parametrize("campo", ["id", "correlation_id", "causation_id"])
+def test_uuid_invalido_no_envelope_viola_o_contrato(campo: str) -> None:
+    exemplo = _exemplo("LiberarReserva")
+    with pytest.raises(MensagemInvalidaError, match=rf"\$\.{campo} \(format\)"):
+        validar({**exemplo, campo: "nao-e-um-uuid"})
+
+
 def test_envelope_do_evento_sai_em_utc_com_a_causa() -> None:
     brasilia = timezone(timedelta(hours=-3))
     evento = ReservaLiberadaEvent(
