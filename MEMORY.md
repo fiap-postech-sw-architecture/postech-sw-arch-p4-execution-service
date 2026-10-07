@@ -8,6 +8,8 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Recent decisions
 
+- 2026-10-07 - Retencao das `dead` contada do fim do ultimo lease (`proxima_tentativa_em`, que a marcacao de `dead` nao muda), nao de `criado_em`: a linha que ficou pendente mais de 30 dias e morre ganha os 30 dias inteiros para conferir e republicar. Supera a retencao da entrada do relay sem transacao aberta no publish - PR #3
+- 2026-10-07 - Consumidor trata `OSError` no laco como broker fora (backoff, fora da prontidao), como o relay ja fazia: o nome do broker sem resolucao no DNS nao derruba o processo - PR #3
 - 2026-10-07 - Comando atrasado (descompasso de estado: lapide, reserva encerrada, execucao ja iniciada) sai com ack e o log `command_ignored` com `codigo=COMANDO_ATRASADO`, o mesmo evento do erro de dominio que o consumidor ignora (ADR-036); nunca DLQ - PR #3
 - 2026-10-07 - `contratos/ORIGEM` em 282f6a3, a `main` do platform com a regra do `causation_id` no envelope e os exemplos dos eventos do mecanico; desde eae2e72 so mudaram descricoes e exemplos. Supera a divida do ORIGEM em eae2e72 - PR #3
 - 2026-10-07 - Comando da saga preso a transacao da mensagem: o consumidor grava o `id` em `mensagens_processadas` antes do handler (`ON CONFLICT DO NOTHING`: a entrega simultanea do mesmo `id` espera e vira duplicada), entrega ao handler a sessao presa por savepoint (`join_transaction_mode="create_savepoint"`: o commit dela nao comita a mensagem) e a `TransacaoDaMensagem` (`UnitOfWorkDoComando`, sem commit; cada `with` e uma tentativa num SAVEPOINT) e comita uma vez so. Comando ignorado tambem grava o `id`. Supera a entrada da outbox com `mensagem_de_origem` no UoW - PR #3
@@ -48,6 +50,7 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Discovered conventions
 
+- 2026-10-07 - `TransacaoComitada` comita no fim de cada tentativa que deu certo do caso de uso; o consumidor comita uma vez so, depois do handler. Supera o "como o consumidor" da entrada dos testes que rodam comando da saga direto no banco - PR #3
 - 2026-10-07 - Teste que roda comando da saga direto no banco usa `TransacaoComitada` (`tests/integracao/transacao.py`), que comita depois de cada tentativa, como o consumidor. Testes do relay: `_BrokerFalso` com ganchos para a coordenacao entre replicas, broker de verdade para os caminhos do RabbitMQ. Checksum dos contratos por tarball, com o marcador `rede` - PR #3
 - 2026-10-07 - import-linter com `include_external_packages`: dominio e aplicacao nao importam frameworks nem drivers (`structlog` permitido) - PR #3
 - 2026-10-06 - Processos: `python -m src.relay` e `python -m src.consumidor`, mesma imagem da API; heartbeat em `/tmp/<processo>-heartbeat` (liveness, tocado inclusive reconectando) e `/tmp/<processo>-pronto` enquanto conectado (readiness); o healthcheck do compose combina os dois; `METRICS_PORT` (9100) serve o `/metrics` de cada processo - PR #3
@@ -63,6 +66,8 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Gotchas
 
+- 2026-10-07 - O pika levanta `socket.gaierror` (um `OSError`, nao `AMQPError`) quando o nome do broker nao resolve; sem pod pronto, o Service headless do RabbitMQ some do DNS, e o laco que so captura `AMQPError` cai e reinicia o processo - PR #3
+- 2026-10-07 - `motivo` esta na denylist do scrub do log (texto livre das compensacoes): chave de log com esse nome sai `***`. O log do `dead` por contrato usa `causa` - PR #3
 - 2026-10-07 - Regex de telefone: o numero nao pode vir colado a digito hexadecimal (UUID), salvo abrindo com `(` ou `+`, e nao pode continuar em digito; telefone colado a letra fora de A-F, a hifen ou a espaco volta a ser mascarado. Supera a entrada de PR #2 com `(?<![\w-])` - PR #3
 - 2026-10-07 - `Session` com `join_transaction_mode="create_savepoint"` fecha com ROLLBACK TO SAVEPOINT se o savepoint ainda estiver aberto: comite a sessao antes de fechar, senao o trabalho some sem erro - PR #3
 - 2026-10-07 - Coluna com `default` chamavel e fora do mapeamento (`exclude_properties`) ainda e preenchida no INSERT do ORM: e assim que o contexto de trace entra sem tocar o agregado - PR #3
@@ -105,6 +110,8 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Review lessons
 
+- 2026-10-07 - Outra guarda no caminho esconde a lacuna: com o `x-tentativa` invalido publicado pelo orquestrador a recusa vinha da origem, e com o status no WHERE o token do fencing ficava sem prova. O teste isola a guarda, com as outras condicoes validas, e o mutante dela tem de falhar - PR #3
+- 2026-10-07 - Retencao contada da gravacao apaga cedo o que ficou preso antes de chegar ao estado retido: conte do evento que abre a janela (a morte da linha) - PR #3
 - 2026-10-07 - Cobertura de 100% nao provou as decisoes da mensageria: mutantes do ack antes do confirm, do fencing e da classificacao passavam. Cada decisao precisa de um teste que falhe no mutante (ordem dos passos no canal falso, broker falso com ganchos, fila espia) - PR #3
 - 2026-10-07 - Transacao do banco aberta durante I/O de rede (o publish) casa timeouts de camadas diferentes (bloqueio do broker e transacao ociosa): transacoes curtas e fencing por token - PR #3
 - 2026-10-07 - Caso de uso que comita sozinho tira do consumidor o controle da transacao (falha depois do efeito fica gravada, comando ignorado nao grava o `id`): a porta do comando nao expoe commit - PR #3
