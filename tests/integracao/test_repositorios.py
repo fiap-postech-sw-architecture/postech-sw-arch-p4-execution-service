@@ -140,7 +140,7 @@ class TestEstoque:
         self, session_factory: sessionmaker[Session]
     ) -> None:
         ordem_id = uuid4()
-        faltantes = [Faltante(sku=Sku("PEC-VELA"), solicitado=4, disponivel=0)]
+        faltantes = [Faltante(sku="PEC-VELA", solicitado=4, disponivel=0)]
         recusada = Reserva.recusar(
             ordem_id=ordem_id,
             itens=[ItemReserva(Sku("PEC-VELA"), 4)],

@@ -59,16 +59,14 @@ def _itens_de_json(dados: list[dict[str, Any]]) -> tuple[ItemReserva, ...]:
 
 def _faltantes_para_json(faltantes: tuple[Faltante, ...]) -> list[dict[str, Any]]:
     return [
-        {"sku": str(f.sku), "solicitado": f.solicitado, "disponivel": f.disponivel}
+        {"sku": f.sku, "solicitado": f.solicitado, "disponivel": f.disponivel}
         for f in faltantes
     ]
 
 
 def _faltantes_de_json(dados: list[dict[str, Any]]) -> tuple[Faltante, ...]:
     return tuple(
-        Faltante(
-            sku=Sku(f["sku"]), solicitado=f["solicitado"], disponivel=f["disponivel"]
-        )
+        Faltante(sku=f["sku"], solicitado=f["solicitado"], disponivel=f["disponivel"])
         for f in dados
     )
 

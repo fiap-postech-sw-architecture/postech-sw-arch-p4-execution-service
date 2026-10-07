@@ -183,7 +183,7 @@ def _reserva(estado: StatusReserva) -> Reserva:
         return Reserva.recusar(
             ordem_id=uuid4(),
             itens=[ItemReserva(VELA, 2)],
-            faltantes=[Faltante(sku=VELA, solicitado=2, disponivel=0)],
+            faltantes=[Faltante(sku=str(VELA), solicitado=2, disponivel=0)],
             agora=AGORA,
         )
     reserva = Reserva.criar(ordem_id=uuid4(), itens=[ItemReserva(VELA, 2)], agora=AGORA)

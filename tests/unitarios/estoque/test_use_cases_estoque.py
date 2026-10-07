@@ -24,7 +24,7 @@ from src.estoque.aplicacao.use_cases import (
 )
 from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
 from src.estoque.dominio.item_estoque import ItemEstoque
-from src.estoque.dominio.reserva import ItemReserva, Reserva, StatusReserva
+from src.estoque.dominio.reserva import Faltante, ItemReserva, Reserva, StatusReserva
 from src.estoque.dominio.sku import Sku
 from tests.fakes import (
     FakeTransacaoDoComando,
@@ -130,6 +130,28 @@ class TestReservarPecas:
             (
                 "PecasReservadas",
                 {"ordem_id": str(ordem_id), "reserva_id": str(reserva.id)},
+            )
+        ]
+
+    def test_codigo_fora_do_catalogo_falta_inteiro_e_recusa_a_reserva(self) -> None:
+        uc, itens, reservas, uow = self._cenario(_item(VELA, 5))
+        ordem_id = uuid4()
+        fora = Faltante(sku="pec-vela", solicitado=2, disponivel=0)
+
+        resultado = uc.executar(ordem_id, [ItemReserva(VELA, 1)], [fora])
+
+        assert resultado.status is StatusReserva.RECUSADA
+        assert reservas.reservas[ordem_id].faltantes == (fora,)
+        assert itens.itens[VELA].quantidade_reservada == 0  # tudo ou nada
+        assert _eventos(uow) == [
+            (
+                "ReservaDePecasFalhou",
+                {
+                    "ordem_id": str(ordem_id),
+                    "faltantes": [
+                        {"sku": "pec-vela", "solicitado": 2, "disponivel": 0}
+                    ],
+                },
             )
         ]
 
