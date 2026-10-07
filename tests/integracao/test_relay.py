@@ -876,6 +876,7 @@ def test_envelope_fora_do_contrato_vira_dead_sem_derrubar_o_relay(
     sinais: Callable[[str], SinaisDoProcesso],
     outbox: Callable[[], list[dict[str, Any]]],
     broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
 ) -> None:
     broker_falso.conexoes = 1
     _gravar(engine, envelope={})  # editado a mao ou defeito: nenhuma tentativa conserta
@@ -887,6 +888,12 @@ def test_envelope_fora_do_contrato_vira_dead_sem_derrubar_o_relay(
         "dead",
         "envelope fora do contrato",
     )
+    (morte,) = [
+        json.loads(linha)
+        for linha in log_capturado.getvalue().splitlines()
+        if '"message_dead"' in linha
+    ]
+    assert morte["causa"] == "contrato"  # quem opera ve por que a linha morreu
 
 
 def test_pendente_antiga_que_vira_dead_ganha_os_30_dias_para_conferir(

@@ -318,9 +318,10 @@ class Relay:
             try:
                 validar(linha.envelope)
             except MensagemInvalidaError:
-                # Nenhuma nova tentativa conserta o envelope: dead direto.
+                # Nenhuma nova tentativa conserta o envelope: dead direto. A chave
+                # e `causa`: `motivo` sai mascarado pelo scrub do log.
                 if self._outbox.marcar_dead(linha, "envelope fora do contrato"):
-                    _log.error("message_dead", tipo=linha.tipo, motivo="contrato")
+                    _log.error("message_dead", tipo=linha.tipo, causa="contrato")
                 return
             try:
                 falha = self._publicar(broker, linha)
