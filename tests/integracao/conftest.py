@@ -15,11 +15,18 @@ from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
 )
+from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
+from src.compartilhado.infraestrutura.mensageria.processo import (
+    Backoff,
+    SinaisDoProcesso,
+)
+from src.compartilhado.infraestrutura.mensageria.relay import Relay
+from src.consumidor import HANDLERS
 from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
 from tests.integracao.broker import Broker, subir_broker
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping
 
     from fastapi.testclient import TestClient
     from sqlalchemy import Engine
@@ -168,3 +175,47 @@ def broker(_broker_da_sessao: Broker) -> Iterator[Broker]:
     """RabbitMQ com a topologia do platform; as filas do servico saem vazias."""
     yield _broker_da_sessao
     _broker_da_sessao.esvaziar()
+
+
+@pytest.fixture
+def sinais(tmp_path: Path) -> Callable[[str], SinaisDoProcesso]:
+    def _sinais(nome: str) -> SinaisDoProcesso:
+        return SinaisDoProcesso(
+            tmp_path / f"{nome}-heartbeat", tmp_path / f"{nome}-pronto"
+        )
+
+    return _sinais
+
+
+@pytest.fixture
+def consumidor(
+    broker: Broker,
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+) -> Callable[..., Consumidor]:
+    def _criar(handlers: Mapping[str, Any] = HANDLERS) -> Consumidor:
+        return Consumidor(
+            engine,
+            broker.url("execucao"),
+            handlers,
+            sinais("consumidor"),
+            Backoff(0.1, 0.5),
+        )
+
+    return _criar
+
+
+@pytest.fixture
+def relay(
+    broker: Broker, engine: Engine, sinais: Callable[[str], SinaisDoProcesso]
+) -> Callable[..., Relay]:
+    def _criar(poll_s: float = 0.1) -> Relay:
+        return Relay(
+            engine,
+            broker.url("execucao"),
+            sinais("relay"),
+            poll_s=poll_s,
+            backoff=Backoff(0.1, 0.5),
+        )
+
+    return _criar

@@ -6,11 +6,17 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from src.compartilhado.infraestrutura.unit_of_work import TransacaoDaMensagem
+from src.estoque.aplicacao.use_cases import LiberarReserva
+from src.estoque.infraestrutura.repository import (
+    ItemEstoqueSQLAlchemyRepository,
+    ReservaSQLAlchemyRepository,
+)
 
 if TYPE_CHECKING:
     from types import TracebackType
+    from uuid import UUID
 
-    from sqlalchemy.orm import Session
+    from sqlalchemy.orm import Session, sessionmaker
 
 
 class TransacaoComitada(TransacaoDaMensagem):
@@ -34,3 +40,15 @@ class TransacaoComitada(TransacaoDaMensagem):
 def transacao_do_comando(sessao: Session) -> TransacaoComitada:
     """Transacao de um comando de ``id`` novo na sessao do teste."""
     return TransacaoComitada(sessao, uuid4())
+
+
+def linha_pendente(session_factory: sessionmaker[Session]) -> UUID:
+    """Grava uma ReservaLiberada na outbox (lapide de uma ordem nova)."""
+    ordem_id = uuid4()
+    with session_factory() as sessao:
+        LiberarReserva(
+            ItemEstoqueSQLAlchemyRepository(sessao),
+            ReservaSQLAlchemyRepository(sessao),
+            transacao_do_comando(sessao),
+        ).executar(ordem_id)
+    return ordem_id

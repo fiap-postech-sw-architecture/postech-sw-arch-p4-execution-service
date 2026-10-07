@@ -8,17 +8,14 @@ relay rodam de verdade, cada um na sua thread.
 from __future__ import annotations
 
 import json
-import math
 import threading
-import time
-from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import pika
 import pytest
 from opentelemetry.trace import SpanKind
-from pika.exceptions import ChannelClosedByBroker, StreamLostError
+from pika.exceptions import ChannelClosedByBroker
 from prometheus_client import REGISTRY
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
@@ -29,16 +26,14 @@ from src.compartilhado.dominio.exceptions import DependenciaIndisponivelExceptio
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
 )
-from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
 from src.compartilhado.infraestrutura.mensageria.amqp import abrir_canal
 from src.compartilhado.infraestrutura.mensageria.consumidor import (
     NIVEIS_DE_RETRY,
     Consumidor,
     Resultado,
 )
-from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, validar
+from src.compartilhado.infraestrutura.mensageria.contratos import validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
-    Backoff,
     SinaisDoProcesso,
 )
 from src.compartilhado.infraestrutura.mensageria.relay import Relay
@@ -48,11 +43,6 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
 )
 from src.compartilhado.infraestrutura.outbox_mapping import registrar_processada
 from src.consumidor import HANDLERS
-from src.estoque.aplicacao.use_cases import LiberarReserva
-from src.estoque.infraestrutura.repository import (
-    ItemEstoqueSQLAlchemyRepository,
-    ReservaSQLAlchemyRepository,
-)
 from src.estoque.infraestrutura.seed import semear
 from src.estoque.interfaces.comandos import reservar_pecas
 from tests.integracao.broker import (
@@ -61,7 +51,6 @@ from tests.integracao.broker import (
     envelope_de_comando,
     esperar_ate,
 )
-from tests.integracao.transacao import transacao_do_comando
 
 if TYPE_CHECKING:
     import io
@@ -80,50 +69,6 @@ if TYPE_CHECKING:
     from tests.integracao.broker import Broker
 
 VEICULO_ID = UUID("3277db7e-8283-4dd9-89e7-df3eeacb8710")
-
-
-@pytest.fixture
-def sinais(tmp_path: Path) -> Callable[[str], SinaisDoProcesso]:
-    def _sinais(nome: str) -> SinaisDoProcesso:
-        return SinaisDoProcesso(
-            tmp_path / f"{nome}-heartbeat", tmp_path / f"{nome}-pronto"
-        )
-
-    return _sinais
-
-
-@pytest.fixture
-def consumidor(
-    broker: Broker,
-    engine: Engine,
-    sinais: Callable[[str], SinaisDoProcesso],
-) -> Callable[..., Consumidor]:
-    def _criar(handlers: Mapping[str, Any] = HANDLERS) -> Consumidor:
-        return Consumidor(
-            engine,
-            broker.url("execucao"),
-            handlers,
-            sinais("consumidor"),
-            Backoff(0.1, 0.5),
-        )
-
-    return _criar
-
-
-@pytest.fixture
-def relay(
-    broker: Broker, engine: Engine, sinais: Callable[[str], SinaisDoProcesso]
-) -> Callable[..., Relay]:
-    def _criar(poll_s: float = 0.1) -> Relay:
-        return Relay(
-            engine,
-            broker.url("execucao"),
-            sinais("relay"),
-            poll_s=poll_s,
-            backoff=Backoff(0.1, 0.5),
-        )
-
-    return _criar
 
 
 def consumidas(tipo: str, resultado: str) -> float:
@@ -843,192 +788,6 @@ def test_consumidor_reconecta_quando_o_broker_derruba_a_conexao(
     assert not pronto.exists()  # encerramento gracioso tira a prontidao
 
 
-def _linha_pendente(session_factory: sessionmaker[Session]) -> UUID:
-    """Grava uma ReservaLiberada na outbox (lapide de uma ordem nova)."""
-    ordem_id = uuid4()
-    with session_factory() as sessao:
-        LiberarReserva(
-            ItemEstoqueSQLAlchemyRepository(sessao),
-            ReservaSQLAlchemyRepository(sessao),
-            transacao_do_comando(sessao),
-        ).executar(ordem_id)
-    return ordem_id
-
-
-def test_relay_acorda_pelo_notify_sem_esperar_o_poll(
-    broker: Broker,
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    tmp_path: Path,
-) -> None:
-    processo = EmSegundoPlano(relay(poll_s=60))
-    with processo:
-        esperar_ate((tmp_path / "relay-pronto").exists)
-        _linha_pendente(session_factory)
-        esperar_ate(lambda: broker.pegar("os.eventos"), prazo_s=10)
-        # Acorda o select para o relay ver o pedido de parada.
-        processo.parar.set()
-        with engine.begin() as conexao:
-            conexao.execute(text("SELECT pg_notify('outbox_novo', '')"))
-
-
-def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
-    broker: Broker,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-) -> None:
-    with broker.canal() as canal:
-        canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-    try:
-        _linha_pendente(session_factory)
-        with EmSegundoPlano(relay()):
-            esperar_ate(lambda: outbox()[0]["tentativas"] == 1)
-    finally:
-        with broker.canal() as canal:
-            canal.queue_bind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-
-    (linha,) = outbox()
-    assert linha["status"] == "pendente"
-    assert linha["ultimo_erro"] == "UnroutableError"
-
-
-def test_publicacao_devolvida_nao_leva_o_corpo_para_o_log(
-    broker: Broker,
-    engine: Engine,
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-    log_capturado: io.StringIO,
-) -> None:
-    # O pika loga em WARNING os 255 primeiros bytes do corpo devolvido pelo
-    # broker (mandatory); o texto livre do envelope nao pode chegar ao log.
-    envelope = json.loads(
-        (CONTRATOS / "exemplos" / "DiagnosticoConcluido.json").read_text()
-    )
-    envelope["dados"]["observacoes"] = "MARCADOR-DO-CORPO Joao da Silva"
-    with engine.begin() as conexao:
-        conexao.execute(
-            text(
-                "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
-                "routing_key, envelope) VALUES (:id, 'DiagnosticoConcluido', :ordem, "
-                "'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
-                "CAST(:envelope AS jsonb))"
-            ),
-            {
-                "id": envelope["id"],
-                "ordem": envelope["correlation_id"],
-                "envelope": json.dumps(envelope),
-            },
-        )
-    with broker.canal() as canal:
-        canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-    try:
-        with EmSegundoPlano(relay()):
-            esperar_ate(lambda: outbox()[0]["tentativas"] == 1)
-    finally:
-        with broker.canal() as canal:
-            canal.queue_bind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-
-    saida = log_capturado.getvalue()
-    assert "message_publish_failed" in saida
-    assert "MARCADOR-DO-CORPO" not in saida
-    assert "Published message was returned" not in saida
-
-
-def test_quinta_falha_de_publicacao_vira_dead(
-    broker: Broker,
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-) -> None:
-    _linha_pendente(session_factory)
-    with engine.begin() as conexao:
-        conexao.execute(text("UPDATE outbox SET tentativas = 4"))
-    with broker.canal() as canal:
-        canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-    try:
-        with EmSegundoPlano(relay()):
-            esperar_ate(lambda: outbox()[0]["status"] == "dead")
-    finally:
-        with broker.canal() as canal:
-            canal.queue_bind("os.eventos", "pytstop.eventos", "evento.execucao.#")
-    assert outbox()[0]["tentativas"] == 5
-    assert REGISTRY.get_sample_value("outbox_dead") == 1
-
-
-def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
-    broker: Broker,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-    tmp_path: Path,
-) -> None:
-    pronto = tmp_path / "relay-pronto"
-    with EmSegundoPlano(relay()):
-        esperar_ate(pronto.exists)
-        broker.rabbitmqctl("stop_app")
-        try:
-            esperar_ate(lambda: not pronto.exists())
-            _linha_pendente(session_factory)
-            time.sleep(1)  # o relay tenta reconectar varias vezes nesse meio tempo
-            (linha,) = outbox()
-            assert (linha["status"], linha["tentativas"]) == ("pendente", 0)
-        finally:
-            broker.rabbitmqctl("start_app")
-        esperar_ate(lambda: outbox()[0]["status"] == "entregue", prazo_s=60)
-    assert outbox()[0]["tentativas"] == 0
-    assert esperar_ate(lambda: broker.pegar("os.eventos"))
-
-
-def test_retencao_apaga_entregues_e_processadas_antigas(
-    broker: Broker,
-    engine: Engine,
-    relay: Callable[..., Relay],
-    consumidor: Callable[..., Consumidor],
-    outbox: Callable[[], list[dict[str, Any]]],
-    spans: InMemorySpanExporter,
-) -> None:
-    agora = datetime.now(UTC)
-    with engine.begin() as conexao:
-        for dias, status in [(8, "entregue"), (6, "entregue"), (30, "dead")]:
-            conexao.execute(
-                text(
-                    "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
-                    "routing_key, envelope, status, entregue_em) VALUES "
-                    "(gen_random_uuid(), 'ReservaLiberada', gen_random_uuid(), "
-                    "'pytstop.eventos', 'evento.execucao.reserva_liberada', '{}', "
-                    ":status, :quando)"
-                ),
-                {"status": status, "quando": agora - timedelta(days=dias)},
-            )
-        for dias in (31, 29):
-            conexao.execute(
-                text(
-                    "INSERT INTO mensagens_processadas (mensagem_id, processada_em) "
-                    "VALUES (gen_random_uuid(), :quando)"
-                ),
-                {"quando": agora - timedelta(days=dias)},
-            )
-
-    def processadas() -> int:
-        with engine.connect() as conexao:
-            return int(
-                conexao.execute(
-                    text("SELECT count(*) FROM mensagens_processadas")
-                ).scalar_one()
-            )
-
-    with EmSegundoPlano(relay()), EmSegundoPlano(consumidor()):
-        esperar_ate(lambda: len(outbox()) == 2)
-        esperar_ate(lambda: processadas() == 1)
-
-    assert sorted(linha["status"] for linha in outbox()) == ["dead", "entregue"]
-    # Varias voltas do relay sem nada a publicar: nenhum span de laco ocioso.
-    assert spans.get_finished_spans() == ()
-
-
 @pytest.mark.parametrize("modulo", [src.relay, src.consumidor])
 def test_processo_sobe_com_o_ambiente_e_para_no_sinal(
     modulo: Any,
@@ -1051,156 +810,6 @@ def test_processo_sobe_com_o_ambiente_e_para_no_sinal(
     modulo.main()
 
     assert chamadas == ["log", "trace", "metricas"]
-
-
-class _BrokerQueCai:
-    """Primeira conexao cai na primeira publicacao; a segunda publica tudo."""
-
-    conexoes = 0
-    publicadas: ClassVar[list[str]] = []
-    ao_publicar: ClassVar[list[Callable[[], None]]] = []
-
-    def __init__(self, _url: str) -> None:
-        type(self).conexoes += 1
-        self._numero = type(self).conexoes
-
-    def publicar(self, linha: Any) -> None:
-        if self._numero == 1:
-            raise StreamLostError("conexao perdida")
-        type(self).publicadas.append(linha.envelope["id"])
-        for acao in type(self).ao_publicar:
-            acao()
-
-    def manter_viva(self) -> None:
-        pass
-
-    def fechar(self) -> None:
-        pass
-
-
-@pytest.fixture
-def broker_que_cai(monkeypatch: pytest.MonkeyPatch) -> type[_BrokerQueCai]:
-    _BrokerQueCai.conexoes = 0
-    _BrokerQueCai.publicadas = []
-    _BrokerQueCai.ao_publicar = []
-    monkeypatch.setattr(modulo_relay, "_Broker", _BrokerQueCai)
-    return _BrokerQueCai
-
-
-def test_queda_do_broker_no_meio_do_lote_devolve_as_linhas_sem_gastar_tentativa(
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    sinais: Callable[[str], SinaisDoProcesso],
-    outbox: Callable[[], list[dict[str, Any]]],
-    broker_que_cai: type[_BrokerQueCai],
-    tmp_path: Path,
-) -> None:
-    for _ in range(3):
-        _linha_pendente(session_factory)
-    relay = Relay(
-        engine, "amqp://execucao:x@broker.test/%2F", sinais("relay"), poll_s=0.1,
-        backoff=Backoff(2.0, 2.0),
-    )  # fmt: skip
-    processo = EmSegundoPlano(relay)
-    # Parada pedida no meio do lote: o relay termina o lote e nao pega outro.
-    broker_que_cai.ao_publicar.append(processo.parar.set)
-    with processo:
-        esperar_ate(lambda: broker_que_cai.conexoes == 1)
-        esperar_ate(lambda: not (tmp_path / "relay-pronto").exists())
-        with engine.connect() as conexao:
-            devolvidas = conexao.execute(
-                text(
-                    "SELECT count(*) FROM outbox WHERE status = 'pendente' "
-                    "AND tentativas = 0 AND proxima_tentativa_em <= now()"
-                )
-            ).scalar_one()
-        # Lease devolvido e nenhuma tentativa gasta: valem de novo ja.
-        assert devolvidas == 3
-        esperar_ate(lambda: len(broker_que_cai.publicadas) == 3)
-
-    assert [(linha["status"], linha["tentativas"]) for linha in outbox()] == [
-        ("entregue", 0)
-    ] * 3
-
-
-def test_linha_travada_por_outra_replica_e_pulada(
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-    broker_que_cai: type[_BrokerQueCai],
-) -> None:
-    broker_que_cai.conexoes = 1  # a "primeira" conexao ja caiu: esta publica
-    _linha_pendente(session_factory)
-    _linha_pendente(session_factory)
-    segunda = engine.connect()
-    transacao = segunda.begin()
-
-    def outra_replica_pega_a_segunda() -> None:
-        if len(broker_que_cai.publicadas) == 1:
-            # So a segunda: com OFFSET o Postgres travaria tambem a primeira.
-            segunda.execute(
-                text(
-                    "SELECT 1 FROM outbox WHERE id = (SELECT max(id) FROM outbox) "
-                    "FOR UPDATE"
-                )
-            )
-
-    broker_que_cai.ao_publicar.append(outra_replica_pega_a_segunda)
-    try:
-        with EmSegundoPlano(relay()):
-            esperar_ate(lambda: outbox()[0]["status"] == "entregue")
-            time.sleep(0.3)  # varias voltas com a segunda travada
-            assert outbox()[1]["status"] == "pendente"
-            transacao.rollback()
-            # O lease de 60 s venceu (a outra replica sumiu sem entregar).
-            with engine.begin() as conexao:
-                conexao.execute(text("UPDATE outbox SET proxima_tentativa_em = now()"))
-            esperar_ate(lambda: outbox()[1]["status"] == "entregue")
-    finally:
-        segunda.close()
-    assert len(broker_que_cai.publicadas) == 2
-
-
-def test_banco_fora_tira_a_prontidao_e_o_gauge_vira_nan(
-    broker: Broker, tmp_path: Path, log_capturado: io.StringIO
-) -> None:
-    morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
-    sinais = SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto")
-    relay = Relay(morto, broker.url("execucao"), sinais, backoff=Backoff(0.05, 0.1))
-    with EmSegundoPlano(relay):
-        esperar_ate(lambda: "relay_dependency_unavailable" in log_capturado.getvalue())
-        assert not (tmp_path / "pronto").exists()
-        assert (tmp_path / "hb").exists()
-    assert math.isnan(REGISTRY.get_sample_value("outbox_pendentes") or 0.0)
-    assert '"dependencia": "database"' in log_capturado.getvalue()
-
-
-def test_recusa_do_broker_conta_tentativa_e_o_canal_e_reaberto(
-    broker: Broker,
-    engine: Engine,
-    session_factory: sessionmaker[Session],
-    relay: Callable[..., Relay],
-    outbox: Callable[[], list[dict[str, Any]]],
-) -> None:
-    # A permissao de topico do usuario execucao so cobre evento.execucao.*:
-    # o broker recusa (403) e fecha o canal.
-    _linha_pendente(session_factory)
-    with engine.begin() as conexao:
-        conexao.execute(
-            text(
-                "UPDATE outbox SET routing_key = 'evento.billing.pagamento_confirmado'"
-            )
-        )
-    with EmSegundoPlano(relay()):
-        esperar_ate(lambda: outbox()[0]["tentativas"] == 1)
-        _linha_pendente(session_factory)
-        esperar_ate(lambda: len(outbox()) == 2 and outbox()[1]["status"] == "entregue")
-
-    recusada = outbox()[0]
-    assert recusada["status"] == "pendente"
-    # Texto fixo: classe e codigo, nada do que o broker devolveu.
-    assert recusada["ultimo_erro"] == "ChannelClosedByBroker (403)"
 
 
 @pytest.mark.parametrize(

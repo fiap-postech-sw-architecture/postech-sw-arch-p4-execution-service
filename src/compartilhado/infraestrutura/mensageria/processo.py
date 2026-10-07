@@ -5,11 +5,19 @@ from __future__ import annotations
 import signal
 import tempfile
 import threading
+import time
 from pathlib import Path
+from typing import Final
 
 from prometheus_client import start_http_server
 
 from src.compartilhado.infraestrutura.ambiente import inteiro_opcional
+
+# Uma limpeza da retencao (outbox e mensagens_processadas) por hora, em lotes:
+# cada lote numa transacao curta, sem lock longo nem o statement_timeout de um
+# DELETE unico sobre toda a retencao.
+INTERVALO_DA_LIMPEZA_S: Final = 3600.0
+LOTE_DA_LIMPEZA: Final = 1000
 
 
 class SinaisDoProcesso:
@@ -38,6 +46,26 @@ class SinaisDoProcesso:
 
     def indisponivel(self) -> None:
         self._pronto.unlink(missing_ok=True)
+
+
+class Periodico:
+    """Janela de uma tarefa periodica do processo (a limpeza da retencao).
+
+    ``devida`` avanca a janela ja na chamada, pelo relogio monotonico: com a
+    tarefa falhando, a proxima tentativa e na janela seguinte, nao a cada volta
+    do laco.
+    """
+
+    def __init__(self, intervalo_s: float = INTERVALO_DA_LIMPEZA_S) -> None:
+        self._intervalo = intervalo_s
+        self._proxima = time.monotonic()
+
+    def devida(self) -> bool:
+        agora = time.monotonic()
+        if agora < self._proxima:
+            return False
+        self._proxima = agora + self._intervalo
+        return True
 
 
 class Backoff:

@@ -24,7 +24,6 @@ juntos ou nada). Desfecho:
 from __future__ import annotations
 
 import json
-import time
 from contextlib import contextmanager
 from datetime import timedelta
 from enum import StrEnum
@@ -35,7 +34,7 @@ import structlog
 from opentelemetry.trace import SpanKind, StatusCode
 from pika.exceptions import AMQPError, ConsumerCancelled, NackError, UnroutableError
 from prometheus_client import Counter
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import (
     DBAPIError,
     InterfaceError,
@@ -67,7 +66,11 @@ from src.compartilhado.infraestrutura.mensageria.contratos import (
     produtor,
     validar,
 )
-from src.compartilhado.infraestrutura.mensageria.processo import Backoff
+from src.compartilhado.infraestrutura.mensageria.processo import (
+    LOTE_DA_LIMPEZA,
+    Backoff,
+    Periodico,
+)
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
     contexto_de,
     tracer,
@@ -104,7 +107,6 @@ _PREFETCH: Final = 1
 # Volta do laco: limite para notar o pedido de parada e tocar o heartbeat.
 _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)
-_LIMPEZA_A_CADA_S: Final = 3600.0
 _TIPO_DESCONHECIDO: Final = "desconhecido"
 # O envelope da saga tem poucos KB; acima disto e entrada hostil (JSON aninhado
 # que estoura a recursao do parser ou da validacao), direto para a DLQ.
@@ -180,7 +182,7 @@ class Consumidor:
         self._backoff = backoff or Backoff()
         self._conexao: BlockingConnection | None = None
         self._cancelado = False
-        self._proxima_limpeza = time.monotonic()
+        self._limpeza = Periodico()
 
     def executar(self, parar: threading.Event) -> None:
         """Laco principal: a mensagem em curso termina antes de ``parar`` valer.
@@ -223,10 +225,15 @@ class Consumidor:
         conexao, canal = abrir_canal(
             self._url, filas=(FILA,), exchanges=(EXCHANGE_RETRY,)
         )
-        self._cancelado = False
-        canal.basic_qos(prefetch_count=_PREFETCH)
-        canal.add_on_cancel_callback(self._ao_ser_cancelado)
-        canal.basic_consume(FILA, self._ao_receber)
+        try:
+            self._cancelado = False
+            canal.basic_qos(prefetch_count=_PREFETCH)
+            canal.add_on_cancel_callback(self._ao_ser_cancelado)
+            canal.basic_consume(FILA, self._ao_receber)
+        except BaseException:
+            # A conexao ainda nao e do laco: sem fechar aqui, ela vazaria.
+            fechar(conexao)
+            raise
         _log.info("consumer_subscribed", fila=FILA)
         return conexao
 
@@ -428,19 +435,25 @@ class Consumidor:
         return Resultado.RETRY
 
     def _limpar_processadas_antigas(self) -> None:
-        agora = time.monotonic()
-        if agora < self._proxima_limpeza:
+        if not self._limpeza.devida():
             return
-        self._proxima_limpeza = agora + _LIMPEZA_A_CADA_S
+        tabela = mensagens_processadas_table
         # Relogio do banco, o mesmo do default de processada_em.
-        limite = func.now() - _RETENCAO_DAS_PROCESSADAS
+        antigas = (
+            select(tabela.c.mensagem_id)
+            .where(tabela.c.processada_em < func.now() - _RETENCAO_DAS_PROCESSADAS)
+            .limit(LOTE_DA_LIMPEZA)
+        )
+        apagadas = 0
         try:
-            with self._engine.begin() as conexao:
-                apagadas = conexao.execute(
-                    delete(mensagens_processadas_table).where(
-                        mensagens_processadas_table.c.processada_em < limite
-                    )
-                ).rowcount
+            while True:
+                with self._engine.begin() as conexao:
+                    deste_lote: int = conexao.execute(
+                        delete(tabela).where(tabela.c.mensagem_id.in_(antigas))
+                    ).rowcount
+                apagadas += deste_lote
+                if deste_lote < LOTE_DA_LIMPEZA:
+                    break
         except SQLAlchemyError as exc:
             _log.warning("processed_messages_cleanup_failed", error=type(exc).__name__)
             return
