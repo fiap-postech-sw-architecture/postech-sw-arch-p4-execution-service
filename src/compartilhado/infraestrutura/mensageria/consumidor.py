@@ -90,7 +90,10 @@ FILA: Final = "execucao.comandos"
 NIVEIS_DE_RETRY: Final = tuple(
     f"{FILA}.retry.{atraso}" for atraso in ("1s", "5s", "15s", "60s", "300s")
 )
-_PREFETCH: Final = 5
+# Uma mensagem em voo por vez: a venenosa (header que o pika nao decodifica
+# derruba a conexao a cada entrega) volta sozinha ao broker e sai pela DLQ no
+# delivery-limit da fila, sem arrastar as validas de um lote pre-buscado.
+_PREFETCH: Final = 1
 # Volta do laco: limite para notar o pedido de parada e tocar o heartbeat.
 _TICK_S: Final = 0.5
 _RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)

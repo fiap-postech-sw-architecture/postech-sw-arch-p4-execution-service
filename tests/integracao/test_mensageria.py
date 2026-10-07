@@ -542,6 +542,29 @@ def test_erro_permanente_vai_direto_para_a_dlq(
     assert [broker.contar(fila) for fila in NIVEIS_DE_RETRY] == [0] * 5
 
 
+def test_header_que_o_pika_nao_le_vai_para_a_dlq_sem_levar_a_mensagem_de_tras(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # Cada entrega da venenosa derruba a conexao (o pika nao decodifica o
+    # header). Com prefetch 1 so ela fica em voo, e o delivery-limit da fila a
+    # manda para a DLQ; a valida, publicada atras, e processada.
+    _criar_item(engine, "PEC-VELA", 5)
+    venenosa = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+    valida = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+    broker.publicar_comando(venenosa, timestamp_em_ms=True)
+    broker.publicar_comando(valida)
+
+    with EmSegundoPlano(consumidor()):
+        (resposta,) = esperar_ate(outbox, prazo_s=60)
+
+    assert resposta["envelope"]["causation_id"] == valida["id"]
+    assert broker.contar("execucao.comandos.dlq") == 1
+    assert _saldo(engine, "PEC-VELA") == (5, 2)
+
+
 def test_mensagem_de_quem_nao_e_o_orquestrador_vai_direto_para_a_dlq(
     broker: Broker,
     engine: Engine,

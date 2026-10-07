@@ -471,9 +471,10 @@ class _ConexaoFalsa:
 class _CanalFalso:
     def __init__(self) -> None:
         self.ao_cancelar: Callable[[object], None] | None = None
+        self.prefetch: int | None = None
 
     def basic_qos(self, prefetch_count: int) -> None:
-        pass
+        self.prefetch = prefetch_count
 
     def add_on_cancel_callback(self, callback: Callable[[object], None]) -> None:
         self.ao_cancelar = callback
@@ -507,6 +508,17 @@ def _rodar_laco(
         backoff,
     ).executar(parar)
     return len(canais), backoff
+
+
+def test_consumidor_assina_com_uma_mensagem_em_voo_por_vez(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canal = _CanalFalso()
+    monkeypatch.setattr(
+        modulo_consumidor, "abrir_canal", lambda *_a, **_k: (_ConexaoFalsa([]), canal)
+    )
+    _consumidor(_Handler())._assinar()
+    assert canal.prefetch == 1
 
 
 def test_assinatura_cancelada_pelo_broker_vira_nova_assinatura(

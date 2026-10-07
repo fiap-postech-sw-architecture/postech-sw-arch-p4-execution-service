@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 import threading
 import time
 from contextlib import contextmanager
@@ -101,17 +102,25 @@ class Broker:
         *,
         usuario: str = "os",
         headers: Mapping[str, Any] | None = None,
+        timestamp_em_ms: bool = False,
     ) -> None:
-        """Publica como o orquestrador publicaria (``user_id`` = usuario)."""
+        """Publica como o orquestrador publicaria (``user_id`` = usuario).
+
+        ``timestamp_em_ms``: header ``timestamp`` do tipo AMQP T com o epoch em
+        milissegundos, que o decoder do pika nao le (ano fora do alcance).
+        """
         tipo = re.sub(r"(?<!^)(?=[A-Z])", "_", envelope["tipo"]).lower()
+        props = propriedades(envelope, usuario=usuario, headers=headers or {})
+        if timestamp_em_ms:
+            props = _PropriedadesComTimestampEmMs(
+                **{**vars(props), "headers": {**props.headers, "timestamp": _SENTINELA}}
+            )
         with self.canal(usuario) as canal:
             canal.basic_publish(
                 exchange="pytstop.comandos",
                 routing_key=f"comando.execucao.{tipo}",
                 body=json.dumps(envelope).encode(),
-                properties=propriedades(
-                    envelope, usuario=usuario, headers=headers or {}
-                ),
+                properties=props,
                 mandatory=True,
             )
 
@@ -149,6 +158,21 @@ class Broker:
         texto: str = saida.decode()
         assert codigo == 0, texto
         return texto
+
+
+# Timestamp que o encoder do pika grava em segundos (tipo T) e o mesmo valor em
+# milissegundos, que um produtor com a unidade errada mandaria.
+_SENTINELA = datetime(2026, 10, 7, tzinfo=UTC)
+_EM_SEGUNDOS = struct.pack(">cQ", b"T", int(_SENTINELA.timestamp()))
+_EM_MILISSEGUNDOS = struct.pack(">cQ", b"T", int(_SENTINELA.timestamp()) * 1000)
+
+
+class _PropriedadesComTimestampEmMs(pika.BasicProperties):
+    """Troca, ja codificado, o ``timestamp`` em segundos pelo de milissegundos."""
+
+    def encode(self) -> list[bytes]:
+        pecas: list[bytes] = super().encode()
+        return [_EM_MILISSEGUNDOS if peca == _EM_SEGUNDOS else peca for peca in pecas]
 
 
 def _esperar_topologia(broker: Broker, prazo_s: float = 90.0) -> None:
