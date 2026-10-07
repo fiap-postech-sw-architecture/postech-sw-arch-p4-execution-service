@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from src.diagnostico.infraestrutura.mapping import diagnosticos_table
 from src.estoque.aplicacao.use_cases import baixar_reserva, reserva_ativa
@@ -11,6 +11,7 @@ from src.estoque.infraestrutura.repository import (
     ReservaSQLAlchemyRepository,
 )
 from src.execucao.aplicacao.events import PecaConsumidaDTO
+from src.execucao.infraestrutura.mapping import execucoes_table
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -59,3 +60,29 @@ class VeiculosSQLAlchemy:
         )
         veiculo: Veiculo | None = self._session.scalar(stmt)
         return veiculo
+
+
+class RetratosDoVeiculoSQLAlchemy:
+    """``RetratosDoVeiculoPort`` sobre o diagnostico e a copia na execucao."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def anonimizar(self, veiculo_id: UUID) -> int:
+        trocados = 0
+        for tabela in (diagnosticos_table, execucoes_table):
+            retratos = self._session.execute(
+                select(tabela.c.ordem_id, tabela.c.veiculo).where(
+                    tabela.c.veiculo["veiculo_id"].astext == str(veiculo_id)
+                )
+            ).all()
+            for ordem_id, veiculo in retratos:
+                if veiculo.anonimizado:
+                    continue
+                self._session.execute(
+                    update(tabela)
+                    .where(tabela.c.ordem_id == ordem_id)
+                    .values(veiculo=veiculo.anonimizar())
+                )
+                trocados += 1
+        return trocados
