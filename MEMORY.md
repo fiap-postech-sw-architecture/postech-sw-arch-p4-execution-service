@@ -6,7 +6,7 @@ Add-only log of project-specific learnings. New entries go to the top of each se
 
 Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-review.md`. The `last-consolidated` marker above is updated only when `/consolidate-memory` runs, not on every append.
 
-Consolidado em 2026-10-07: as 103 entradas anteriores estao em `MEMORY.archive.md`. As linhas de 2026-10-07 que citam uma fonte dizem onde a regra esta (README, ADR, RFC-004 ou comentario do codigo; as fontes do platform foram conferidas na `main` f1f0f0a); o MEMORY guarda inteiro so o que nao esta em outro lugar.
+Consolidado em 2026-10-07: as 103 entradas anteriores estao em `MEMORY.archive.md`. As linhas de 2026-10-07 que citam uma fonte dizem onde a regra esta (README, ADR, RFC-004 ou comentario do codigo; as fontes do platform foram conferidas na `main` f1f0f0a e o schema do Billing na `main` 55c758c); o MEMORY guarda inteiro so o que nao esta em outro lugar.
 
 ## Recent decisions
 
