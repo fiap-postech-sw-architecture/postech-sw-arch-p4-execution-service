@@ -80,8 +80,15 @@ class AgendarExecucao:
         self._uow = uow
 
     @releitura_em_corrida
-    def executar(self, ordem_id: UUID, prioridade: Prioridade) -> Execucao:
+    def executar(
+        self,
+        ordem_id: UUID,
+        prioridade: Prioridade,
+        agendamento_id: UUID | None = None,
+    ) -> Execucao:
         """Devolve a execucao da ordem (nova, na fila ou ja encerrada).
+
+        ``agendamento_id``: id do comando, causa dos fatos que o mecanico gera.
 
         Raises:
             ViolacaoRegraDeNegocioException: ordem nova sem reserva ATIVA.
@@ -95,6 +102,7 @@ class AgendarExecucao:
                     prioridade=prioridade,
                     veiculo=self._veiculos.da_ordem(ordem_id),
                     agora=agora,
+                    agendamento_id=agendamento_id,
                 )
                 if not self._estoque.tem_reserva_ativa(ordem_id):
                     raise _sem_reserva()
@@ -192,6 +200,7 @@ class IniciarExecucao:
                 ExecucaoIniciadaEvent(
                     ordem_id=ordem_id,
                     ocorrido_em=agora,
+                    causation_id=execucao.agendamento_id,
                     mecanico_id=mecanico_id,
                     iniciada_em=agora,
                 )
@@ -239,6 +248,7 @@ class FinalizarExecucao:
                 ExecucaoFinalizadaEvent(
                     ordem_id=ordem_id,
                     ocorrido_em=agora,
+                    causation_id=execucao.agendamento_id,
                     finalizada_em=agora,
                     pecas_consumidas=tuple(pecas),
                 )

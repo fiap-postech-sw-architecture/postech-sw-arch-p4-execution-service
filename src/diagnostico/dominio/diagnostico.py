@@ -138,6 +138,8 @@ class Diagnostico(AggregateRoot):
     _iniciado_em: datetime | None = None
     _concluido_em: datetime | None = None
     _descartado_em: datetime | None = None
+    # Id do SolicitarDiagnostico que abriu o fluxo: causa dos fatos do mecanico.
+    _solicitacao_id: UUID | None = None
 
     def __post_init__(self) -> None:
         _exigir_coerencia(self._status, self._mecanico_id, self._itens)
@@ -158,12 +160,14 @@ class Diagnostico(AggregateRoot):
         veiculo: Veiculo,
         descricao_problema: str,
         agora: datetime,
+        solicitacao_id: UUID | None = None,
     ) -> Diagnostico:
         return cls(
             id=ordem_id,
             _veiculo=veiculo.validado(agora),
             _descricao_problema=descricao_problema,
             _solicitado_em=agora,
+            _solicitacao_id=solicitacao_id,
         )
 
     @classmethod
@@ -226,6 +230,10 @@ class Diagnostico(AggregateRoot):
     @property
     def descartado_em(self) -> datetime | None:
         return self._descartado_em
+
+    @property
+    def solicitacao_id(self) -> UUID | None:
+        return self._solicitacao_id
 
     def iniciar(self, mecanico_id: UUID, agora: datetime) -> bool:
         """AGUARDANDO -> EM_ANDAMENTO; repetir pelo mesmo mecanico e no-op (False)."""

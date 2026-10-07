@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from src.compartilhado.aplicacao.integration_event import IntegrationEvent
 
 # Metadados que viajam no envelope, fora do ``dados`` (RFC-004, secao 5.2).
-_CAMPOS_DO_ENVELOPE = frozenset({"id", "ocorrido_em"})
+_CAMPOS_DO_ENVELOPE = frozenset({"id", "ocorrido_em", "causation_id"})
 
 
 def _json(valor: object) -> Any:  # noqa: ANN401 - estrutura JSON heterogenea
@@ -37,7 +37,7 @@ def _json(valor: object) -> Any:  # noqa: ANN401 - estrutura JSON heterogenea
 
 
 def dados_do_evento(evento: IntegrationEvent) -> dict[str, Any]:
-    """Campos do evento (exceto ``id``/``ocorrido_em``) em tipos JSON nativos.
+    """Campos do evento (exceto os do envelope) em tipos JSON nativos.
 
     Raises:
         TypeError: campo de tipo nao serializavel (falha no commit, nao no relay).

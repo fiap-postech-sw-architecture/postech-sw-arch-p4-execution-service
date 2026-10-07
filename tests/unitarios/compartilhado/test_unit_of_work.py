@@ -134,6 +134,19 @@ def test_comando_em_processamento_vira_causa_e_linha_de_processada() -> None:
     )
 
 
+def test_causa_propria_do_evento_vale_mais_que_o_comando_em_processamento() -> None:
+    # Fato do mecanico (API): responde ao comando que abriu o fluxo.
+    abertura = uuid4()
+    uow, sessao = _uow(mensagem_de_origem=uuid4())
+    with uow:
+        uow.registrar_evento(
+            ReservaLiberadaEvent(ordem_id=uuid4(), causation_id=abertura)
+        )
+        uow.commit()
+    (linha,) = sessao.chamadas[1][2]
+    assert linha["envelope"]["causation_id"] == str(abertura)
+
+
 def test_processada_e_gravada_so_no_primeiro_commit() -> None:
     uow, sessao = _uow(mensagem_de_origem=uuid4())
     with uow:

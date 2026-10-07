@@ -40,8 +40,9 @@ class SQLAlchemyUnitOfWork:
     na saida (a do request pode ser reaberta pelo proximo bloco).
 
     ``mensagem_de_origem`` e o ``id`` do comando em processamento (consumidor):
-    vira o ``causation_id`` dos eventos e a linha de ``mensagens_processadas``,
-    gravada no primeiro commit, junto com o efeito.
+    vira o ``causation_id`` das respostas (o evento que ja traz um, o do fluxo,
+    fica com o dele) e a linha de ``mensagens_processadas``, gravada no
+    primeiro commit, junto com o efeito.
     """
 
     def __init__(
@@ -125,7 +126,12 @@ class SQLAlchemyUnitOfWork:
             "correlation_id": evento.ordem_id,
             "exchange": EXCHANGE_EVENTOS,
             "routing_key": routing_key(evento.tipo),
-            "envelope": envelope_do_evento(evento, self._mensagem_de_origem),
+            "envelope": envelope_do_evento(
+                evento,
+                self._mensagem_de_origem
+                if evento.causation_id is None
+                else evento.causation_id,
+            ),
             "traceparent": contexto.get("traceparent"),
             "tracestate": contexto.get("tracestate"),
         }

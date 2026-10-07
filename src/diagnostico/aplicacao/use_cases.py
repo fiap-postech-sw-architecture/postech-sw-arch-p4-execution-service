@@ -67,13 +67,19 @@ class RegistrarSolicitacaoDeDiagnostico:
 
     @releitura_em_corrida
     def executar(
-        self, ordem_id: UUID, veiculo: Veiculo, descricao_problema: str
+        self,
+        ordem_id: UUID,
+        veiculo: Veiculo,
+        descricao_problema: str,
+        solicitacao_id: UUID | None = None,
     ) -> Diagnostico:
+        """``solicitacao_id``: id do comando, causa dos fatos que o mecanico gera."""
         novo = Diagnostico.solicitar(
             ordem_id=ordem_id,
             veiculo=veiculo,
             descricao_problema=descricao_problema,
             agora=datetime.now(UTC),
+            solicitacao_id=solicitacao_id,
         )
         with self._uow:
             existente = self._repo.obter(ordem_id)
@@ -130,6 +136,7 @@ class IniciarDiagnostico:
                     DiagnosticoIniciadoEvent(
                         ordem_id=ordem_id,
                         ocorrido_em=agora,
+                        causation_id=diagnostico.solicitacao_id,
                         mecanico_id=mecanico_id,
                         iniciado_em=agora,
                     )
@@ -234,6 +241,7 @@ def _concluido(diagnostico: Diagnostico, agora: datetime) -> DiagnosticoConcluid
     return DiagnosticoConcluidoEvent(
         ordem_id=diagnostico.ordem_id,
         ocorrido_em=agora,
+        causation_id=diagnostico.solicitacao_id,
         itens=tuple(
             ItemDTO(
                 tipo=item.tipo.value, codigo=item.codigo, quantidade=item.quantidade

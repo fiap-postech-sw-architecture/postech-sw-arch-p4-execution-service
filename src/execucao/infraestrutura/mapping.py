@@ -34,6 +34,8 @@ execucoes_table = Table(
     Column("iniciada_em", DateTime(timezone=True), nullable=True),
     Column("finalizada_em", DateTime(timezone=True), nullable=True),
     Column("cancelada_em", DateTime(timezone=True), nullable=True),
+    # Id do AgendarExecucao; nulo na lapide.
+    Column("agendamento_id", Uuid, nullable=True),
     check_de_enum("status", StatusExecucao, "ck_execucoes_status"),
     check_de_enum("prioridade", Prioridade, "ck_execucoes_prioridade"),
 )
@@ -54,5 +56,6 @@ mapper_registry.map_imperatively(
         "_iniciada_em": execucoes_table.c.iniciada_em,
         "_finalizada_em": execucoes_table.c.finalizada_em,
         "_cancelada_em": execucoes_table.c.cancelada_em,
+        "_agendamento_id": execucoes_table.c.agendamento_id,
     },
 )

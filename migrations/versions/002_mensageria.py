@@ -8,7 +8,8 @@ A outbox passa a guardar o envelope inteiro do contrato (RFC-004, secao 5.2),
 o destino (exchange e routing key) e o ``traceparent``/``tracestate`` de quem
 gravou. Linhas gravadas antes desta revisao nunca foram publicadas (nao havia
 relay): ganham o envelope montado das colunas antigas, com ``causation_id``
-nulo, e seguem para o relay.
+nulo, e seguem para o relay. Diagnostico e execucao guardam o id do comando que
+abriu o fluxo, causa dos fatos que o mecanico gera pela API.
 """
 
 from __future__ import annotations
@@ -76,9 +77,13 @@ def upgrade() -> None:
         "mensagens_processadas",
         ["processada_em"],
     )
+    op.add_column("diagnosticos", sa.Column("solicitacao_id", sa.Uuid()))
+    op.add_column("execucoes", sa.Column("agendamento_id", sa.Uuid()))
 
 
 def downgrade() -> None:
+    op.drop_column("execucoes", "agendamento_id")
+    op.drop_column("diagnosticos", "solicitacao_id")
     op.drop_table("mensagens_processadas")
     op.add_column("outbox", sa.Column("ocorrido_em", sa.DateTime(timezone=True)))
     op.add_column("outbox", sa.Column("dados", postgresql.JSONB()))

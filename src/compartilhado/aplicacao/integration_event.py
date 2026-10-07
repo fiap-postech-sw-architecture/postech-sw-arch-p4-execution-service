@@ -13,11 +13,17 @@ class IntegrationEvent:
     envelope e ``ocorrido_em`` o instante do fato. Os campos da subclasse, mais
     ``ordem_id``, formam o ``dados`` do envelope. O ``tipo`` e o nome da classe
     sem o sufixo ``Event`` (``PecasReservadasEvent`` -> ``PecasReservadas``).
+
+    ``causation_id`` so e informado no fato que nasce de uma acao pela API: o
+    ``id`` do comando que abriu o fluxo (``SolicitarDiagnostico`` ou
+    ``AgendarExecucao``), pelo qual o orquestrador casa o evento. Na resposta a
+    um comando ele fica vazio e a outbox usa o ``id`` do comando em processamento.
     """
 
     ordem_id: UUID
     id: UUID = field(default_factory=uuid4)
     ocorrido_em: datetime = field(default_factory=lambda: datetime.now(UTC))
+    causation_id: UUID | None = None
 
     @property
     def tipo(self) -> str:

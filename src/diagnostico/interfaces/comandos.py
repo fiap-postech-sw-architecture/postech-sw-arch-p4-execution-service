@@ -1,6 +1,6 @@
 """Comandos da saga para o diagnostico, entregues pelo consumidor (RFC-004 5.3).
 
-O ``dados`` chega validado pelo contrato; o caso de uso roda na sessao e na UoW
+O envelope chega validado pelo contrato; o caso de uso roda na sessao e na UoW
 da mensagem, que gravam a idempotencia e a resposta na mesma transacao.
 """
 
@@ -25,8 +25,9 @@ if TYPE_CHECKING:
 
 
 def solicitar_diagnostico(
-    dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
 ) -> None:
+    dados = envelope["dados"]
     retrato = dados["veiculo"]
     RegistrarSolicitacaoDeDiagnostico(
         DiagnosticoSQLAlchemyRepository(sessao), uow
@@ -40,12 +41,14 @@ def solicitar_diagnostico(
             ano=retrato["ano"],
         ),
         dados["descricao_problema"],
+        solicitacao_id=UUID(envelope["id"]),
     )
 
 
 def descartar_diagnostico(
-    dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
 ) -> None:
+    dados = envelope["dados"]
     DescartarDiagnostico(DiagnosticoSQLAlchemyRepository(sessao), uow).executar(
         UUID(dados["ordem_id"])
     )

@@ -31,7 +31,7 @@ CATALOGO = {
 
 
 def _campos_de_dados(classe: type[IntegrationEvent]) -> set[str]:
-    return {f.name for f in fields(classe)} - {"id", "ocorrido_em"}
+    return {f.name for f in fields(classe)} - {"id", "ocorrido_em", "causation_id"}
 
 
 def test_servico_emite_exatamente_os_eventos_do_catalogo() -> None:

@@ -345,3 +345,34 @@ class TestDescartar:
         assert [(e.tipo, dados_do_evento(e)) for e in uow.eventos] == [
             ("DiagnosticoDescartado", {"ordem_id": str(ordem_id)})
         ]
+
+
+class TestCausaDosFatosDoMecanico:
+    """Os fatos do mecanico respondem ao SolicitarDiagnostico que abriu o fluxo."""
+
+    def test_solicitacao_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
+        repo, ordem_id = DiagnosticosEmMemoria(), uuid4()
+        comando, reenvio = uuid4(), uuid4()
+        caso = RegistrarSolicitacaoDeDiagnostico(repo, FakeUnitOfWork())
+        caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=comando)
+        caso.executar(ordem_id, VEICULO, "Freio", solicitacao_id=reenvio)
+        assert repo.diagnosticos[ordem_id].solicitacao_id == comando
+
+    def test_inicio_e_conclusao_levam_o_id_da_solicitacao(self) -> None:
+        comando = uuid4()
+        diagnostico = Diagnostico.solicitar(
+            ordem_id=uuid4(),
+            veiculo=VEICULO,
+            descricao_problema="Revisao",
+            agora=datetime.now(UTC),
+            solicitacao_id=comando,
+        )
+        repo, uow = DiagnosticosEmMemoria(diagnostico), FakeUnitOfWork()
+        IniciarDiagnostico(repo, uow).executar(diagnostico.ordem_id, MECANICO)
+        ConcluirDiagnostico(repo, CatalogoFake(), ValidadorFake(), uow).executar(
+            diagnostico.ordem_id, MECANICO, [SERVICO], ""
+        )
+        assert [(e.tipo, e.causation_id) for e in uow.eventos] == [
+            ("DiagnosticoIniciado", comando),
+            ("DiagnosticoConcluido", comando),
+        ]

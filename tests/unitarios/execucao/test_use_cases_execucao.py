@@ -396,3 +396,37 @@ class TestFinalizar:
         o = _oficina()
         with pytest.raises(TransicaoStatusInvalidaException):
             o.finalizar.executar(o.execucao.ordem_id, ADMIN, pelo_admin=True)
+
+
+class TestCausaDosFatosDoMecanico:
+    """Os fatos do mecanico respondem ao AgendarExecucao que abriu a execucao."""
+
+    def test_agendamento_guarda_o_id_do_comando_e_o_reenvio_nao_troca(self) -> None:
+        ordem_id, comando, reenvio = uuid4(), uuid4(), uuid4()
+        repo, uow = ExecucoesEmMemoria(), FakeUnitOfWork()
+        caso = AgendarExecucao(
+            repo, FilaFixa(), VeiculosEmMemoria(), _estoque_com_reserva(ordem_id), uow
+        )
+        caso.executar(ordem_id, Prioridade.NORMAL, agendamento_id=comando)
+        caso.executar(ordem_id, Prioridade.ALTA, agendamento_id=reenvio)
+        assert repo.execucoes[ordem_id].agendamento_id == comando
+        # A resposta republicada fica sem causa propria: a outbox usa a do reenvio.
+        assert [e.causation_id for e in uow.eventos] == [None, None]
+
+    def test_inicio_e_finalizacao_levam_o_id_do_agendamento(self) -> None:
+        ordem_id, comando = uuid4(), uuid4()
+        execucao = Execucao.agendar(
+            ordem_id=ordem_id,
+            prioridade=Prioridade.NORMAL,
+            veiculo=None,
+            agora=datetime.now(UTC),
+            agendamento_id=comando,
+        )
+        repo, estoque = ExecucoesEmMemoria(execucao), _estoque_com_reserva(ordem_id)
+        uow = FakeUnitOfWork()
+        IniciarExecucao(repo, estoque, uow).executar(ordem_id, MECANICO)
+        FinalizarExecucao(repo, estoque, uow).executar(ordem_id, MECANICO)
+        assert [(e.tipo, e.causation_id) for e in uow.eventos] == [
+            ("ExecucaoIniciada", comando),
+            ("ExecucaoFinalizada", comando),
+        ]

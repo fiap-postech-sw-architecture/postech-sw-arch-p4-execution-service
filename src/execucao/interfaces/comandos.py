@@ -1,6 +1,6 @@
 """Comandos para a execucao, entregues pelo consumidor (RFC-004 5.3).
 
-O ``dados`` chega validado pelo contrato; o caso de uso roda na sessao e na UoW
+O envelope chega validado pelo contrato; o caso de uso roda na sessao e na UoW
 da mensagem, que gravam a idempotencia e a resposta na mesma transacao.
 """
 
@@ -31,28 +31,35 @@ if TYPE_CHECKING:
 
 
 def agendar_execucao(
-    dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
 ) -> None:
+    dados = envelope["dados"]
     AgendarExecucao(
         ExecucaoSQLAlchemyRepository(sessao),
         FilaDeExecucaoSQLAlchemy(sessao),
         VeiculosSQLAlchemy(sessao),
         EstoqueSQLAlchemyAdapter(sessao),
         uow,
-    ).executar(UUID(dados["ordem_id"]), Prioridade(dados["prioridade"]))
+    ).executar(
+        UUID(dados["ordem_id"]),
+        Prioridade(dados["prioridade"]),
+        agendamento_id=UUID(envelope["id"]),
+    )
 
 
 def cancelar_execucao(
-    dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
 ) -> None:
+    dados = envelope["dados"]
     CancelarExecucao(ExecucaoSQLAlchemyRepository(sessao), uow).executar(
         UUID(dados["ordem_id"])
     )
 
 
 def anonimizar_veiculo(
-    dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
 ) -> None:
+    dados = envelope["dados"]
     AnonimizarVeiculo(RetratosDoVeiculoSQLAlchemy(sessao), uow).executar(
         UUID(dados["veiculo_id"])
     )

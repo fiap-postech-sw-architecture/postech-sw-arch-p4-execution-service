@@ -1,6 +1,6 @@
 """Comandos da saga para o estoque, entregues pelo consumidor (RFC-004 5.3).
 
-O ``dados`` chega validado pelo contrato; o caso de uso roda na sessao e na UoW
+O envelope chega validado pelo contrato; o caso de uso roda na sessao e na UoW
 da mensagem, que gravam a idempotencia e a resposta na mesma transacao.
 """
 
@@ -25,7 +25,10 @@ if TYPE_CHECKING:
     from src.compartilhado.aplicacao.unit_of_work import UnitOfWork
 
 
-def reservar_pecas(dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork) -> None:
+def reservar_pecas(
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+) -> None:
+    dados = envelope["dados"]
     ReservarPecas(
         ItemEstoqueSQLAlchemyRepository(sessao),
         ReservaSQLAlchemyRepository(sessao),
@@ -36,7 +39,10 @@ def reservar_pecas(dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork) -
     )
 
 
-def liberar_reserva(dados: Mapping[str, Any], sessao: Session, uow: UnitOfWork) -> None:
+def liberar_reserva(
+    envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWork
+) -> None:
+    dados = envelope["dados"]
     LiberarReserva(
         ItemEstoqueSQLAlchemyRepository(sessao),
         ReservaSQLAlchemyRepository(sessao),

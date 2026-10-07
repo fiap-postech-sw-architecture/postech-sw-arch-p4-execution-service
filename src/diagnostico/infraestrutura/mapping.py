@@ -53,6 +53,8 @@ diagnosticos_table = Table(
     Column("iniciado_em", DateTime(timezone=True), nullable=True),
     Column("concluido_em", DateTime(timezone=True), nullable=True),
     Column("descartado_em", DateTime(timezone=True), nullable=True),
+    # Id do SolicitarDiagnostico; nulo na lapide.
+    Column("solicitacao_id", Uuid, nullable=True),
     check_de_enum("status", StatusDiagnostico, "ck_diagnosticos_status"),
 )
 
@@ -78,5 +80,6 @@ mapper_registry.map_imperatively(
         "_iniciado_em": diagnosticos_table.c.iniciado_em,
         "_concluido_em": diagnosticos_table.c.concluido_em,
         "_descartado_em": diagnosticos_table.c.descartado_em,
+        "_solicitacao_id": diagnosticos_table.c.solicitacao_id,
     },
 )

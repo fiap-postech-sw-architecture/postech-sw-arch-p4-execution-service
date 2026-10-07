@@ -62,6 +62,8 @@ class Execucao(AggregateRoot):
     _iniciada_em: datetime | None = None
     _finalizada_em: datetime | None = None
     _cancelada_em: datetime | None = None
+    # Id do AgendarExecucao que pos a ordem na fila: causa dos fatos do mecanico.
+    _agendamento_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self._prioridade, Prioridade):
@@ -85,9 +87,14 @@ class Execucao(AggregateRoot):
         prioridade: Prioridade,
         veiculo: Veiculo | None,
         agora: datetime,
+        agendamento_id: UUID | None = None,
     ) -> Execucao:
         return cls(
-            id=ordem_id, _prioridade=prioridade, _veiculo=veiculo, _enfileirada_em=agora
+            id=ordem_id,
+            _prioridade=prioridade,
+            _veiculo=veiculo,
+            _enfileirada_em=agora,
+            _agendamento_id=agendamento_id,
         )
 
     @classmethod
@@ -142,6 +149,10 @@ class Execucao(AggregateRoot):
     @property
     def cancelada_em(self) -> datetime | None:
         return self._cancelada_em
+
+    @property
+    def agendamento_id(self) -> UUID | None:
+        return self._agendamento_id
 
     def iniciada_por(self, mecanico_id: UUID) -> bool:
         return (
