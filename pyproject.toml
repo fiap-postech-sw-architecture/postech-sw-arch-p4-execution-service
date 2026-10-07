@@ -176,6 +176,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 markers = [
     "integracao: testes que sobem PostgreSQL real via testcontainers",
+    "rede: precisa de internet (checksum dos contratos contra o platform); offline: -m 'not rede'",
 ]
 addopts = "--strict-markers --cov --cov-report=term-missing:skip-covered"
 testpaths = ["tests"]
