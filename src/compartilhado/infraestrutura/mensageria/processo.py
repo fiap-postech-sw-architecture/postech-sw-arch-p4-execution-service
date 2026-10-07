@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import signal
 import tempfile
 import threading
@@ -69,7 +70,14 @@ class Periodico:
 
 
 class Backoff:
-    """Espera que dobra a cada falha seguida, ate o teto; volta ao inicio no sucesso."""
+    """Espera antes de reconectar: sorteio entre 0 e o atraso da vez (full jitter).
+
+    O atraso dobra a cada falha seguida, ate o teto, e volta ao inicio no
+    sucesso; o sorteio faz as replicas que perderam o broker juntas nao
+    voltarem juntas. Com o teto de 30 s e a conexao do pika (ate 15 s), o
+    heartbeat do processo fica no maximo cerca de 45 s sem toque, abaixo do
+    minuto que a sonda de liveness tolera.
+    """
 
     def __init__(self, inicial_s: float = 1.0, teto_s: float = 30.0) -> None:
         self._inicial = inicial_s
@@ -77,11 +85,13 @@ class Backoff:
         self._atual = inicial_s
 
     def esperar(self, parar: threading.Event) -> None:
-        """Dorme o atraso da vez; ``parar`` interrompe a espera."""
-        parar.wait(self._atual)
+        """Dorme o sorteio da vez; ``parar`` interrompe a espera."""
+        # Jitter de reconexao, nao segredo: o gerador comum basta.
+        parar.wait(random.uniform(0, self._atual))  # noqa: S311  # nosec B311
         self._atual = min(self._atual * 2, self._teto)
 
     def reiniciar(self) -> None:
+        """Volta ao atraso inicial (conectou ou entregou)."""
         self._atual = self._inicial
 
 

@@ -93,13 +93,31 @@ class _Espera:
         return False
 
 
-def test_backoff_dobra_ate_o_teto_e_reinicia() -> None:
+def test_backoff_sorteia_ate_o_atraso_que_dobra_ate_o_teto_e_reinicia(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sorteios: list[tuple[float, float]] = []
+
+    def metade(inicio: float, fim: float) -> float:
+        sorteios.append((inicio, fim))
+        return fim / 2
+
+    monkeypatch.setattr(processo.random, "uniform", metade)
     backoff, espera = processo.Backoff(1.0, 5.0), _Espera()
     for _ in range(5):
         backoff.esperar(espera)  # type: ignore[arg-type]
     backoff.reiniciar()
     backoff.esperar(espera)  # type: ignore[arg-type]
-    assert espera.esperas == [1.0, 2.0, 4.0, 5.0, 5.0, 1.0]
+    assert sorteios == [(0, 1.0), (0, 2.0), (0, 4.0), (0, 5.0), (0, 5.0), (0, 1.0)]
+    assert espera.esperas == [0.5, 1.0, 2.0, 2.5, 2.5, 0.5]
+
+
+def test_backoff_sem_sorteio_falso_fica_entre_zero_e_o_atraso() -> None:
+    backoff, espera = processo.Backoff(1.0, 4.0), _Espera()
+    for _ in range(50):
+        backoff.esperar(espera)  # type: ignore[arg-type]
+    assert all(0 <= valor <= 4.0 for valor in espera.esperas)
+    assert len(set(espera.esperas)) > 1  # replicas nao voltam juntas
 
 
 def test_sigterm_liga_a_parada() -> None:
