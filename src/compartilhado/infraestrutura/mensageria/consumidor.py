@@ -14,7 +14,8 @@ juntos ou nada). Desfecho:
 - erro transitorio (banco, rede, dependencia fora): copia em ``pytstop.retry``,
   sem ``expiration``, com ``x-tentativa`` + 1 e a routing key da fila de retry do
   nivel da nova tentativa (``<fila>.retry.1s`` ate ``.300s``, cujo TTL devolve a
-  copia a fila), confirmada pelo broker antes do ack da original;
+  copia a fila), confirmada pelo broker antes do ack da original; copia sem rota
+  ou com nack leva a original para a DLQ;
 - erro permanente (contrato, tipo, versao, origem, dado recusado pelo dominio
   ou erro nao classificado) ou falha depois da quinta copia: ``basic_reject``
   sem requeue (DLQ).
@@ -32,7 +33,7 @@ from uuid import UUID
 
 import structlog
 from opentelemetry.trace import SpanKind, StatusCode
-from pika.exceptions import AMQPError, ConsumerCancelled
+from pika.exceptions import AMQPError, ConsumerCancelled, NackError, UnroutableError
 from prometheus_client import Counter
 from sqlalchemy import delete, func
 from sqlalchemy.exc import (
@@ -243,11 +244,13 @@ class Consumidor:
             attributes={k: v for k, v in atributos.items() if v is not None},
         ) as span:
             resultado, envelope, tentativa = self._processar(props, corpo)
+            if resultado is Resultado.RETRY and envelope is not None:
+                resultado = self._nova_tentativa(
+                    canal, envelope, headers, corpo, tentativa + 1
+                )
             span.set_attribute("pytstop.resultado", resultado.value)
             if resultado in {Resultado.RETRY, Resultado.DLQ}:
                 span.set_status(StatusCode.ERROR, resultado.value)
-            if resultado is Resultado.RETRY and envelope is not None:
-                self._nova_tentativa(canal, envelope, headers, corpo, tentativa + 1)
             if resultado is Resultado.DLQ:
                 canal.basic_reject(entrega.delivery_tag, requeue=False)
             else:
@@ -369,27 +372,38 @@ class Consumidor:
         headers: Mapping[str, Any],
         corpo: bytes,
         tentativa: int,
-    ) -> None:
-        """Copia na fila de retry do nivel; sem confirmacao, a original fica sem ack.
+    ) -> Resultado:
+        """Copia na fila de retry do nivel, confirmada antes do ack da original.
+
+        Copia devolvida (sem rota) ou recusada com nack: a original vai para a
+        DLQ (``Resultado.DLQ``), nunca recebe ack sem copia.
 
         Raises:
-            AMQPError: copia sem rota, recusada (o canal fecha) ou broker fora; o
-                laco reconecta com backoff e o broker reentrega a original.
+            AMQPError: canal fechado pelo broker (permissao ou fila de retry
+                ausente) ou conexao perdida; o laco reconecta com backoff e o
+                broker reentrega a original.
         """
+        fila = NIVEIS_DE_RETRY[tentativa - 1]
         contexto = {
             k: v for k, v in headers.items() if k in {"traceparent", "tracestate"}
         }
-        canal.basic_publish(
-            exchange=EXCHANGE_RETRY,
-            routing_key=NIVEIS_DE_RETRY[tentativa - 1],
-            body=corpo,
-            properties=propriedades(
-                envelope,
-                usuario=self._usuario,
-                headers={**contexto, "x-tentativa": tentativa},
-            ),
-            mandatory=True,
-        )
+        try:
+            canal.basic_publish(
+                exchange=EXCHANGE_RETRY,
+                routing_key=fila,
+                body=corpo,
+                properties=propriedades(
+                    envelope,
+                    usuario=self._usuario,
+                    headers={**contexto, "x-tentativa": tentativa},
+                ),
+                mandatory=True,
+            )
+        except (UnroutableError, NackError) as exc:
+            # Sem como reagendar: a DLQ guarda a original para o redrive.
+            _log.error("retry_copy_refused", fila=fila, error=type(exc).__name__)
+            return Resultado.DLQ
+        return Resultado.RETRY
 
     def _limpar_processadas_antigas(self) -> None:
         agora = time.monotonic()

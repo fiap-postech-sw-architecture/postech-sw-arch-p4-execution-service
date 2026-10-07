@@ -457,6 +457,36 @@ def test_copia_vai_para_a_fila_de_retry_do_nivel_sem_expiration(
     assert broker.contar("execucao.comandos") == 0  # a original recebeu ack
 
 
+def test_copia_de_retry_sem_rota_leva_a_original_para_a_dlq(
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    outbox: Callable[[], list[dict[str, Any]]],
+) -> None:
+    # Sem a fila do primeiro nivel ligada, a copia volta do broker (mandatory):
+    # a original nao leva ack sem copia, vai para a DLQ.
+    _criar_item(engine, "PEC-VELA", 5)
+    nivel = NIVEIS_DE_RETRY[0]
+    comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+    handler = _FalhaTransitoria(1, reservar_pecas)
+    antes = consumidas("ReservarPecas", "dlq")
+    with broker.canal() as canal:
+        canal.queue_unbind(nivel, "pytstop.retry", nivel)
+    try:
+        with EmSegundoPlano(consumidor({"ReservarPecas": handler})):
+            broker.publicar_comando(comando)
+            _esperar_consumo("ReservarPecas", "dlq", antes)
+    finally:
+        with broker.canal() as canal:
+            canal.queue_bind(nivel, "pytstop.retry", routing_key=nivel)
+
+    props, corpo = esperar_ate(lambda: broker.pegar("execucao.comandos.dlq"))
+    assert json.loads(corpo) == comando
+    assert "x-tentativa" not in (props.headers or {})
+    assert handler.chamadas == 1
+    assert (outbox(), _saldo(engine, "PEC-VELA")) == ([], (5, 0))
+
+
 def test_chave_de_retry_fora_das_filas_de_atraso_e_recusada_pelo_broker(
     broker: Broker,
 ) -> None:

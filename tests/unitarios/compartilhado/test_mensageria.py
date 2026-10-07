@@ -19,7 +19,12 @@ import pytest
 import structlog
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from pika.exceptions import ChannelClosedByBroker
+from pika.exceptions import (
+    ChannelClosedByBroker,
+    NackError,
+    StreamLostError,
+    UnroutableError,
+)
 from prometheus_client import REGISTRY
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -203,18 +208,28 @@ def test_configurar_telemetria_instala_o_provider_do_processo(
 
 
 class _Canal:
-    def __init__(self) -> None:
+    """Canal falso; ``passos`` registra a ordem de publish, ack e reject."""
+
+    def __init__(self, erro_na_copia: Exception | None = None) -> None:
         self.acks: list[int] = []
         self.rejeicoes: list[tuple[int, bool]] = []
         self.publicadas: list[dict[str, Any]] = []
+        self.passos: list[str] = []
+        self._erro_na_copia = erro_na_copia
 
     def basic_ack(self, delivery_tag: int) -> None:
+        self.passos.append("ack")
         self.acks.append(delivery_tag)
 
     def basic_reject(self, delivery_tag: int, requeue: bool) -> None:
+        self.passos.append("reject")
         self.rejeicoes.append((delivery_tag, requeue))
 
     def basic_publish(self, **kwargs: Any) -> None:
+        # Com confirms, o basic_publish so volta depois da confirmacao do broker.
+        self.passos.append("copia")
+        if self._erro_na_copia is not None:
+            raise self._erro_na_copia
         self.publicadas.append(kwargs)
 
 
@@ -306,8 +321,9 @@ def _consumir(
     headers: dict[str, Any] | None = None,
     transacoes: _Transacoes | None = None,
     tipo: str = "ReservarPecas",
+    canal: _Canal | None = None,
 ) -> _Canal:
-    canal = _Canal()
+    canal = canal or _Canal()
     props = pika.BasicProperties(user_id=user_id, type=tipo, headers=headers)
     _consumidor(handler, transacoes)._ao_receber(canal, _Entrega(), props, corpo)  # type: ignore[arg-type]
     return canal
@@ -379,7 +395,40 @@ def test_erro_transitorio_publica_copia_no_primeiro_nivel_e_da_ack(
     assert props.headers == {"traceparent": traceparent, "x-tentativa": 1}
     assert props.user_id == "execucao"
     assert props.message_id == json.loads(_COMANDO)["id"]
-    assert canal.acks == [7]
+    # A original so recebe ack depois da copia confirmada.
+    assert canal.passos == ["copia", "ack"]
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(UnroutableError([]), id="sem-rota"),
+        pytest.param(NackError([]), id="nack"),
+    ],
+)
+def test_copia_de_retry_recusada_leva_a_original_para_a_dlq(erro: Exception) -> None:
+    antes = _consumidas("ReservarPecas", "dlq")
+    canal = _consumir(_Handler(OSError()), canal=_Canal(erro_na_copia=erro))
+    assert canal.passos == ["copia", "reject"]
+    assert (canal.rejeicoes, canal.acks) == ([(7, False)], [])
+    assert _consumidas("ReservarPecas", "dlq") == antes + 1
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(ChannelClosedByBroker(403, "ACCESS_REFUSED"), id="recusada-403"),
+        pytest.param(StreamLostError("caiu"), id="broker-caiu"),
+    ],
+)
+def test_copia_de_retry_sem_canal_deixa_a_original_sem_ack_e_sem_reject(
+    erro: Exception,
+) -> None:
+    # Canal fechado ou conexao perdida: a original volta na reconexao.
+    canal = _Canal(erro_na_copia=erro)
+    with pytest.raises(type(erro)):
+        _consumir(_Handler(OSError()), canal=canal)
+    assert (canal.acks, canal.rejeicoes) == ([], [])
 
 
 @pytest.mark.parametrize(
