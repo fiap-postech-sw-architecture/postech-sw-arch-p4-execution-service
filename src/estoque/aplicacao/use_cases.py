@@ -228,7 +228,8 @@ class ReservarPecas:
     def _responder_de_novo(self, existente: Reserva) -> None:
         if existente.status in _RESERVA_ENCERRADA:
             _log.info(
-                "late_command_discarded",
+                "command_ignored",
+                codigo="COMANDO_ATRASADO",
                 comando="ReservarPecas",
                 correlation_id=str(existente.ordem_id),
                 status=existente.status,

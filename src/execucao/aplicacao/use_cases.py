@@ -114,7 +114,8 @@ class AgendarExecucao:
                 self._repo.salvar(execucao)
             elif execucao.status is not StatusExecucao.AGUARDANDO:
                 _log.info(
-                    "late_command_discarded",
+                    "command_ignored",
+                    codigo="COMANDO_ATRASADO",
                     comando="AgendarExecucao",
                     correlation_id=str(ordem_id),
                     status=execucao.status,

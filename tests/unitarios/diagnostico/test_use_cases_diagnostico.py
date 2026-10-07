@@ -8,6 +8,7 @@ import structlog
 from structlog.testing import capture_logs
 
 import src.compartilhado.aplicacao.responsavel as responsavel
+import src.diagnostico.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     DependenciaIndisponivelException,
@@ -91,19 +92,27 @@ class TestRegistrarSolicitacao:
         assert resultado.status is StatusDiagnostico.EM_ANDAMENTO
         assert uow.descartado
 
-    def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(self) -> None:
+    def test_solicitacao_atrasada_encontra_a_lapide_e_e_descartada(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         repo = DiagnosticosEmMemoria()
         ordem_id = uuid4()
         DescartarDiagnostico(repo, FakeTransacaoDoComando()).executar(ordem_id)
         lapide = repo.diagnosticos[ordem_id]
         uow = FakeTransacaoDoComando()
 
-        resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
-            ordem_id,
-            VEICULO,
-            "Barulho no motor",
-            solicitacao_id=uuid4(),
-        )
+        with capture_logs() as logs:
+            resultado = RegistrarSolicitacaoDeDiagnostico(repo, uow).executar(
+                ordem_id,
+                VEICULO,
+                "Barulho no motor",
+                solicitacao_id=uuid4(),
+            )
+
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "SolicitarDiagnostico")
+        ]
 
         assert resultado is lapide
         assert (resultado.status, resultado.veiculo) == (

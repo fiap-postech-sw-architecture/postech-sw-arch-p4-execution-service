@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
+import src.estoque.aplicacao.use_cases as casos_de_uso
 from src.compartilhado.aplicacao.outbox import dados_do_evento
 from src.compartilhado.dominio.exceptions import (
     EntidadeDuplicadaException,
@@ -231,17 +234,24 @@ class TestReservarPecas:
         ],
     )
     def test_comando_atrasado_apos_compensacao_ou_baixa_e_descartado(
-        self, encerrar: Callable[[Reserva, datetime], object]
+        self,
+        encerrar: Callable[[Reserva, datetime], object],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         uc, itens, reservas, uow = self._cenario(_item(VELA, 5))
         ordem_id = uuid4()
         reserva = Reserva.criar(ordem_id=ordem_id, itens=[], agora=datetime.now(UTC))
         encerrar(reserva, datetime.now(UTC))
         reservas.salvar(reserva)
 
-        assert uc.executar(ordem_id, [ItemReserva(VELA, 2)]) is reserva
+        with capture_logs() as logs:
+            assert uc.executar(ordem_id, [ItemReserva(VELA, 2)]) is reserva
         assert itens.itens[VELA].quantidade_reservada == 0
         assert (uow.eventos, uow.descartado) == ([], True)
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "ReservarPecas")
+        ]
 
     def test_comando_invalido_falha_antes_de_travar(self) -> None:
         uc, itens, _, uow = self._cenario(_item(VELA, 5))

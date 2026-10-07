@@ -155,18 +155,26 @@ class TestAgendar:
             )
         ]
 
-    def test_reenvio_atrasado_apos_inicio_e_ignorado(self) -> None:
+    def test_reenvio_atrasado_apos_inicio_e_ignorado(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Descompasso de estado (ADR-036): ack com command_ignored e o codigo.
+        monkeypatch.setattr(casos_de_uso, "_log", structlog.get_logger("teste"))
         existente = _agendada()
         existente.iniciar(MECANICO, datetime.now(UTC))
         uow = FakeTransacaoDoComando()
-        AgendarExecucao(
-            ExecucoesEmMemoria(existente),
-            FilaFixa(),
-            VeiculosEmMemoria(),
-            _estoque_com_reserva(existente.ordem_id),
-            uow,
-        ).executar(existente.ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
+        with capture_logs() as logs:
+            AgendarExecucao(
+                ExecucoesEmMemoria(existente),
+                FilaFixa(),
+                VeiculosEmMemoria(),
+                _estoque_com_reserva(existente.ordem_id),
+                uow,
+            ).executar(existente.ordem_id, Prioridade.NORMAL, agendamento_id=uuid4())
         assert (uow.eventos, uow.descartado) == ([], True)
+        assert [(log["event"], log["codigo"], log["comando"]) for log in logs] == [
+            ("command_ignored", "COMANDO_ATRASADO", "AgendarExecucao")
+        ]
 
     def test_agendamento_atrasado_encontra_a_lapide_e_e_descartado(self) -> None:
         repo = ExecucoesEmMemoria()

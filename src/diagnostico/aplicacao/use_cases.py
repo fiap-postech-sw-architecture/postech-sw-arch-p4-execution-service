@@ -89,7 +89,8 @@ class RegistrarSolicitacaoDeDiagnostico:
             if existente is not None:
                 if existente.status in _DIAGNOSTICO_ENCERRADO:
                     _log.info(
-                        "late_command_discarded",
+                        "command_ignored",
+                        codigo="COMANDO_ATRASADO",
                         comando="SolicitarDiagnostico",
                         correlation_id=str(ordem_id),
                         status=existente.status,
