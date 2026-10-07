@@ -134,6 +134,7 @@ _TRANSITORIOS: Final = (
     DependenciaIndisponivelException,
     EntidadeDuplicadaException,
 )
+_ERROS_DO_BANCO: Final = (OperationalError, InterfaceError, PoolTimeoutError)
 # Erro que repetir nao muda, direto para a DLQ: dado recusado pelo dominio ou
 # pela dependencia. O resto da ``DomainException`` e estado (comando ignorado) e
 # qualquer erro nao classificado tambem vai para a DLQ.
@@ -191,16 +192,26 @@ class Consumidor:
         self._conexao: BlockingConnection | None = None
         self._cancelado = False
         self._limpeza = Periodico()
+        # Um handler falhou com erro de banco: antes de consumir de novo, o
+        # laco confere se o banco responde.
+        self._banco_suspeito = False
 
     def executar(self, parar: threading.Event) -> None:
         """Laco principal: a mensagem em curso termina antes de ``parar`` valer.
 
         Broker fora, copia de retry recusada (o canal fecha) ou assinatura
-        cancelada pelo broker: loga, fecha e assina de novo com backoff.
+        cancelada pelo broker: loga, fecha e assina de novo com backoff. Banco
+        fora (um handler falhou com erro de banco e o ``SELECT 1`` nao
+        responde): para de consumir, sem a assinatura e sem a prontidao, ate o
+        banco voltar; as mensagens esperam na fila em vez de gastar a escada de
+        retry.
         """
         try:
             while not parar.is_set():
                 self._sinais.heartbeat()
+                if self._banco_suspeito and not self._banco_responde():
+                    self._pausar_sem_banco(parar)
+                    continue
                 try:
                     self._consumir()
                     self._backoff.reiniciar()
@@ -217,6 +228,22 @@ class Consumidor:
             fechar(self._conexao)
             self._conexao = None
             self._sinais.indisponivel()
+
+    def _banco_responde(self) -> bool:
+        try:
+            with self._engine.connect() as conexao:
+                conexao.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return False
+        self._banco_suspeito = False
+        return True
+
+    def _pausar_sem_banco(self, parar: threading.Event) -> None:
+        self._sinais.indisponivel()
+        _log.warning("consumer_database_unavailable")
+        fechar(self._conexao)
+        self._conexao = None
+        self._backoff.esperar(parar)
 
     def _consumir(self) -> None:
         if self._conexao is None:
@@ -347,6 +374,8 @@ class Consumidor:
         try:
             return self._rodar_handler(envelope)
         except _TRANSITORIOS as exc:
+            if isinstance(exc, _ERROS_DO_BANCO):
+                self._banco_suspeito = True
             return self._falha_transitoria(exc, tentativa)
         except _PERMANENTES as exc:
             # So a classe: a mensagem pode ecoar o dado recebido.

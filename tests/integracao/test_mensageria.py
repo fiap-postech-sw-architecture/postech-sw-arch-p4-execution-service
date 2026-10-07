@@ -38,6 +38,7 @@ from src.compartilhado.infraestrutura.mensageria.consumidor import (
 )
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, validar
 from src.compartilhado.infraestrutura.mensageria.processo import (
+    Backoff,
     SinaisDoProcesso,
 )
 from src.compartilhado.infraestrutura.mensageria.relay import Relay
@@ -1102,6 +1103,41 @@ def test_limpeza_que_falha_nao_derruba_o_consumidor(
     with EmSegundoPlano(consumidor):
         esperar_ate((tmp_path / "pronto").exists)
     assert "processed_messages_cleanup_failed" in log_capturado.getvalue()
+
+
+def test_banco_fora_para_o_consumo_em_vez_de_gastar_a_escada_de_retry(
+    broker: Broker, tmp_path: Path, log_capturado: io.StringIO
+) -> None:
+    # Com o banco fora, cada comando falharia nas cinco filas de retry e iria
+    # para a DLQ em 6 min: o consumidor para de consumir e sai da prontidao,
+    # e a copia da primeira falha espera na fila.
+    morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
+    consumidor = Consumidor(
+        morto,
+        broker.url("execucao"),
+        HANDLERS,
+        SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto"),
+        Backoff(0.05, 0.1),
+    )
+    antes = consumidas("ReservarPecas", "retry")
+    with EmSegundoPlano(consumidor):
+        esperar_ate((tmp_path / "pronto").exists)
+        broker.publicar_comando(
+            envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+        )
+        esperar_ate(lambda: "consumer_database_unavailable" in log_capturado.getvalue())
+        esperar_ate(lambda: broker.contar("execucao.comandos") == 1)
+        vistas = log_capturado.getvalue().count("consumer_database_unavailable")
+        # Varias conferencias do banco depois, a copia segue na fila.
+        esperar_ate(
+            lambda: (
+                log_capturado.getvalue().count("consumer_database_unavailable")
+                >= vistas + 3
+            )
+        )
+        assert broker.contar("execucao.comandos") == 1
+        assert not (tmp_path / "pronto").exists()
+    assert consumidas("ReservarPecas", "retry") == antes + 1
 
 
 def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
