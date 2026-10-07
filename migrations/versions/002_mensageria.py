@@ -8,8 +8,9 @@ A outbox passa a guardar o envelope inteiro do contrato (RFC-004, secao 5.2),
 o destino (exchange e routing key) e o ``traceparent``/``tracestate`` de quem
 gravou. Linhas gravadas antes desta revisao nunca foram publicadas (nao havia
 relay): ganham o envelope montado das colunas antigas, com ``causation_id``
-nulo, e seguem para o relay. Diagnostico e execucao guardam o id do comando que
-abriu o fluxo, causa dos fatos que o mecanico gera pela API.
+nulo, e seguem para o relay. Diagnostico e execucao guardam o id e o contexto
+de trace do comando que abriu o fluxo: causa e pai dos fatos que o mecanico gera
+pela API.
 """
 
 from __future__ import annotations
@@ -79,6 +80,9 @@ def upgrade() -> None:
     )
     op.add_column("diagnosticos", sa.Column("solicitacao_id", sa.Uuid()))
     op.add_column("execucoes", sa.Column("agendamento_id", sa.Uuid()))
+    for tabela in ("diagnosticos", "execucoes"):
+        op.add_column(tabela, sa.Column("traceparent", sa.Text(), nullable=True))
+        op.add_column(tabela, sa.Column("tracestate", sa.Text(), nullable=True))
     # AnonimizarVeiculo acha os retratos do veiculo sem varrer as tabelas.
     for tabela in ("diagnosticos", "execucoes"):
         op.create_index(
@@ -89,6 +93,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     for tabela in ("execucoes", "diagnosticos"):
         op.drop_index(f"ix_{tabela}_veiculo_id", table_name=tabela)
+        op.drop_column(tabela, "tracestate")
+        op.drop_column(tabela, "traceparent")
     op.drop_column("execucoes", "agendamento_id")
     op.drop_column("diagnosticos", "solicitacao_id")
     op.drop_table("mensagens_processadas")

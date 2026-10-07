@@ -441,6 +441,63 @@ def test_anonimizar_troca_so_o_veiculo_pedido_inclusive_nas_mensagens_guardadas(
     assert (anonimizado["retratos"], anonimizado["mensagens"]) == (2, 3)
 
 
+def test_acao_do_mecanico_sai_no_trace_do_comando_que_abriu_o_passo(
+    api: TestClient,
+    autenticar: Callable[..., dict[str, str]],
+    broker: Broker,
+    engine: Engine,
+    consumidor: Callable[..., Consumidor],
+    relay: Callable[..., Relay],
+    outbox: Callable[[], list[dict[str, Any]]],
+    spans: InMemorySpanExporter,
+) -> None:
+    # O diagnostico guarda o contexto do consumo do SolicitarDiagnostico; o
+    # DiagnosticoIniciado, gravado pela API, sai como filho dele e o relay o
+    # publica no mesmo trace: a saga nao parte na espera pelo mecanico.
+    ordem_id = uuid4()
+    solicitacao = envelope_de_comando(
+        "SolicitarDiagnostico",
+        {
+            "ordem_id": str(ordem_id),
+            "veiculo_id": str(VEICULO_ID),
+            "veiculo": {
+                "placa": "BRA2E19",
+                "marca": "VW",
+                "modelo": "Gol",
+                "ano": 2019,
+            },
+            "descricao_problema": "Freio chiando",
+        },
+    )
+    antes = consumidas("SolicitarDiagnostico", "processada")
+    with EmSegundoPlano(consumidor()):
+        broker.publicar_comando(solicitacao)
+        _esperar_consumo("SolicitarDiagnostico", "processada", antes)
+    inicio = api.post(
+        f"/api/v1/diagnosticos/{ordem_id}/inicio",
+        headers=autenticar("mecanico", uuid4()),
+    )
+    assert inicio.status_code == 200, inicio.text
+    with EmSegundoPlano(relay()):
+        esperar_ate(lambda: outbox()[0]["status"] == "entregue")
+
+    consumo = _span(spans, "process SolicitarDiagnostico")
+    passo = _span(spans, "iniciar diagnostico")
+    publicacao = _span(spans, "publish DiagnosticoIniciado")
+    with engine.connect() as conexao:
+        guardado = conexao.execute(
+            text("SELECT traceparent FROM diagnosticos WHERE ordem_id = :o"),
+            {"o": ordem_id},
+        ).scalar_one()
+    assert guardado == _cabecalho_w3c(consumo)
+    assert passo.parent.span_id == consumo.context.span_id
+    assert outbox()[0]["traceparent"] == _cabecalho_w3c(passo)
+    assert publicacao.parent.span_id == passo.context.span_id
+    assert {s.context.trace_id for s in (consumo, passo, publicacao)} == {
+        consumo.context.trace_id
+    }
+
+
 def test_comando_que_nao_corresponde_ao_estado_e_ignorado_sem_dlq(
     broker: Broker,
     engine: Engine,

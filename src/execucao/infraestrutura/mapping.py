@@ -3,6 +3,9 @@ from __future__ import annotations
 from sqlalchemy import Column, DateTime, Enum, Index, Table, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
+from src.compartilhado.infraestrutura.rastreamento import (
+    colunas_do_contexto_de_espera,
+)
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
     check_de_enum,
     retrato_do_veiculo,
@@ -36,6 +39,8 @@ execucoes_table = Table(
     Column("cancelada_em", DateTime(timezone=True), nullable=True),
     # Id do AgendarExecucao; nulo na lapide.
     Column("agendamento_id", Uuid, nullable=True),
+    # Contexto de trace do comando que pos a ordem na fila de execucao.
+    *colunas_do_contexto_de_espera(),
     check_de_enum("status", StatusExecucao, "ck_execucoes_status"),
     check_de_enum("prioridade", Prioridade, "ck_execucoes_prioridade"),
 )
@@ -48,6 +53,8 @@ Index("ix_execucoes_status", execucoes_table.c.status)
 mapper_registry.map_imperatively(
     Execucao,
     execucoes_table,
+    # O contexto de trace nao e do agregado: so a tabela o guarda.
+    exclude_properties=["traceparent", "tracestate"],
     properties={
         "id": execucoes_table.c.ordem_id,
         "_status": execucoes_table.c.status,

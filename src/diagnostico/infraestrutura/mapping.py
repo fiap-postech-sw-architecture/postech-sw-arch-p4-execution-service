@@ -5,6 +5,9 @@ from typing import Any
 from sqlalchemy import Column, DateTime, Enum, Index, Table, Text, Uuid
 
 from src.compartilhado.infraestrutura.database import mapper_registry, metadata
+from src.compartilhado.infraestrutura.rastreamento import (
+    colunas_do_contexto_de_espera,
+)
 from src.compartilhado.infraestrutura.tipos_sqlalchemy import (
     JsonDeDominio,
     check_de_enum,
@@ -55,6 +58,8 @@ diagnosticos_table = Table(
     Column("descartado_em", DateTime(timezone=True), nullable=True),
     # Id do SolicitarDiagnostico; nulo na lapide.
     Column("solicitacao_id", Uuid, nullable=True),
+    # Contexto de trace do comando que pos o diagnostico na fila do mecanico.
+    *colunas_do_contexto_de_espera(),
     check_de_enum("status", StatusDiagnostico, "ck_diagnosticos_status"),
 )
 
@@ -73,6 +78,8 @@ Index(
 mapper_registry.map_imperatively(
     Diagnostico,
     diagnosticos_table,
+    # O contexto de trace nao e do agregado: so a tabela o guarda.
+    exclude_properties=["traceparent", "tracestate"],
     properties={
         "id": diagnosticos_table.c.ordem_id,
         "_status": diagnosticos_table.c.status,

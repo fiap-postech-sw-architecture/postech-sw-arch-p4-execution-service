@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from src.compartilhado.aplicacao.responsavel import registrar_auditoria
+from src.compartilhado.infraestrutura.rastreamento import retomando
 from src.compartilhado.interfaces.autenticacao import (
     Papel,
     UsuarioAutenticado,
@@ -16,6 +17,7 @@ from src.compartilhado.interfaces.autenticacao import (
 )
 from src.compartilhado.interfaces.dependencies import obter_session
 from src.compartilhado.interfaces.schemas import Limite, Offset, Pagina, respostas
+from src.execucao.infraestrutura.mapping import execucoes_table
 from src.execucao.interfaces.dependencies import (
     obter_finalizar_execucao,
     obter_iniciar_execucao,
@@ -60,7 +62,8 @@ def iniciar_execucao(
     Repetir pelo mesmo mecanico e idempotente. O admin tambem pode iniciar (vira
     o responsavel), com log de auditoria.
     """
-    execucao = obter_iniciar_execucao(session).executar(ordem_id, usuario.id)
+    with retomando(session, execucoes_table, ordem_id, "iniciar execucao"):
+        execucao = obter_iniciar_execucao(session).executar(ordem_id, usuario.id)
     if usuario.papel is Papel.ADMIN:
         registrar_auditoria("iniciar_execucao", ator_id=usuario.id, alvo=str(ordem_id))
     return ExecucaoResponse.model_validate(execucao)
@@ -78,7 +81,8 @@ def finalizar_execucao(
 
     So o mecanico que iniciou finaliza; o admin finaliza em nome dele.
     """
-    execucao = obter_finalizar_execucao(session).executar(
-        ordem_id, usuario.id, pelo_admin=usuario.papel is Papel.ADMIN
-    )
+    with retomando(session, execucoes_table, ordem_id, "finalizar execucao"):
+        execucao = obter_finalizar_execucao(session).executar(
+            ordem_id, usuario.id, pelo_admin=usuario.papel is Papel.ADMIN
+        )
     return ExecucaoResponse.model_validate(execucao)
