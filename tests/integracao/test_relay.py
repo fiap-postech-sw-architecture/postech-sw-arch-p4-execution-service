@@ -555,6 +555,24 @@ def broker_falso(monkeypatch: pytest.MonkeyPatch) -> type[_BrokerFalso]:
     return _BrokerFalso
 
 
+class _BackoffAteLiberar(Backoff):
+    """Reconexao so quando o teste liberar: a janela entre a queda e a volta.
+
+    O ``Backoff`` real sorteia a espera entre 0 e o atraso (full jitter), e uma
+    espera curta fecharia a janela antes de o teste conferir as linhas.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.esperando = threading.Event()
+        self.liberado = threading.Event()
+
+    def esperar(self, parar: threading.Event) -> None:
+        self.esperando.set()
+        while not self.liberado.is_set() and not parar.wait(0.05):
+            pass
+
+
 def _relay_falso(
     engine: Engine, sinais: Callable[[str], SinaisDoProcesso], nome: str = "relay"
 ) -> Relay:
@@ -572,15 +590,16 @@ def test_queda_do_broker_no_meio_do_lote_devolve_as_linhas_sem_gastar_tentativa(
 ) -> None:
     for _ in range(3):
         _gravar(engine)
-    relay = Relay(
-        engine, _URL_FALSA, sinais("relay"), poll_s=0.1, backoff=Backoff(2.0, 2.0)
-    )
+    backoff = _BackoffAteLiberar()
+    relay = Relay(engine, _URL_FALSA, sinais("relay"), poll_s=0.1, backoff=backoff)
     processo = EmSegundoPlano(relay)
     # Parada pedida no meio do lote: o relay termina o lote e nao pega outro.
     broker_falso.ao_publicar.append(processo.parar.set)
     with processo:
-        esperar_ate(lambda: broker_falso.conexoes == 1)
-        esperar_ate(lambda: not (tmp_path / "relay-pronto").exists())
+        # No backoff, a queda ja devolveu as linhas e tirou a prontidao.
+        esperar_ate(backoff.esperando.is_set)
+        assert not (tmp_path / "relay-pronto").exists()
+        assert broker_falso.conexoes == 1
         with engine.connect() as conexao:
             devolvidas = conexao.execute(
                 text(
@@ -590,6 +609,7 @@ def test_queda_do_broker_no_meio_do_lote_devolve_as_linhas_sem_gastar_tentativa(
             ).scalar_one()
         # Lease devolvido e nenhuma tentativa gasta: valem de novo ja.
         assert devolvidas == 3
+        backoff.liberado.set()
         esperar_ate(lambda: len(broker_falso.publicadas) == 3)
 
     assert [(linha["status"], linha["tentativas"]) for linha in outbox()] == [
