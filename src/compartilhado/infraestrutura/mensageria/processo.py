@@ -40,12 +40,15 @@ class SinaisDoProcesso:
         return cls(base / f"{nome}-heartbeat", base / f"{nome}-pronto")
 
     def heartbeat(self) -> None:
+        """Toca o arquivo de liveness: o laco do processo esta girando."""
         self._heartbeat.touch()
 
     def pronto(self) -> None:
+        """Cria o arquivo de readiness: as conexoes estao de pe."""
         self._pronto.touch()
 
     def indisponivel(self) -> None:
+        """Apaga o arquivo de readiness: uma dependencia caiu ou o processo para."""
         self._pronto.unlink(missing_ok=True)
 
 

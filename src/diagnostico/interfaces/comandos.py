@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 def solicitar_diagnostico(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``SolicitarDiagnostico``: poe a ordem na fila do mecanico, sem resposta."""
     dados = envelope["dados"]
     retrato = dados["veiculo"]
     RegistrarSolicitacaoDeDiagnostico(
@@ -49,6 +50,7 @@ def solicitar_diagnostico(
 def descartar_diagnostico(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``DescartarDiagnostico`` (compensacao): descarta e responde."""
     dados = envelope["dados"]
     DescartarDiagnostico(DiagnosticoSQLAlchemyRepository(sessao), uow).executar(
         UUID(dados["ordem_id"])

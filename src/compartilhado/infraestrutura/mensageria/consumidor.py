@@ -148,6 +148,14 @@ type HandlerDeComando = Callable[
 
 
 class Resultado(StrEnum):
+    """Desfecho de cada mensagem: o label ``resultado`` da metrica de consumo.
+
+    ``processada`` (efeito aplicado), ``duplicada`` (``id`` ja processado),
+    ``ignorada`` (comando fora do estado, ou sem nada a mudar: ack sem efeito),
+    ``retry`` (copia confirmada na fila de retry) e ``dlq`` (reject sem
+    requeue).
+    """
+
     PROCESSADA = "processada"
     DUPLICADA = "duplicada"
     IGNORADA = "ignorada"

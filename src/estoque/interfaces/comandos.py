@@ -55,6 +55,7 @@ def reservar_pecas(
 def liberar_reserva(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``LiberarReserva`` (compensacao): devolve as pecas e responde."""
     dados = envelope["dados"]
     LiberarReserva(
         ItemEstoqueSQLAlchemyRepository(sessao),

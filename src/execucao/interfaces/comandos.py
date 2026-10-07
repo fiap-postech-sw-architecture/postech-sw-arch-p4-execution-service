@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 def agendar_execucao(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``AgendarExecucao``: poe a ordem na fila de execucao e responde a posicao."""
     dados = envelope["dados"]
     AgendarExecucao(
         ExecucaoSQLAlchemyRepository(sessao),
@@ -55,6 +56,7 @@ def agendar_execucao(
 def cancelar_execucao(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``CancelarExecucao`` (compensacao): tira da fila e responde."""
     dados = envelope["dados"]
     CancelarExecucao(ExecucaoSQLAlchemyRepository(sessao), uow).executar(
         UUID(dados["ordem_id"])
@@ -64,6 +66,7 @@ def cancelar_execucao(
 def anonimizar_veiculo(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
+    """``AnonimizarVeiculo`` (LGPD, sem resposta): apaga as copias do titular."""
     dados = envelope["dados"]
     AnonimizarVeiculo(
         ExecucaoSQLAlchemyRepository(sessao),
