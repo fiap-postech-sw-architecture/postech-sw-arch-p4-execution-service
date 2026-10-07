@@ -18,6 +18,11 @@ dependencies = [
     "cryptography>=50.0.1",  # PYSEC-2026-3552 / CVE-2026-69247 antes da 50.0.1
     "anyio>=4.15.1",  # advisory de out/2026 nas versoes anteriores
     "prometheus-client>=0.26.0",
+    "pika>=1.4.4",
+    "jsonschema>=4.26.0",
+    "rfc3339-validator>=0.1.4",
+    "opentelemetry-sdk>=1.45.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1",
 ]
 
 [dependency-groups]
@@ -31,6 +36,7 @@ dev = [
     "mypy>=2.3.1",
     "bandit>=1.9.4",
     "import-linter>=2.14",
+    "types-jsonschema>=4.26.0",
 ]
 
 [tool.uv]
@@ -159,6 +165,11 @@ strict = true
 python_version = "3.14"
 warn_return_any = true
 warn_unused_ignores = true
+
+# pika nao publica tipos (sem py.typed nem stubs mantidos).
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 markers = [

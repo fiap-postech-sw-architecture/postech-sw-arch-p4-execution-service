@@ -16,6 +16,7 @@ from src.compartilhado.infraestrutura.database import (
     criar_session_factory,
 )
 from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
+from tests.integracao.broker import Broker, subir_broker
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -26,7 +27,9 @@ if TYPE_CHECKING:
 
 RAIZ = Path(__file__).resolve().parents[2]
 BILLING_URL = "http://billing.test"
-_TABELAS = "itens_estoque, reservas, diagnosticos, execucoes, outbox"
+_TABELAS = (
+    "itens_estoque, reservas, diagnosticos, execucoes, outbox, mensagens_processadas"
+)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -101,8 +104,10 @@ def outbox(engine: Engine) -> Callable[[], list[dict[str, Any]]]:
         with engine.connect() as conexao:
             linhas = conexao.execute(
                 text(
-                    "SELECT mensagem_id, tipo, correlation_id, ocorrido_em, dados, "
-                    "status FROM outbox ORDER BY id"
+                    "SELECT mensagem_id, tipo, correlation_id, envelope, "
+                    "envelope -> 'dados' AS dados, exchange, routing_key, "
+                    "traceparent, tracestate, status, tentativas, ultimo_erro "
+                    "FROM outbox ORDER BY id"
                 )
             )
             return [dict(linha._mapping) for linha in linhas]
@@ -147,3 +152,19 @@ def autenticar(emitir_token: Callable[..., str]) -> Callable[..., dict[str, str]
         return {"Authorization": f"Bearer {emitir_token(papel, sub)}"}
 
     return _headers
+
+
+@pytest.fixture(scope="session")
+def _broker_da_sessao() -> Iterator[Broker]:
+    container, broker = subir_broker()
+    try:
+        yield broker
+    finally:
+        container.stop()
+
+
+@pytest.fixture
+def broker(_broker_da_sessao: Broker) -> Iterator[Broker]:
+    """RabbitMQ com a topologia do platform; as filas do servico saem vazias."""
+    yield _broker_da_sessao
+    _broker_da_sessao.esvaziar()

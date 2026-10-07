@@ -17,6 +17,12 @@ import pytest
 import structlog
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
 
@@ -32,6 +38,13 @@ if "DOCKER_HOST" not in os.environ and _SOCKET_COLIMA.exists():
     os.environ.setdefault(
         "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock"
     )
+
+# Provider global do SDK com exportador em memoria, instalado uma vez (o OTel
+# so aceita um por processo): os testes leem os spans de relay e consumidor.
+_SPANS = InMemorySpanExporter()
+_PROVEDOR = TracerProvider()
+_PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
+trace.set_tracer_provider(_PROVEDOR)
 
 KID = "chave-de-teste"
 EMISSOR = "pytstop-os-service"
@@ -165,3 +178,10 @@ def log_capturado() -> Iterator[io.StringIO]:
         root.handlers = handlers_anteriores
         root.setLevel(nivel_anterior)
         structlog.configure(**config_anterior)
+
+
+@pytest.fixture
+def spans() -> InMemorySpanExporter:
+    """Spans terminados durante o teste."""
+    _SPANS.clear()
+    return _SPANS

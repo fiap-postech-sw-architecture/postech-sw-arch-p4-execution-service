@@ -84,6 +84,11 @@ def descrever_erro_de_banco(exc: DBAPIError) -> dict[str, str | None]:
     }
 
 
+def violacao_de_unicidade(exc: IntegrityError) -> bool:
+    """O ``IntegrityError`` veio de uma UNIQUE (ou chave primaria) do banco."""
+    return getattr(exc.orig, "pgcode", None) == _VIOLACAO_DE_UNICIDADE
+
+
 @contextmanager
 def duplicata_vira_excecao_de_dominio(mensagem: str) -> Iterator[None]:
     """``IntegrityError`` de UNIQUE no bloco vira ``EntidadeDuplicadaException``.
@@ -96,6 +101,6 @@ def duplicata_vira_excecao_de_dominio(mensagem: str) -> Iterator[None]:
     try:
         yield
     except IntegrityError as exc:
-        if getattr(exc.orig, "pgcode", None) != _VIOLACAO_DE_UNICIDADE:
+        if not violacao_de_unicidade(exc):
             raise
         raise EntidadeDuplicadaException(mensagem) from exc
