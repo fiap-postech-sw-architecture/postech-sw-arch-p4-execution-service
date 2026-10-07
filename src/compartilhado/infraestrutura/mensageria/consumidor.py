@@ -208,12 +208,12 @@ class Consumidor:
     def executar(self, parar: threading.Event) -> None:
         """Laco principal: a mensagem em curso termina antes de ``parar`` valer.
 
-        Broker fora, copia de retry recusada (o canal fecha) ou assinatura
-        cancelada pelo broker: loga, fecha e assina de novo com backoff. Banco
-        fora (um handler falhou com erro de banco e o ``SELECT 1`` nao
-        responde): para de consumir, sem a assinatura e sem a prontidao, ate o
-        banco voltar; as mensagens esperam na fila em vez de gastar a escada de
-        retry.
+        Broker fora (inclusive o nome dele sem resolucao no DNS), copia de retry
+        recusada (o canal fecha) ou assinatura cancelada pelo broker: sai da
+        prontidao, loga, fecha e assina de novo com backoff. Banco fora (um
+        handler falhou com erro de banco e o ``SELECT 1`` nao responde): para de
+        consumir, sem a assinatura e sem a prontidao, ate o banco voltar; as
+        mensagens esperam na fila em vez de gastar a escada de retry.
         """
         try:
             while not parar.is_set():
@@ -224,7 +224,9 @@ class Consumidor:
                 try:
                     self._consumir()
                     self._backoff.reiniciar()
-                except AMQPError as exc:
+                except (AMQPError, OSError) as exc:
+                    # OSError: o pika nao embrulha o socket.gaierror do nome sem
+                    # resolucao (Service headless do broker sem pod pronto).
                     self._sinais.indisponivel()
                     _log.warning(
                         "consumer_broker_unavailable", error=type(exc).__name__

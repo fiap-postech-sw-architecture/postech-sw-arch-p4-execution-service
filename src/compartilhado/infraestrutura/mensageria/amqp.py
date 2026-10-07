@@ -45,6 +45,8 @@ def abrir_canal(
     Raises:
         AMQPError: broker fora, credencial recusada ou recurso ausente (404) ou
             sem permissao (403); quem chama tenta de novo com backoff.
+        OSError: nome do broker sem resolucao no DNS (``socket.gaierror``, que
+            o pika nao embrulha); tambem broker fora, com backoff.
     """
     parametros = pika.URLParameters(url)
     parametros.heartbeat = _HEARTBEAT_S

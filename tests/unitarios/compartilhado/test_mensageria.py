@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -1051,3 +1052,47 @@ def test_copia_recusada_pelo_broker_reconecta_com_backoff(
     assinaturas, backoff = _rodar_laco(monkeypatch, recusar, tmp_path)
     assert (assinaturas, backoff.esperas) == (2, 1)
     assert '"error": "ChannelClosedByBroker"' in log_capturado.getvalue()
+
+
+def test_nome_do_broker_sem_resolucao_reconecta_com_backoff_fora_da_prontidao(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, log_capturado: io.StringIO
+) -> None:
+    # Sem pod pronto, o Service headless do broker some do DNS (no boot ou
+    # depois de uma queda) e o pika levanta socket.gaierror, um OSError.
+    parar = threading.Event()
+    pronto = tmp_path / "pronto"
+    sem_dns = socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    def cai() -> None:
+        raise StreamLostError("broker caiu")
+
+    roteiro: list[OSError | list[Callable[[], None]]] = [
+        sem_dns,
+        [cai],
+        sem_dns,
+        [parar.set],
+    ]
+
+    def abrir(*_: object, **__: object) -> tuple[_ConexaoFalsa, _CanalFalso]:
+        passo = roteiro.pop(0)
+        if isinstance(passo, OSError):
+            raise passo
+        return _ConexaoFalsa(passo), _CanalFalso()
+
+    prontidao_na_espera: list[bool] = []
+
+    class _BackoffQueVePronto(_BackoffGravado):
+        def esperar(self, parar: threading.Event) -> None:
+            prontidao_na_espera.append(pronto.exists())
+
+    monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
+    Consumidor(
+        _engine_falsa(),
+        _URL,
+        {},
+        processo.SinaisDoProcesso(tmp_path / "hb", pronto),
+        _BackoffQueVePronto(),
+    ).executar(parar)
+    assert roteiro == []
+    assert prontidao_na_espera == [False, False, False]
+    assert log_capturado.getvalue().count('"error": "gaierror"') == 2
