@@ -94,11 +94,13 @@ _DE_VERDADE = {
 @pytest.mark.parametrize(
     ("nome", "url"),
     [
-        *_DEMONSTRACAO.items(),
+        # ids explicitos: o id gerado levaria a URL com a senha ao relatorio.
+        pytest.param("DATABASE_URL", _DEMONSTRACAO["DATABASE_URL"], id="banco"),
+        pytest.param("RABBITMQ_URL", _DEMONSTRACAO["RABBITMQ_URL"], id="broker"),
         pytest.param(
             "RABBITMQ_URL",
             f"amqp://execucao:{_SENHA_DO_BROKER.replace('-', '%2D')}@mq/%2F",
-            id="codificada",
+            id="broker-codificada",
         ),
     ],
 )
@@ -130,7 +132,8 @@ def test_dev_e_test_aceitam_a_senha_de_demonstracao(
 @pytest.mark.parametrize(
     ("nome", "url"),
     [
-        *_DE_VERDADE.items(),
+        pytest.param("DATABASE_URL", _DE_VERDADE["DATABASE_URL"], id="banco"),
+        pytest.param("RABBITMQ_URL", _DE_VERDADE["RABBITMQ_URL"], id="broker"),
         pytest.param("DATABASE_URL", "postgresql:///execucao", id="sem-senha"),
     ],
 )
