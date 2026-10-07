@@ -8,6 +8,8 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Recent decisions
 
+- 2026-10-07 - Comando atrasado (descompasso de estado: lapide, reserva encerrada, execucao ja iniciada) sai com ack e o log `command_ignored` com `codigo=COMANDO_ATRASADO`, o mesmo evento do erro de dominio que o consumidor ignora (ADR-036); nunca DLQ - PR #3
+- 2026-10-07 - `contratos/ORIGEM` em 282f6a3, a `main` do platform com a regra do `causation_id` no envelope e os exemplos dos eventos do mecanico; desde eae2e72 so mudaram descricoes e exemplos. Supera a divida do ORIGEM em eae2e72 - PR #3
 - 2026-10-07 - Comando da saga preso a transacao da mensagem: o consumidor grava o `id` em `mensagens_processadas` antes do handler (`ON CONFLICT DO NOTHING`: a entrega simultanea do mesmo `id` espera e vira duplicada), entrega ao handler a sessao presa por savepoint (`join_transaction_mode="create_savepoint"`: o commit dela nao comita a mensagem) e a `TransacaoDaMensagem` (`UnitOfWorkDoComando`, sem commit; cada `with` e uma tentativa num SAVEPOINT) e comita uma vez so. Comando ignorado tambem grava o `id`. Supera a entrada da outbox com `mensagem_de_origem` no UoW - PR #3
 - 2026-10-07 - Classificacao do handler: transitorio (`OperationalError`, `InterfaceError`, timeout do pool, `OSError`, `DependenciaIndisponivelException`, `EntidadeDuplicadaException`) = retry; permanente (`ValorInvalidoError`, `RespostaInvalidaDaDependenciaException`) e nao classificado = DLQ; o resto da `DomainException` = ignorada, com o `id` gravado. Copia de retry sem rota ou com nack leva a original para a DLQ; canal fechado ou conexao perdida reconecta e a original volta. Supera a entrada do consumidor de 06/10 - PR #3
 - 2026-10-07 - Relay sem transacao aberta no publish: claim, lease, renovacao e desfecho em transacoes curtas; o fim do lease gravado e o token do fencing. `Connection.Blocked` pausa os claims e o timeout do bloqueio e queda do broker (sem tentativa); envelope fora do contrato vira `dead`; limpeza em lotes de 1000, com as `dead` saindo em 30 dias - PR #3
@@ -85,6 +87,7 @@ Updated by AI agents at task end per `postech-ai-helper/ai/canonical/task-end-re
 
 ## Tech debt / TODO
 
+- 2026-10-07 - LOW - A RFC-004 (secoes 5.3 e 7.3) diz que o `AnonimizarVeiculo` troca a placa; aqui ele troca tambem a descricao do problema e as observacoes, inclusive nas mensagens guardadas na outbox: registrar no platform - PR #3
 - 2026-10-07 - MEDIUM - `contratos/ORIGEM` aponta para a `main` do platform (eae2e72); quando a descricao do `causation_id` no envelope e os exemplos dos eventos do mecanico mudarem la, recopiar. Supera a entrada do ORIGEM no HEAD do PR - PR #3
 - 2026-10-07 - MEDIUM - Instrumentacao automatica (FastAPI, SQLAlchemy, httpx, pika) e o span da requisicao HTTP (o link do passo retomado fica vazio ate la) entram na entrega de observabilidade - PR #3
 - 2026-10-07 - LOW - O ER da RFC-004 (secao 7.3) ainda difere: a outbox guarda `exchange`, `routing_key`, `traceparent` e `tracestate` em colunas (nao `headers`), e `diagnosticos`/`execucoes` guardam `solicitacao_id`/`agendamento_id` e o `tracestate` alem do `traceparent`; ajustar no platform. Supera a parte da outbox na divida do ER de PR #2 - PR #3
