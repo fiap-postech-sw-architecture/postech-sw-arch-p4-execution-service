@@ -62,7 +62,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "max-age=31536000; includeSubDomains"
         )
         response.headers["Cache-Control"] = "no-store"
-        if not _caminho_de_docs(request.url.path):
+        # Sem o prefixo da borda (root_path), que o uvicorn poe no caminho.
+        caminho = request.url.path.removeprefix(request.scope.get("root_path", ""))
+        if not _caminho_de_docs(caminho):
             response.headers["Content-Security-Policy"] = _CSP_DEFAULT
         response.headers["X-Request-ID"] = request_id
         _log.info(
