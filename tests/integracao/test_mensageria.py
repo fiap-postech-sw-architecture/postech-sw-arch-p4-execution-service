@@ -1240,6 +1240,33 @@ def test_comando_preso_no_banco_e_cortado_pelo_teto_e_vira_retry(
     assert "consumer_broker_unavailable" not in saida
 
 
+def test_lock_alem_do_teto_da_mensagem_e_cortado_em_3_s(
+    engine: Engine, consumidor: Callable[..., Consumidor]
+) -> None:
+    # Outra transacao segura a linha do item: o comando espera o lock ate o teto
+    # da transacao da mensagem (3 s, abaixo dos 5 s do servidor e do teto de
+    # comando), e o OperationalError vira retry no consumidor.
+    _criar_item(engine, "PEC-VELA", 5)
+    comando = envelope_de_comando("ReservarPecas", _reservar(uuid4()))
+    trava = text("SELECT id FROM itens_estoque WHERE sku = 'PEC-VELA' FOR UPDATE")
+
+    def espera_o_lock(
+        _envelope: Mapping[str, Any], sessao: Session, _uow: UnitOfWorkDoComando
+    ) -> None:
+        sessao.execute(trava)
+
+    with engine.connect() as dono:
+        transacao = dono.begin()
+        dono.execute(trava)
+        inicio = time.monotonic()
+        with pytest.raises(OperationalError) as erro:
+            consumidor({"ReservarPecas": espera_o_lock})._rodar_handler(comando)
+        espera = time.monotonic() - inicio
+        transacao.rollback()
+    assert getattr(erro.value.orig, "pgcode", None) == "55P03"  # lock_not_available
+    assert 2.5 < espera < 4.5
+
+
 def test_consumidor_reconecta_quando_o_broker_derruba_a_conexao(
     broker: Broker,
     engine: Engine,
