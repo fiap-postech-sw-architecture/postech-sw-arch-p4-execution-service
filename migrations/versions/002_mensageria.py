@@ -10,7 +10,12 @@ gravou. Linhas gravadas antes desta revisao nunca foram publicadas (nao havia
 relay): ganham o envelope montado das colunas antigas, com ``causation_id``
 nulo, e seguem para o relay. Diagnostico e execucao guardam o id e o contexto
 de trace do comando que abriu o fluxo: causa e pai dos fatos que o mecanico gera
-pela API.
+pela API; o retrato do veiculo ganha indice pelo ``veiculo_id`` (eliminacao LGPD).
+
+Esta revisao contrai na mesma passada (descarta ``ocorrido_em`` e ``dados`` e
+torna obrigatorias as colunas novas) porque nenhum ambiente rodou a 001: ela faz
+parte da linha de base do servico. A partir da primeira implantacao, toda
+migracao expande e contrai, compativel com a versao anterior (ADR-042).
 """
 
 from __future__ import annotations
