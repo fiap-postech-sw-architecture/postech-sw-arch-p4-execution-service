@@ -14,7 +14,8 @@ conta tentativa sem derrubar o relay. Queda do broker nao conta: sem conexao nao
 ha claim, e as linhas em maos voltam a valer ja. Com a conexao bloqueada pelo
 broker (alarme de memoria ou disco) o relay para de reivindicar ate o
 desbloqueio, e o timeout do bloqueio derruba a conexao como uma queda. Uma vez
-por hora apaga, em lotes, as entregues ha mais de 7 dias e as ``dead`` de 30.
+por hora apaga, em lotes, as entregues ha mais de 7 dias e as ``dead`` mortas ha
+mais de 30.
 """
 
 from __future__ import annotations

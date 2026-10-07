@@ -430,25 +430,37 @@ def test_retencao_apaga_entregues_e_processadas_antigas(
     assert spans.get_finished_spans() == ()
 
 
-def test_dead_sai_em_30_dias_com_o_texto_livre_do_envelope(engine: Engine) -> None:
+def test_dead_sai_30_dias_depois_de_morrer_e_pendente_antiga_nunca_sai(
+    engine: Engine,
+) -> None:
+    # As tres foram gravadas ha 40 dias. A `dead` (texto livre do envelope)
+    # conta os 30 dias do fim do ultimo lease, que a marcacao nao muda, e nao da
+    # gravacao; a pendente e evento ainda nao entregue.
     with engine.begin() as conexao:
-        for dias in (31, 29):
+        for status, dias in (("dead", 31), ("dead", 29), ("pendente", 40)):
             conexao.execute(
                 text(
                     "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
-                    "routing_key, envelope, status, criado_em) VALUES "
-                    "(gen_random_uuid(), 'DiagnosticoConcluido', gen_random_uuid(), "
-                    "'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
-                    "'{}', 'dead', now() - make_interval(days => :dias))"
+                    "routing_key, envelope, status, criado_em, proxima_tentativa_em) "
+                    "VALUES (gen_random_uuid(), 'DiagnosticoConcluido', "
+                    "gen_random_uuid(), 'pytstop.eventos', "
+                    "'evento.execucao.diagnostico_concluido', '{}', :status, "
+                    "now() - interval '40 days', now() - make_interval(days => :dias))"
                 ),
-                {"dias": dias},
+                {"status": status, "dias": dias},
             )
     assert Outbox(engine).limpar() == 1
     with engine.connect() as conexao:
         restantes = conexao.execute(
-            text("SELECT now() - criado_em < interval '30 days' FROM outbox")
-        ).scalars()
-        assert list(restantes) == [True]
+            text(
+                "SELECT status, now() - proxima_tentativa_em < interval '30 days' "
+                "FROM outbox ORDER BY id"
+            )
+        ).all()
+    assert [tuple(linha) for linha in restantes] == [
+        ("dead", True),
+        ("pendente", False),
+    ]
 
 
 def test_limpeza_das_processadas_tambem_apaga_em_lotes(
@@ -844,6 +856,30 @@ def test_envelope_fora_do_contrato_vira_dead_sem_derrubar_o_relay(
         "dead",
         "envelope fora do contrato",
     )
+
+
+def test_pendente_antiga_que_vira_dead_ganha_os_30_dias_para_conferir(
+    engine: Engine,
+    sinais: Callable[[str], SinaisDoProcesso],
+    outbox: Callable[[], list[dict[str, Any]]],
+    broker_falso: type[_BrokerFalso],
+    log_capturado: io.StringIO,
+) -> None:
+    # Gravada ha 40 dias, com o relay parado: morre no primeiro claim, e a
+    # limpeza que roda logo depois, na mesma volta do relay, nao a apaga.
+    broker_falso.conexoes = 1
+    _gravar(engine, envelope={})
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                "UPDATE outbox SET criado_em = now() - interval '40 days', "
+                "proxima_tentativa_em = now() - interval '40 days'"
+            )
+        )
+    with EmSegundoPlano(_relay_falso(engine, sinais)):
+        esperar_ate(lambda: '"event": "outbox_cleanup"' in log_capturado.getvalue())
+    (linha,) = outbox()
+    assert linha["status"] == "dead"
 
 
 def test_falha_inesperada_na_publicacao_conta_tentativa_e_o_relay_segue(

@@ -47,8 +47,11 @@ if TYPE_CHECKING:
 # seguinte a ultima da tabela (a quinta) leva a linha a `dead`.
 ATRASOS_S: Final[tuple[float, ...]] = (1, 4, 16, 64)
 _RETENCAO_DAS_ENTREGUES: Final = timedelta(days=7)
-# ``dead`` fica para quem opera conferir e republicar, e sai em 30 dias: guarda
-# o envelope inteiro, inclusive o texto livre das observacoes.
+# ``dead`` fica para quem opera conferir e republicar e sai 30 dias depois de
+# morrer (guarda o envelope inteiro, inclusive o texto livre das observacoes).
+# Os dias contam do fim do ultimo lease, ``proxima_tentativa_em``, que a
+# marcacao de ``dead`` nao muda: contados de ``criado_em``, a linha que ficou
+# pendente mais de 30 dias (relay ou broker parado) sumiria logo depois de morrer.
 _RETENCAO_DAS_DEAD: Final = timedelta(days=30)
 
 _CLAIM: Final = text(
@@ -93,7 +96,7 @@ _LIBERAR: Final = text(
 _LIMPAR_LOTE: Final = text(
     "DELETE FROM outbox WHERE id IN (SELECT id FROM outbox "
     "WHERE (status = 'entregue' AND entregue_em < now() - :entregues) "
-    "OR (status = 'dead' AND criado_em < now() - :dead) "
+    "OR (status = 'dead' AND proxima_tentativa_em < now() - :dead) "
     "ORDER BY id LIMIT :lote)"
 )
 _CONTAR: Final = text("SELECT count(*) FROM outbox WHERE status = :status")
@@ -208,7 +211,7 @@ class Outbox:
             )
 
     def limpar(self, lote: int = LOTE_DA_LIMPEZA) -> int:
-        """Apaga, em lotes, as entregues ha mais de 7 dias e as ``dead`` de 30.
+        """Apaga, em lotes, as entregues ha mais de 7 dias e as mortas ha mais de 30.
 
         Devolve quantas apagou.
         """
