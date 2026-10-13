@@ -28,7 +28,7 @@ spec:
       initContainers:
         # O nome do Service headless so resolve com o banco pronto.
         - name: aguarda-postgres
-          image: postgres:16.15
+          image: postgres
           command:
             - sh
             - -c
