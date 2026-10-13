@@ -82,6 +82,16 @@ spec:
                   key: POSTGRES_APP_PASSWORD
             - name: DATABASE_URL
               value: postgresql://execucao_app:$(POSTGRES_APP_PASSWORD)@execucao-postgres.pytstop-execucao.svc.cluster.local:5432/execucao
+          # A liveness so vale depois da startup: com a CPU apertada (o runner do
+          # CD com a plataforma e os tres servicos) o boot da API passa de 20 s, e
+          # tres falhas de 10 s a matariam no meio da subida.
+          startupProbe:
+            httpGet:
+              path: /api/v1/saude
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /api/v1/saude

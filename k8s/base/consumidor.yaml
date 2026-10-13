@@ -83,11 +83,15 @@ spec:
                 secretKeyRef:
                   name: rabbitmq
                   key: RABBITMQ_URL
-          # Startup pelo heartbeat, e nao pelo pronto (relay.yaml).
+          # Startup pela mesma sonda da liveness, e nao pelo pronto (relay.yaml).
           startupProbe:
             exec:
-              command: ["test", "-f", "/tmp/consumidor-heartbeat"]
+              command:
+                - python
+                - -c
+                - import os,sys,time;sys.exit(time.time()-os.path.getmtime('/tmp/consumidor-heartbeat')>90)
             periodSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 30
           livenessProbe:
             exec:

@@ -86,13 +86,20 @@ spec:
                 secretKeyRef:
                   name: rabbitmq
                   key: RABBITMQ_URL
-          # Startup pelo heartbeat, e nao pelo pronto: com o broker fora no boot,
-          # o processo fica de pe e fora da prontidao, reconectando com backoff,
-          # em vez de ser reiniciado no fim da janela da sonda.
+          # Startup pela mesma sonda da liveness (heartbeat com menos de 90 s), e
+          # nao pelo pronto: com o broker fora no boot, o processo fica de pe e fora
+          # da prontidao, reconectando com backoff, em vez de ser reiniciado no fim
+          # da janela da sonda. Nem pela existencia do arquivo: o /tmp e emptyDir e
+          # sobrevive ao restart do container, e o arquivo do container morto a
+          # satisfaria antes de o processo novo girar o laco.
           startupProbe:
             exec:
-              command: ["test", "-f", "/tmp/relay-heartbeat"]
+              command:
+                - python
+                - -c
+                - import os,sys,time;sys.exit(time.time()-os.path.getmtime('/tmp/relay-heartbeat')>90)
             periodSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 30
           # Heartbeat com mais de 90 s: o laco parou. O timeout cobre a subida do
           # interpretador com a CPU limitada.
