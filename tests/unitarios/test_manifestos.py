@@ -231,6 +231,12 @@ def test_exporter_so_usa_o_papel_de_monitoramento(overlay: str) -> None:
     exporter = _container(pod, "exporter")
     ambiente = _env(exporter)
 
+    # Entra pelo loopback do pod, no banco do servico, so com o papel e a senha
+    # do exporter: nenhuma outra senha do Secret chega ao container.
+    assert set(ambiente) == {"DATA_SOURCE_URI", "DATA_SOURCE_USER", "DATA_SOURCE_PASS"}
+    assert ambiente["DATA_SOURCE_URI"]["value"] == (
+        "127.0.0.1:5432/execucao?sslmode=disable"
+    )
     assert ambiente["DATA_SOURCE_USER"]["value"] == "execucao_exporter"
     assert ambiente["DATA_SOURCE_PASS"]["valueFrom"] == _do_secret(
         "execucao-postgres", "POSTGRES_EXPORTER_PASSWORD"
