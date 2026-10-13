@@ -204,6 +204,6 @@ def test_comando_aguardar_le_a_database_url_e_nao_aceita_outro_argumento(
 
     assert [e["event"] for e in _eventos(log_capturado)] == ["migration_wait_done"]
     assert "Context impl" not in log_capturado.getvalue()
-    for argumentos in ([], ["aguarda"], ["aguardar", "restringir"], ["restringir"]):
+    for argumentos in ([], ["aguarda"], ["aguardar", "restringir"]):
         with pytest.raises(SystemExit, match="uso"):
             modulo_banco.main(argumentos)

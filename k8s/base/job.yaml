@@ -1,8 +1,8 @@
 # Migracao e semente do estoque de demonstracao, antes dos Deployments: o
 # implantar-servicos.sh do platform apaga os Jobs com o rotulo de inicializacao
 # antes do apply (Job e imutavel) e espera este completar. Roda com o dono do
-# banco (DDL); as duas etapas sao idempotentes (alembic em head, semente que so
-# cria o que falta).
+# banco (DDL); as etapas sao idempotentes (alembic em head, REVOKE da escrita do
+# papel da aplicacao na alembic_version, semente que so cria o que falta).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -56,7 +56,9 @@ spec:
           command:
             - sh
             - -c
-            - alembic upgrade head && python -m src.estoque.infraestrutura.seed
+            - >-
+              alembic upgrade head && python -m src.banco restringir
+              && python -m src.estoque.infraestrutura.seed
           envFrom:
             - configMapRef:
                 name: execution-service

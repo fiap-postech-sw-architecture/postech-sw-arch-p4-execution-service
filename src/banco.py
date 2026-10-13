@@ -7,6 +7,10 @@ banco esta na ``head`` da imagem ou a frente dela (depois de um
 migrou, e a migracao so expande e contrai: o pod revertido nao pode ficar preso
 no Init); espera com o banco atras ou fora do ar. Nunca cria tabela nem grava
 ``alembic_version``.
+
+``restringir`` e o passo do Job depois do ``alembic upgrade head``: tira do
+papel da aplicacao a escrita na ``alembic_version`` (ele a le, para o
+``aguardar``, mas a revisao do banco nao e dele).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import structlog
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.compartilhado.infraestrutura.ambiente import url_de_conexao
@@ -35,6 +40,8 @@ if TYPE_CHECKING:
 _log = structlog.get_logger(__name__)
 
 _RAIZ: Final = Path(__file__).resolve().parents[1]
+# O papel da aplicacao criado pelo k8s/base/papeis.sql.
+_PAPEL_DA_APLICACAO: Final = "execucao_app"
 
 
 def revisao_da_imagem() -> tuple[ScriptDirectory, str]:
@@ -90,17 +97,51 @@ def aguardar(
         esperar(intervalo)
 
 
+def restringir_versao(engine: Engine) -> None:
+    """Revoga do papel da aplicacao a escrita na ``alembic_version``.
+
+    Roda como o dono do banco, que criou a tabela, depois de migrar. Sem isto, os
+    privilegios padrao do ``papeis.sql`` (DML em toda tabela do dono) deixariam
+    uma API comprometida apagar ou trocar a revisao do banco: o proximo
+    ``alembic upgrade head`` falharia, ou o ``aguardar`` liberaria todo pod.
+
+    Raises:
+        RuntimeError: o papel ainda escreve na tabela (o REVOKE de quem nao e o
+            dono dela nao revoga nada, so avisa).
+    """
+    with engine.begin() as conexao:
+        conexao.execute(
+            text(
+                "REVOKE INSERT, UPDATE, DELETE ON alembic_version "
+                f"FROM {_PAPEL_DA_APLICACAO}"
+            )
+        )
+        # Quem nao e dono da tabela nem tem grant option recebe so um aviso do
+        # servidor, e o REVOKE nao faz nada: confere o efeito.
+        ainda_escreve = conexao.execute(
+            text("SELECT has_table_privilege(:papel, 'alembic_version', :escrita)"),
+            {"papel": _PAPEL_DA_APLICACAO, "escrita": "INSERT, UPDATE, DELETE"},
+        ).scalar_one()
+    if ainda_escreve:
+        msg = f"{_PAPEL_DA_APLICACAO} ainda escreve na alembic_version"
+        raise RuntimeError(msg)
+    _log.info("alembic_version_restricted", role=_PAPEL_DA_APLICACAO)
+
+
 def main(args: Sequence[str] = ()) -> None:
-    """``aguardar`` espera a migracao da versao da imagem."""
-    if list(args) != ["aguardar"]:
-        sys.exit("uso: python -m src.banco aguardar")
+    """``aguardar`` espera a migracao; ``restringir`` fecha a escrita na versao."""
+    if list(args) not in (["aguardar"], ["restringir"]):
+        sys.exit("uso: python -m src.banco (aguardar | restringir)")
     configurar_logging()
     # O alembic loga o contexto (Context impl, transactional DDL) a cada leitura
     # da revisao, e a espera le a cada 2 s.
     logging.getLogger("alembic").setLevel(logging.WARNING)
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
     try:
-        aguardar(engine)
+        if args[0] == "aguardar":
+            aguardar(engine)
+        else:
+            restringir_versao(engine)
     finally:
         engine.dispose()
 

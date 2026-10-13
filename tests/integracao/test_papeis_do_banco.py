@@ -4,9 +4,9 @@ Sobe a imagem e o ambiente do container ``postgres`` do StatefulSet que o
 ``kubectl kustomize`` renderiza (sem ``trust`` no loopback nem no socket), como o
 usuario 999 e com a raiz somente leitura, com o ``k8s/base/papeis.sql`` como
 script de init. Confere cada papel como no Kubernetes: o dono migra e semeia (o
-Job), a API sobe com ``execucao_app`` e faz DML, mas DDL, atributo de papel e
-privilegio alem do DML nao, o exporter le estatisticas e nenhuma tabela, e
-ninguem entra como ``postgres`` sem senha.
+Job), a API sobe com ``execucao_app`` e faz DML, mas DDL, atributo de papel,
+escrita na ``alembic_version`` e privilegio alem do DML nao, o exporter le
+estatisticas e nenhuma tabela, e ninguem entra como ``postgres`` sem senha.
 
 Num servidor que grava o texto de todo comando (por comando, por duracao e por
 amostragem), o script e o procedimento de troca de senha do README deixam as
@@ -33,7 +33,8 @@ from fastapi.testclient import TestClient
 from psycopg2.errors import InsufficientPrivilege
 from testcontainers.core.container import DockerContainer
 
-from src.banco import revisao_da_imagem
+from src import banco as modulo_banco
+from src.banco import aguardar, restringir_versao, revisao_da_imagem
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
@@ -167,9 +168,11 @@ def banco() -> Iterator[BancoDosManifestos]:
     with _banco_dos_manifestos(
         ["postgres", "-c", "log_statement=all"], com_papeis=True
     ) as instancia:
-        # O Job de migracao: migracao e semente com o dono.
+        # O Job de migracao, com o dono: migra, fecha a escrita da aplicacao na
+        # alembic_version e semeia.
         command.upgrade(config_alembic(instancia.url("execucao")), "head")
         engine = criar_engine(instancia.url("execucao"))
+        restringir_versao(engine)
         semear(criar_session_factory(engine))
         engine.dispose()
         yield instancia
@@ -313,11 +316,75 @@ def test_papel_da_aplicacao_so_tem_dml_nas_tabelas_do_dono(
         )
         sem_create = cursor.fetchone()
     assert "outbox" in privilegios
-    # Nunca TRUNCATE, REFERENCES nem TRIGGER, em tabela nenhuma.
+    # Nunca TRUNCATE, REFERENCES nem TRIGGER, em tabela nenhuma, e a
+    # alembic_version so se le: a revisao do banco nao e da aplicacao.
     assert privilegios == {
-        tabela: {"SELECT", "INSERT", "UPDATE", "DELETE"} for tabela in privilegios
+        tabela: {"SELECT"}
+        if tabela == "alembic_version"
+        else {"SELECT", "INSERT", "UPDATE", "DELETE"}
+        for tabela in privilegios
     }
     assert sem_create == (False, False)
+
+
+@pytest.mark.parametrize(
+    "escrita",
+    [
+        pytest.param("UPDATE alembic_version SET version_num = '999'", id="update"),
+        pytest.param("DELETE FROM alembic_version", id="delete"),
+        pytest.param("INSERT INTO alembic_version VALUES ('999')", id="insert"),
+    ],
+)
+def test_papel_da_aplicacao_nao_escreve_a_revisao_do_banco(
+    banco: BancoDosManifestos, escrita: str
+) -> None:
+    with _cursor(banco, "execucao_app") as cursor, pytest.raises(InsufficientPrivilege):
+        cursor.execute(escrita)
+
+
+def test_aguardar_le_a_revisao_com_o_papel_da_aplicacao(
+    banco: BancoDosManifestos,
+) -> None:
+    # O initContainer roda com a DATABASE_URL do execucao_app.
+    engine = criar_engine(banco.url("execucao_app"))
+    try:
+        aguardar(
+            engine, esperar=lambda _segundos: pytest.fail("o banco ja esta na head")
+        )
+    finally:
+        engine.dispose()
+
+
+def test_comando_restringir_e_idempotente(
+    banco: BancoDosManifestos, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setattr(modulo_banco, "configurar_logging", lambda: None)
+    monkeypatch.setenv("DATABASE_URL", banco.url("execucao"))
+
+    modulo_banco.main(["restringir"])
+    modulo_banco.main(["restringir"])
+
+    with pytest.raises(SystemExit, match="uso"):
+        modulo_banco.main(["outro"])
+
+
+def test_restringir_reprova_quando_o_papel_ainda_escreve_na_versao(
+    banco: BancoDosManifestos, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setattr(modulo_banco, "configurar_logging", lambda: None)
+    with _cursor(banco, "execucao") as cursor:
+        cursor.execute("GRANT INSERT ON alembic_version TO execucao_app")
+    try:
+        # O REVOKE de quem tem privilegio na tabela mas nao e o dono dela, nem
+        # tem grant option, so avisa e nao revoga nada.
+        monkeypatch.setenv("DATABASE_URL", banco.url("execucao_app"))
+        with pytest.raises(RuntimeError, match="ainda escreve"):
+            modulo_banco.main(["restringir"])
+    finally:
+        monkeypatch.setenv("DATABASE_URL", banco.url("execucao"))
+        modulo_banco.main(["restringir"])
 
 
 def test_exporter_nao_tem_privilegio_em_tabela_nenhuma(
