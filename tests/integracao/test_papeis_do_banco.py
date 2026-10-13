@@ -237,6 +237,7 @@ def test_papel_da_aplicacao_faz_dml_e_le_a_versao_mas_nao_faz_ddl(
         cursor.execute("DELETE FROM outbox WHERE id = %s", linha)
         for ddl in (
             "CREATE TABLE intrusa (id int)",
+            "CREATE TEMP TABLE intrusa (id int)",
             "DROP TABLE itens_estoque",
             "TRUNCATE outbox",
             "COPY outbox TO PROGRAM 'true'",
@@ -275,6 +276,43 @@ def test_so_o_exporter_pertence_a_um_papel_e_e_o_pg_monitor(
             (list(_PAPEIS_DO_SERVICO),),
         )
         assert cursor.fetchall() == [("pg_monitor", "execucao_exporter")]
+
+
+@pytest.mark.parametrize(
+    ("papel", "banco_alvo", "privilegio", "permitido"),
+    [
+        pytest.param("execucao", "execucao", "CONNECT", True, id="dono-conecta"),
+        pytest.param("execucao", "execucao", "CREATE", True, id="dono-cria"),
+        pytest.param("execucao", "postgres", "CONNECT", False, id="dono-fora-do-pg"),
+        pytest.param("execucao_app", "execucao", "CONNECT", True, id="app-conecta"),
+        pytest.param("execucao_app", "execucao", "TEMPORARY", False, id="app-sem-temp"),
+        pytest.param("execucao_app", "execucao", "CREATE", False, id="app-sem-create"),
+        pytest.param("execucao_app", "postgres", "CONNECT", False, id="app-fora-do-pg"),
+        pytest.param(
+            "execucao_exporter", "execucao", "CONNECT", True, id="exp-conecta"
+        ),
+        pytest.param(
+            "execucao_exporter", "execucao", "TEMPORARY", False, id="exp-sem-temp"
+        ),
+        pytest.param(
+            "execucao_exporter", "postgres", "CONNECT", False, id="exp-fora-do-pg"
+        ),
+    ],
+)
+def test_so_o_dono_tem_mais_que_o_connect_no_banco(
+    banco: BancoDosManifestos,
+    papel: str,
+    banco_alvo: str,
+    privilegio: str,
+    permitido: bool,
+) -> None:
+    # O PUBLIC tem CONNECT e TEMPORARY em todo banco novo, e o GRANT CONNECT do
+    # papeis.sql nao diria nada se o script nao os tirasse.
+    with _cursor(banco, "postgres") as cursor:
+        cursor.execute(
+            "SELECT has_database_privilege(%s, %s, %s)", (papel, banco_alvo, privilegio)
+        )
+        assert cursor.fetchone() == (permitido,)
 
 
 _PRIVILEGIOS_DE_TABELA = (

@@ -28,6 +28,12 @@ CREATE ROLE execucao LOGIN PASSWORD :'dono';
 ALTER DATABASE execucao OWNER TO execucao;
 ALTER SCHEMA public OWNER TO execucao;
 
+-- O PUBLIC tem CONNECT e TEMPORARY em todo banco novo: sem tirar, os GRANT
+-- CONNECT abaixo nao dizem nada, e qualquer papel entra no banco postgres e cria
+-- tabela temporaria. Cada papel recebe so o CONNECT de que precisa.
+REVOKE ALL ON DATABASE execucao FROM PUBLIC;
+REVOKE ALL ON DATABASE postgres FROM PUBLIC;
+
 -- API, relay e consumidor: so DML. As tabelas nascem depois, no Job, como o
 -- dono; os privilegios padrao cobrem cada uma, inclusive a alembic_version que o
 -- aguarda-migracao le (um GRANT nas tabelas de agora nao alcancaria nenhuma).
@@ -41,4 +47,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE execucao IN SCHEMA public
 
 -- postgres_exporter (sidecar do banco): estatisticas, sem ler tabela.
 CREATE ROLE execucao_exporter LOGIN PASSWORD :'monitor';
+GRANT CONNECT ON DATABASE execucao TO execucao_exporter;
 GRANT pg_monitor TO execucao_exporter;
