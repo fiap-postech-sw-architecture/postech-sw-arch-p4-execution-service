@@ -8,7 +8,7 @@ GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
 .PHONY: install lock-check lint format typecheck security lint-arch test check \
-	smoke manifests kind-deploy compose-up compose-down compose-logs migrate seed run
+	smoke manifests print-trivy-version kind-deploy compose-up compose-down compose-logs migrate seed run
 
 install:
 	uv sync --frozen
@@ -118,8 +118,10 @@ smoke:
 KUBERNETES_VERSION := 1.35.0
 KUBECONFORM := docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary \
 	-output text -kubernetes-version $(KUBERNETES_VERSION) -reject Secret -
+# Fonte unica da versao do trivy: o security.yml instala a de print-trivy-version.
+TRIVY_VERSION := 0.72.0
 TRIVY_CONFIG := docker run --rm -i -v "$(CURDIR)/k8s/trivy-ignore.rego:/trivy-ignore.rego:ro" \
-	--entrypoint sh aquasec/trivy:0.72.0 -c 'cat > /tmp/manifestos.yaml && trivy config \
+	--entrypoint sh aquasec/trivy:$(TRIVY_VERSION) -c 'cat > /tmp/manifestos.yaml && trivy config \
 	--quiet --severity HIGH,CRITICAL --exit-code 1 --ignore-policy /trivy-ignore.rego \
 	/tmp/manifestos.yaml'
 
@@ -131,6 +133,9 @@ manifests:
 		printf '%s\n' "$$manifestos" | $(KUBECONFORM); \
 		printf '%s\n' "$$manifestos" | $(TRIVY_CONFIG); \
 	done
+
+print-trivy-version:
+	@echo $(TRIVY_VERSION)
 
 # Implanta este checkout no kind da plataforma (make kind-up deploy no
 # platform, clonado ao lado deste) pelo scripts/ci/implantar-servicos.sh dele, o

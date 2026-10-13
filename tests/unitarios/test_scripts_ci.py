@@ -3,6 +3,7 @@ trivy (KSV-0109) ao ConfigMap do ``papeis.sql``."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -122,3 +123,15 @@ def test_o_make_manifests_roda_a_conferencia_antes_do_trivy() -> None:
         "TRIVY_CONFIG"
     )
     assert "--ignore-policy" in makefile
+
+
+def test_a_versao_do_trivy_tem_uma_fonte_so_no_makefile() -> None:
+    versao = re.search(
+        r"^TRIVY_VERSION := (\S+)$", (RAIZ / "Makefile").read_text(), re.MULTILINE
+    )
+    assert versao is not None
+
+    for workflow in (RAIZ / ".github" / "workflows").glob("*.yml"):
+        assert versao[1] not in workflow.read_text(), workflow.name
+    security = (RAIZ / ".github" / "workflows" / "security.yml").read_text()
+    assert "make -s print-trivy-version" in security
