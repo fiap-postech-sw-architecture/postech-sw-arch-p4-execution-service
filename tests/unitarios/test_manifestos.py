@@ -494,31 +494,51 @@ def test_entrada_negada_a_todo_pod_e_liberada_so_no_previsto(overlay: str) -> No
     )
 
 
-def test_politicas_e_services_selecionam_pods_que_existem(overlay: str) -> None:
-    rotulos = {
-        nome: documento["spec"]["template"]["metadata"]["labels"]
-        for documento in renderizar(overlay)
+def _casa(seletor: dict[str, Any], rotulos: dict[str, str]) -> bool:
+    """O pod com ``rotulos`` entra no ``seletor`` (``matchLabels`` e ``In``)."""
+    expressoes = seletor.get("matchExpressions", [])
+    return seletor.get("matchLabels", {}).items() <= rotulos.items() and all(
+        e["operator"] == "In" and rotulos.get(e["key"]) in e["values"]
+        for e in expressoes
+    )
+
+
+def test_politicas_e_services_selecionam_so_os_pods_certos(overlay: str) -> None:
+    documentos = renderizar(overlay)
+    pods = {
+        documento["metadata"]["name"]: documento["spec"]["template"]["metadata"][
+            "labels"
+        ]
+        for documento in documentos
         if documento["kind"] in {"Deployment", "StatefulSet"}
-        for nome in [documento["metadata"]["name"]]
-    }
-    selecoes = {
-        documento["metadata"]["name"]: documento["spec"]["selector"]
-        for documento in renderizar(overlay)
-        if documento["kind"] == "Service"
     }
 
-    # Todo Service da API (interno e da borda) acha os pods da API, e o do banco,
-    # o StatefulSet.
-    for nome, seletor in selecoes.items():
-        alvo = (
-            "execucao-postgres"
-            if nome == "execucao-postgres"
-            else "execution-service-api"
-        )
-        assert seletor.items() <= rotulos[alvo].items(), nome
-    assert rotulos["execution-service-relay"]["processo"] == "relay"
-    assert rotulos["execution-service-consumidor"]["processo"] == "consumidor"
-    assert rotulos["execucao-postgres"]["processo"] == "banco"
+    def selecionados(seletor: dict[str, Any]) -> set[str]:
+        return {nome for nome, rotulos in pods.items() if _casa(seletor, rotulos)}
+
+    # O Service interno e os da borda acham os pods da API, e o do banco, o dele.
+    for documento in documentos:
+        if documento["kind"] == "Service":
+            nome = documento["metadata"]["name"]
+            alvo = (
+                {"execucao-postgres"}
+                if nome == "execucao-postgres"
+                else {"execution-service-api"}
+            )
+            assert selecionados({"matchLabels": documento["spec"]["selector"]}) == alvo
+    # Cada NetworkPolicy de liberacao acha so os pods que ela diz proteger.
+    politicas = {
+        documento["metadata"]["name"]: documento["spec"]["podSelector"]
+        for documento in documentos
+        if documento["kind"] == "NetworkPolicy"
+    }
+    assert selecionados(politicas["nega-entrada"]) == set(pods)
+    assert selecionados(politicas["execution-service-api"]) == {"execution-service-api"}
+    assert selecionados(politicas["execution-service-metricas"]) == {
+        "execution-service-relay",
+        "execution-service-consumidor",
+    }
+    assert selecionados(politicas["execucao-postgres"]) == {"execucao-postgres"}
 
 
 def test_prometheus_raspa_a_porta_que_o_container_declara(overlay: str) -> None:
