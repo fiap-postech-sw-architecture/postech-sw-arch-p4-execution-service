@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from alembic import command
 from sqlalchemy import inspect, make_url, text
+from sqlalchemy.exc import OperationalError
 
 from src import banco as modulo_banco
 from src.banco import aguardar, revisao_da_imagem
@@ -186,6 +187,29 @@ def test_banco_fora_do_ar_e_espera_e_o_log_traz_o_tipo_do_erro(
     [evento] = _eventos(log_capturado)
     assert evento["event"] == "migration_wait_database_unavailable"
     assert evento["error"] == "OperationalError"
+
+
+def test_banco_que_volta_do_ar_encerra_a_espera(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch, log_capturado: io.StringIO
+) -> None:
+    conectar = engine.connect
+    falhas: list[int] = []
+
+    def conectar_com_uma_falha() -> Any:
+        if not falhas:
+            falhas.append(1)
+            raise OperationalError("SELECT 1", {}, Exception("banco reiniciando"))
+        return conectar()
+
+    monkeypatch.setattr(engine, "connect", conectar_com_uma_falha)
+    esperas: list[float] = []
+
+    aguardar(engine, esperar=esperas.append)
+
+    assert esperas == [2.0]
+    indisponivel, pronto = _eventos(log_capturado)
+    assert indisponivel["event"] == "migration_wait_database_unavailable"
+    assert pronto["event"] == "migration_wait_done"
 
 
 def test_comando_aguardar_le_a_database_url_e_nao_aceita_outro_argumento(
