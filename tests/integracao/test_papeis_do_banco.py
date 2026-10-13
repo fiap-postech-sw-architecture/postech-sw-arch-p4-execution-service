@@ -1,17 +1,25 @@
 """Papeis do banco dos manifestos no PostgreSQL do StatefulSet (ADR-042).
 
-Sobe a imagem e o ambiente do container ``postgres`` de ``k8s/base/banco.yaml``
-(sem ``trust`` no loopback nem no socket), como o usuario 999 e com a raiz
-somente leitura, com o ``k8s/base/papeis.sql`` como script de init e o servidor
-gravando todo comando no log. Confere cada papel como no Kubernetes: o dono
-migra e semeia (o Job), a API sobe com ``execucao_app`` e faz DML, mas DDL nao,
-o exporter le estatisticas e nao le tabela, ninguem entra como ``postgres`` sem
-senha, e nenhuma senha dos papeis chega ao log do servidor.
+Sobe a imagem e o ambiente do container ``postgres`` do StatefulSet que o
+``kubectl kustomize`` renderiza (sem ``trust`` no loopback nem no socket), como o
+usuario 999 e com a raiz somente leitura, com o ``k8s/base/papeis.sql`` como
+script de init. Confere cada papel como no Kubernetes: o dono migra e semeia (o
+Job), a API sobe com ``execucao_app`` e faz DML, mas DDL, atributo de papel e
+privilegio alem do DML nao, o exporter le estatisticas e nenhuma tabela, e
+ninguem entra como ``postgres`` sem senha.
+
+Num servidor que grava o texto de todo comando (por comando, por duracao e por
+amostragem), o script e o procedimento de troca de senha do README deixam as
+senhas fora do log, e cada um dos cinco ``SET`` que as protegem, retirado, as
+deixa vazar.
 """
 
 from __future__ import annotations
 
+import base64
+import re
 import secrets
+import textwrap
 import time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -20,12 +28,12 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg2
 import pytest
-import yaml
 from alembic import command
 from fastapi.testclient import TestClient
 from psycopg2.errors import InsufficientPrivilege
 from testcontainers.core.container import DockerContainer
 
+from src.banco import revisao_da_imagem
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
@@ -33,26 +41,54 @@ from src.compartilhado.infraestrutura.database import (
 from src.estoque.infraestrutura.seed import ITENS_DEMO, semear
 from src.main import criar_app
 from tests.integracao.conftest import BILLING_URL, config_alembic
+from tests.manifestos import objeto
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-_BASE = Path(__file__).resolve().parents[2] / "k8s" / "base"
+_RAIZ = Path(__file__).resolve().parents[2]
 _PAPEIS = {
+    "postgres": "POSTGRES_PASSWORD",
     "execucao": "POSTGRES_OWNER_PASSWORD",
     "execucao_app": "POSTGRES_APP_PASSWORD",
     "execucao_exporter": "POSTGRES_EXPORTER_PASSWORD",
 }
+_PAPEIS_DO_SERVICO = ("execucao", "execucao_app", "execucao_exporter")
+
+# Os cinco parametros que gravam o texto do comando, e portanto a senha que o psql
+# ja trocou na variavel: cada um desligado no inicio do script e do procedimento
+# de troca de senha do README.
+_SETS_DE_LOG = (
+    "log_statement",
+    "log_min_error_statement",
+    "log_min_duration_statement",
+    "log_min_duration_sample",
+    "log_transaction_sample_rate",
+)
+# Servidor que grava tudo: o texto de todo comando, por duracao e por amostragem,
+# e o comando que falha.
+_SERVIDOR_QUE_GRAVA_TUDO = [
+    "postgres",
+    "-c",
+    "log_statement=all",
+    "-c",
+    "log_min_error_statement=error",
+    "-c",
+    "log_min_duration_statement=0",
+    "-c",
+    "log_min_duration_sample=0",
+    "-c",
+    "log_statement_sample_rate=1",
+    "-c",
+    "log_transaction_sample_rate=1",
+]
 
 
 def _container_do_banco() -> dict[str, Any]:
-    for documento in yaml.safe_load_all((_BASE / "banco.yaml").read_text()):
-        if documento["kind"] == "StatefulSet":
-            containers = documento["spec"]["template"]["spec"]["containers"]
-            [postgres] = [c for c in containers if c["name"] == "postgres"]
-            return dict(postgres)
-    msg = "banco.yaml sem o StatefulSet"
-    raise AssertionError(msg)
+    statefulset = objeto("kind", "StatefulSet", "execucao-postgres")
+    containers = statefulset["spec"]["template"]["spec"]["containers"]
+    [postgres] = [c for c in containers if c["name"] == "postgres"]
+    return dict(postgres)
 
 
 @dataclass(frozen=True)
@@ -70,9 +106,9 @@ class BancoDosManifestos:
         return (saida + erros).decode()
 
 
-def _esperar_o_dono(url: str) -> None:
-    # O dono so existe depois do script de init, e o servidor temporario do init
-    # nao ouve TCP: a primeira conexao dele e o banco pronto.
+def _esperar_o_banco(url: str) -> None:
+    # Com o script de init, o dono so existe depois dele, e o servidor temporario
+    # do init nao ouve TCP: a primeira conexao e o banco pronto.
     prazo = time.monotonic() + 90
     while True:
         try:
@@ -85,8 +121,11 @@ def _esperar_o_dono(url: str) -> None:
             return
 
 
-@pytest.fixture(scope="module")
-def banco() -> Iterator[BancoDosManifestos]:
+@contextmanager
+def _banco_dos_manifestos(
+    comando: list[str], *, com_papeis: bool
+) -> Iterator[BancoDosManifestos]:
+    """O container ``postgres`` do StatefulSet, com ``comando`` no lugar do servidor."""
     postgres = _container_do_banco()
     senhas = {
         variavel["valueFrom"]["secretKeyRef"]["key"]: secrets.token_hex(24)
@@ -99,30 +138,49 @@ def banco() -> Iterator[BancoDosManifestos]:
         if valor is None:
             valor = senhas[variavel["valueFrom"]["secretKeyRef"]["key"]]
         container.with_env(variavel["name"], valor)
-    container.with_volume_mapping(
-        str(_BASE / "papeis.sql"), "/docker-entrypoint-initdb.d/papeis.sql", "ro"
-    )
+    if com_papeis:
+        container.with_volume_mapping(
+            str(_RAIZ / "k8s" / "base" / "papeis.sql"),
+            "/docker-entrypoint-initdb.d/papeis.sql",
+            "ro",
+        )
     # Como no pod: usuario 999, raiz somente leitura e so o socket e o /tmp
-    # gravaveis. Todo comando vai para o log, para provar que senha nao vai.
+    # gravaveis. O servidor grava o log que cada teste confere.
     container.with_kwargs(user="999:999", read_only=True)
     container.with_tmpfs_mount("/var/run/postgresql")
     container.with_tmpfs_mount("/tmp")  # noqa: S108 - o emptyDir do pod
-    container.with_command(["postgres", "-c", "log_statement=all"])
+    container.with_command(comando)
     container.start()
     try:
         porta = container.get_exposed_port(5432)
         endereco = f"{container.get_container_host_ip()}:{porta}/execucao"
         sonda = postgres["readinessProbe"]["exec"]["command"]
         instancia = BancoDosManifestos(container, sonda, senhas, endereco)
-        _esperar_o_dono(instancia.url("execucao"))
+        _esperar_o_banco(instancia.url("execucao" if com_papeis else "postgres"))
+        yield instancia
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="module")
+def banco() -> Iterator[BancoDosManifestos]:
+    with _banco_dos_manifestos(
+        ["postgres", "-c", "log_statement=all"], com_papeis=True
+    ) as instancia:
         # O Job de migracao: migracao e semente com o dono.
         command.upgrade(config_alembic(instancia.url("execucao")), "head")
         engine = criar_engine(instancia.url("execucao"))
         semear(criar_session_factory(engine))
         engine.dispose()
         yield instancia
-    finally:
-        container.stop()
+
+
+@pytest.fixture(scope="module")
+def servidor_que_grava_tudo() -> Iterator[BancoDosManifestos]:
+    # Sem o script de init: cada teste o roda (inteiro ou sem um dos SET) num
+    # banco sem os papeis.
+    with _banco_dos_manifestos(_SERVIDOR_QUE_GRAVA_TUDO, com_papeis=False) as instancia:
+        yield instancia
 
 
 @contextmanager
@@ -160,10 +218,11 @@ def test_api_sobe_com_o_papel_da_aplicacao_e_le_e_altera_o_estoque(
 def test_papel_da_aplicacao_faz_dml_e_le_a_versao_mas_nao_faz_ddl(
     banco: BancoDosManifestos,
 ) -> None:
+    _, head = revisao_da_imagem()
     with _cursor(banco, "execucao_app") as cursor:
         # A tabela que o aguarda-migracao le para esperar o Job.
         cursor.execute("SELECT version_num FROM alembic_version")
-        assert cursor.fetchone() == ("002",)
+        assert cursor.fetchone() == (head,)
         # INSERT com a sequencia do id (privilegio padrao das sequencias).
         cursor.execute(
             "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
@@ -181,6 +240,93 @@ def test_papel_da_aplicacao_faz_dml_e_le_a_versao_mas_nao_faz_ddl(
         ):
             with pytest.raises(InsufficientPrivilege):
                 cursor.execute(ddl)
+
+
+def test_papeis_sem_atributo_que_amplie_o_acesso(banco: BancoDosManifestos) -> None:
+    # So o login: nem superusuario, nem CREATEROLE (criaria papeis e daria
+    # membership), CREATEDB, REPLICATION ou BYPASSRLS.
+    with _cursor(banco, "postgres") as cursor:
+        cursor.execute(
+            "SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin, "
+            "rolreplication, rolbypassrls FROM pg_roles WHERE rolname = ANY(%s) "
+            "ORDER BY rolname",
+            (list(_PAPEIS_DO_SERVICO),),
+        )
+        atributos = cursor.fetchall()
+    assert atributos == [
+        (papel, False, False, False, True, False, False)
+        for papel in sorted(_PAPEIS_DO_SERVICO)
+    ]
+
+
+def test_so_o_exporter_pertence_a_um_papel_e_e_o_pg_monitor(
+    banco: BancoDosManifestos,
+) -> None:
+    # A aplicacao nao herda pg_write_all_data, pg_read_all_data nem nenhum outro.
+    with _cursor(banco, "postgres") as cursor:
+        cursor.execute(
+            "SELECT papel.rolname, membro.rolname FROM pg_auth_members m "
+            "JOIN pg_roles papel ON papel.oid = m.roleid "
+            "JOIN pg_roles membro ON membro.oid = m.member "
+            "WHERE membro.rolname = ANY(%s)",
+            (list(_PAPEIS_DO_SERVICO),),
+        )
+        assert cursor.fetchall() == [("pg_monitor", "execucao_exporter")]
+
+
+_PRIVILEGIOS_DE_TABELA = (
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "REFERENCES",
+    "TRIGGER",
+)
+
+
+def _privilegios(cursor: Any, papel: str) -> dict[str, set[str]]:
+    """Os privilegios de ``papel`` em cada tabela do schema ``public``."""
+    cursor.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY 1"
+    )
+    tabelas = [linha[0] for linha in cursor.fetchall()]
+    privilegios: dict[str, set[str]] = {}
+    for tabela in tabelas:
+        cursor.execute(
+            "SELECT p FROM unnest(%s::text[]) AS p "
+            "WHERE has_table_privilege(%s, format('public.%%I', %s::text), p)",
+            (list(_PRIVILEGIOS_DE_TABELA), papel, tabela),
+        )
+        privilegios[tabela] = {linha[0] for linha in cursor.fetchall()}
+    return privilegios
+
+
+def test_papel_da_aplicacao_so_tem_dml_nas_tabelas_do_dono(
+    banco: BancoDosManifestos,
+) -> None:
+    with _cursor(banco, "postgres") as cursor:
+        privilegios = _privilegios(cursor, "execucao_app")
+        cursor.execute(
+            "SELECT has_schema_privilege('execucao_app', 'public', 'CREATE'), "
+            "has_database_privilege('execucao_app', 'execucao', 'CREATE')"
+        )
+        sem_create = cursor.fetchone()
+    assert "outbox" in privilegios
+    # Nunca TRUNCATE, REFERENCES nem TRIGGER, em tabela nenhuma.
+    assert privilegios == {
+        tabela: {"SELECT", "INSERT", "UPDATE", "DELETE"} for tabela in privilegios
+    }
+    assert sem_create == (False, False)
+
+
+def test_exporter_nao_tem_privilegio_em_tabela_nenhuma(
+    banco: BancoDosManifestos,
+) -> None:
+    with _cursor(banco, "postgres") as cursor:
+        privilegios = _privilegios(cursor, "execucao_exporter")
+    assert "outbox" in privilegios
+    assert privilegios == {tabela: set() for tabela in privilegios}
 
 
 def test_exporter_le_estatisticas_e_nao_le_tabela(banco: BancoDosManifestos) -> None:
@@ -213,23 +359,136 @@ def test_sonda_do_statefulset_responde_sem_senha(banco: BancoDosManifestos) -> N
     assert codigo == 0, saida
 
 
-def test_log_do_servidor_fica_sem_as_senhas_dos_papeis(
-    banco: BancoDosManifestos,
-) -> None:
-    # O script de novo: os papeis ja existem, e o CREATE ROLE com a senha
-    # falha, o caso em que o servidor gravaria a linha STATEMENT.
-    codigo, _ = banco.container.exec(
+# --- as senhas fora do log do servidor ----------------------------------------
+
+_LIMPAR_PAPEIS = """
+DO $$
+DECLARE papel text;
+BEGIN
+  FOREACH papel IN ARRAY ARRAY['execucao', 'execucao_app', 'execucao_exporter'] LOOP
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = papel) THEN
+      EXECUTE format('REASSIGN OWNED BY %I TO postgres', papel);
+      EXECUTE format('DROP OWNED BY %I', papel);
+      EXECUTE format('DROP ROLE %I', papel);
+    END IF;
+  END LOOP;
+END $$;
+"""
+
+
+def _psql(
+    servidor: BancoDosManifestos, sql: str, ambiente: dict[str, str] | None = None
+) -> int:
+    """Roda ``sql`` com o psql do container, como o Job e a troca de senha: o
+    superusuario com a senha do ambiente, e as senhas dos papeis nas variaveis."""
+    variaveis = " ".join(f"{nome}={valor}" for nome, valor in (ambiente or {}).items())
+    codificado = base64.b64encode(sql.encode()).decode()
+    codigo, _ = servidor.container.exec(
         [
             "sh",
             "-c",
-            'PGPASSWORD="$POSTGRES_PASSWORD" psql -w -U postgres -d execucao '
-            "-v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/papeis.sql",
+            f"echo {codificado} | base64 -d > /tmp/caso.sql && "
+            f'PGPASSWORD="$POSTGRES_PASSWORD" {variaveis} psql -w -U postgres '
+            "-d execucao -v ON_ERROR_STOP=1 -f /tmp/caso.sql",
         ]
     )
-    log = banco.log()
+    return int(codigo)
+
+
+def _log_ate_aqui(servidor: BancoDosManifestos) -> str:
+    """O log do servidor, depois de ele gravar tudo o que o teste mandou: um
+    comando marcador, gravado depois dos outros, mostra que o log alcancou o fim."""
+    marca = f"fim-{secrets.token_hex(8)}"
+    _psql(servidor, f"SELECT '{marca}';")
+    prazo = time.monotonic() + 10
+    while marca not in (log := servidor.log()):
+        assert time.monotonic() < prazo, "o servidor nao gravou o log a tempo"
+        time.sleep(0.1)
+    return log
+
+
+def _sem_o_set(sql: str, parametro: str | None) -> str:
+    if parametro is None:
+        return sql
+    sem, trocas = re.subn(rf"^SET {parametro} = .*\n", "", sql, flags=re.MULTILINE)
+    assert trocas == 1, f"o SET de {parametro} nao esta uma vez so no SQL"
+    return sem
+
+
+def _sets_de_log(sql: str) -> list[str]:
+    return re.findall(r"^SET (log_\w+) = .*$", sql, flags=re.MULTILINE)
+
+
+_COM_TODOS_OS_SET = [pytest.param(None, id="completo")]
+_SEM_UM_SET = [
+    pytest.param(parametro, id=f"sem-{parametro}") for parametro in _SETS_DE_LOG
+]
+
+
+def _sql_da_troca_de_senha() -> str:
+    """O SQL do passo 2 da troca de senha do README, o que vai ao ``psql``."""
+    readme = (_RAIZ / "README.md").read_text()
+    # O bloco esta num item de lista: recuado no README, a margem sai ao colar.
+    [sql] = re.findall(r"<<'SQL'\n(.*?)\n *SQL\n", readme, flags=re.DOTALL)
+    return textwrap.dedent(sql) + "\n"
+
+
+def test_script_e_readme_desligam_os_mesmos_cinco_parametros_de_log() -> None:
+    papeis = (_RAIZ / "k8s" / "base" / "papeis.sql").read_text()
+
+    assert _sets_de_log(papeis) == list(_SETS_DE_LOG)
+    assert _sets_de_log(_sql_da_troca_de_senha()) == list(_SETS_DE_LOG)
+
+
+@pytest.mark.parametrize("sem", [*_COM_TODOS_OS_SET, *_SEM_UM_SET])
+def test_papeis_sql_deixa_as_senhas_fora_do_log_so_com_os_cinco_set(
+    servidor_que_grava_tudo: BancoDosManifestos, sem: str | None
+) -> None:
+    servidor = servidor_que_grava_tudo
+    senhas = {
+        "POSTGRES_OWNER_PASSWORD": secrets.token_hex(24),
+        "POSTGRES_APP_PASSWORD": secrets.token_hex(24),
+        "POSTGRES_EXPORTER_PASSWORD": secrets.token_hex(24),
+    }
+    script = (_RAIZ / "k8s" / "base" / "papeis.sql").read_text()
+    # O exporter ja existe: o ultimo CREATE ROLE falha, o caso em que o servidor
+    # grava a linha STATEMENT com a senha.
+    _psql(servidor, _LIMPAR_PAPEIS + "CREATE ROLE execucao_exporter LOGIN;")
+
+    codigo = _psql(servidor, _sem_o_set(script, sem), senhas)
+    log = _log_ate_aqui(servidor)
+
     assert codigo != 0
-    assert 'role "execucao" already exists' in log
-    # O servidor gravava todo comando (log_statement=all) ate o SET do script.
-    assert "statement: SET log_statement = none;" in log
-    for papel, chave in _PAPEIS.items():
-        assert banco.senhas[chave] not in log, papel
+    assert 'role "execucao_exporter" already exists' in log
+    vazaram = [chave for chave, senha in senhas.items() if senha in log]
+    if sem is None:
+        assert vazaram == []
+    else:
+        assert vazaram, f"sem o SET de {sem} nenhuma senha chegou ao log"
+
+
+@pytest.mark.parametrize("sem", [*_COM_TODOS_OS_SET, *_SEM_UM_SET])
+def test_troca_de_senha_do_readme_deixa_a_senha_fora_do_log_so_com_os_cinco_set(
+    servidor_que_grava_tudo: BancoDosManifestos, sem: str | None
+) -> None:
+    servidor = servidor_que_grava_tudo
+    sql = _sem_o_set(_sql_da_troca_de_senha(), sem)
+    _psql(servidor, _LIMPAR_PAPEIS + "CREATE ROLE execucao_app LOGIN;")
+    # Dois casos: o papel existe (o comando passa) e nao existe (o comando falha,
+    # e o servidor grava a linha STATEMENT).
+    certo = {"SENHA_NOVA": secrets.token_hex(24)}
+    errado = {"SENHA_NOVA": secrets.token_hex(24)}
+
+    assert _psql(servidor, sql, certo) == 0
+    assert (
+        _psql(servidor, sql.replace("execucao_app", "papel_que_nao_existe"), errado)
+        != 0
+    )
+    log = _log_ate_aqui(servidor)
+
+    assert 'role "papel_que_nao_existe" does not exist' in log
+    vazaram = [senha for senha in (certo, errado) if senha["SENHA_NOVA"] in log]
+    if sem is None:
+        assert vazaram == []
+    else:
+        assert vazaram, f"sem o SET de {sem} a senha nova chegou ao log"

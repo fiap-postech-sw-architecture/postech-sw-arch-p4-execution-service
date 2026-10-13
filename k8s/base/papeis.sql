@@ -10,11 +10,15 @@
 -- \getenv.
 \set ON_ERROR_STOP on
 -- O psql troca :'var' pelo valor antes de enviar o comando, e o servidor recebe
--- a senha em claro. Estes dois SET, so desta sessao, a tiram do log do
--- servidor: sem eles, um log_statement all ou ddl grava o comando, e um comando
--- que falha grava a linha STATEMENT com a senha.
-SET log_statement = none;
-SET log_min_error_statement = panic;
+-- a senha em claro. Estes cinco SET, so desta sessao, desligam todo parametro que
+-- grava o texto do comando e a tiram do log do servidor: o log_statement em all
+-- ou ddl, a linha STATEMENT de um comando que falha e o log por duracao e por
+-- amostragem.
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+SET log_min_duration_statement = -1;
+SET log_min_duration_sample = -1;
+SET log_transaction_sample_rate = 0;
 \getenv dono POSTGRES_OWNER_PASSWORD
 \getenv aplicacao POSTGRES_APP_PASSWORD
 \getenv monitor POSTGRES_EXPORTER_PASSWORD
