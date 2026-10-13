@@ -90,7 +90,15 @@ _DE_VERDADE = {
 }
 
 
-@pytest.mark.parametrize("ambiente", [None, "production", "staging", ""])
+@pytest.mark.parametrize(
+    "ambiente",
+    [
+        pytest.param(None, id="ausente"),
+        pytest.param("production", id="production"),
+        pytest.param("staging", id="staging"),
+        pytest.param("", id="vazio"),
+    ],
+)
 @pytest.mark.parametrize(
     ("nome", "url"),
     [
@@ -119,7 +127,14 @@ def test_senha_de_demonstracao_fora_de_dev_e_test_para_o_boot_sem_ecoar_a_url(
         assert segredo not in str(erro.value)
 
 
-@pytest.mark.parametrize("ambiente", ["development", "test", " Development "])
+@pytest.mark.parametrize(
+    "ambiente",
+    [
+        pytest.param("development", id="development"),
+        pytest.param("test", id="test"),
+        pytest.param(" Development ", id="maiuscula-e-espacos"),
+    ],
+)
 @pytest.mark.parametrize("nome", ["DATABASE_URL", "RABBITMQ_URL"])
 def test_dev_e_test_aceitam_a_senha_de_demonstracao(
     monkeypatch: pytest.MonkeyPatch, ambiente: str, nome: str

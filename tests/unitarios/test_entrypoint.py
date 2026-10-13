@@ -24,7 +24,11 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 @pytest.mark.parametrize(
     ("root_path", "esperado"),
-    [pytest.param("/execucao", "/execucao", id="kubernetes"), (None, "")],
+    [
+        pytest.param("/execucao", "/execucao", id="kubernetes"),
+        pytest.param("/os", "/os", id="outro-prefixo"),
+        pytest.param(None, "", id="compose"),
+    ],
 )
 def test_entrypoint_sobe_o_uvicorn_com_o_root_path_do_ambiente(
     tmp_path: Path, root_path: str | None, esperado: str
@@ -48,15 +52,28 @@ def test_entrypoint_sobe_o_uvicorn_com_o_root_path_do_ambiente(
     ).stdout.splitlines()
     posicao = saida.index("--root-path")
     assert saida[posicao + 1] == esperado
+    # O XFF so vale atras de proxy configurado, o access log estruturado sai do
+    # middleware (o do uvicorn e uma linha de texto sem campos) e a resposta nao
+    # anuncia o servidor.
+    assert {"--no-proxy-headers", "--no-access-log", "--no-server-header"} <= set(saida)
 
 
-def test_uvicorn_com_o_prefixo_serve_o_swagger_sob_ele_e_as_sondas_sem_ele() -> None:
+@pytest.mark.parametrize(
+    "prefixo",
+    [
+        pytest.param("/execucao", id="kubernetes"),
+        pytest.param("/os", id="outro-prefixo"),
+    ],
+)
+def test_uvicorn_com_o_prefixo_serve_o_swagger_sob_ele_e_as_sondas_sem_ele(
+    prefixo: str,
+) -> None:
     servidor = uvicorn.Server(
         uvicorn.Config(
             criar_app(),
             host="127.0.0.1",
             port=0,
-            root_path="/execucao",
+            root_path=prefixo,
             lifespan="off",
             log_config=None,
         )
@@ -80,10 +97,10 @@ def test_uvicorn_com_o_prefixo_serve_o_swagger_sob_ele_e_as_sondas_sem_ele() -> 
         servidor.should_exit = True
         thread.join(timeout=10)
     assert docs.status_code == 200
-    assert "'/execucao/openapi.json'" in docs.text
+    assert f"'{prefixo}/openapi.json'" in docs.text
     # A pagina do Swagger precisa dos scripts dela: sem o CSP restrito da API.
     assert "Content-Security-Policy" not in docs.headers
-    assert openapi.json()["servers"] == [{"url": "/execucao"}]
+    assert openapi.json()["servers"] == [{"url": prefixo}]
     assert saude.json() == {"status": "ok"}
     assert saude.headers["Content-Security-Policy"] == "default-src 'none'"
     assert metricas.status_code == 200
