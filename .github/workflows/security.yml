@@ -62,6 +62,11 @@ jobs:
       # branches dos outros PRs abertos; cada branch e varrida no proprio PR.
       - name: gitleaks (historico do HEAD)
         run: gitleaks git . --log-opts="HEAD" --config .gitleaks.toml --redact --no-banner --verbose
+      # Uma regra que deixa de casar passaria verde: a senha gerada em URI de
+      # banco ou de broker num manifesto, e a apagada no commit seguinte, tem de
+      # reprovar.
+      - name: Regras do .gitleaks.toml reprovam senha em URI num manifesto e no historico (teste negativo)
+        run: scripts/ci/testa-gitleaks.sh
 
   trivy:
     runs-on: ubuntu-24.04
