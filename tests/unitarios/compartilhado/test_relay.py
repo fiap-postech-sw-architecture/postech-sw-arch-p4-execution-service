@@ -13,7 +13,6 @@ import os
 import socket
 import ssl
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
@@ -338,16 +337,21 @@ def test_canal_que_nao_reabre_e_broker_indisponivel(
 _BANCO_MORTO = "postgresql://x:y@127.0.0.1:1/nada"  # gitleaks:allow - nunca conecta
 
 
+# mtime fixo e velho (1 s depois de 1970): o teste so quer saber se o heartbeat foi
+# tocado de novo, e nao depende do relogio nem de um limite de idade.
+_MTIME_ANTIGO_NS = 1_000_000_000
+
+
 class _EsperaQueAnota(Backoff):
-    """Anota a idade do heartbeat na espera e para o laco na primeira."""
+    """Anota o mtime do heartbeat na espera e para o laco na primeira."""
 
     def __init__(self, heartbeat: Path) -> None:
         super().__init__(0.0, 0.0)
         self._heartbeat = heartbeat
-        self.idades: list[float] = []
+        self.mtimes_ns: list[int] = []
 
     def esperar(self, parar: threading.Event) -> None:
-        self.idades.append(time.time() - self._heartbeat.stat().st_mtime)
+        self.mtimes_ns.append(self._heartbeat.stat().st_mtime_ns)
         parar.set()
 
 
@@ -394,7 +398,7 @@ def test_broker_fora_na_abertura_reconecta_com_backoff_fora_da_prontidao(
     tmp_path: Path, log_capturado: io.StringIO, erro: Exception, nome: str
 ) -> None:
     backoff = _rodar_relay(tmp_path, _falha(erro))
-    assert len(backoff.idades) == 1
+    assert len(backoff.mtimes_ns) == 1
     assert not (tmp_path / "pronto").exists()
     [aviso] = [
         json.loads(linha)
@@ -412,12 +416,13 @@ def test_abertura_lenta_que_falha_toca_o_heartbeat_antes_da_espera(
     def resolucao_lenta(*_: object, **__: object) -> Any:
         # O pika nao poe prazo na resolucao do nome: com o DNS mudo a tentativa
         # leva dezenas de segundos, e o heartbeat, tocado antes dela, envelhece.
-        antigo = time.time() - 120
-        os.utime(heartbeat, (antigo, antigo))
+        os.utime(heartbeat, ns=(_MTIME_ANTIGO_NS, _MTIME_ANTIGO_NS))
         raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
 
-    [idade] = _rodar_relay(tmp_path, resolucao_lenta).idades
-    assert idade < 5
+    # Tocado depois da tentativa, antes da espera: a duracao da tentativa nao se
+    # soma a idade do heartbeat.
+    [mtime_na_espera] = _rodar_relay(tmp_path, resolucao_lenta).mtimes_ns
+    assert mtime_na_espera > _MTIME_ANTIGO_NS
 
 
 @pytest.mark.parametrize(
