@@ -110,14 +110,21 @@ smoke:
 # Manifestos do Kubernetes (k8s/), como no platform: os tres overlays pelo
 # kubectl kustomize, no kubeconform contra os schemas do Kubernetes do no do
 # kind (Secret reprova: senha nao entra nos manifests) e no trivy config, sem
-# achado HIGH ou CRITICAL. Ferramentas pelas imagens pinadas (as do platform).
+# achado HIGH ou CRITICAL. O que o trivy ignora, com o motivo, esta em
+# k8s/trivy-ignore.rego: a excecao vale para o ConfigMap do papeis.sql inteiro, e
+# confere-senhas-do-script.sh exige que todo PASSWORD do script venha de uma
+# variavel do psql lida por \getenv. Ferramentas pelas imagens pinadas (as do
+# platform).
 KUBERNETES_VERSION := 1.35.0
 KUBECONFORM := docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary \
 	-output text -kubernetes-version $(KUBERNETES_VERSION) -reject Secret -
-TRIVY_CONFIG := docker run --rm -i --entrypoint sh aquasec/trivy:0.72.0 -c \
-	'cat > /tmp/manifestos.yaml && trivy config --quiet --severity HIGH,CRITICAL --exit-code 1 /tmp/manifestos.yaml'
+TRIVY_CONFIG := docker run --rm -i -v "$(CURDIR)/k8s/trivy-ignore.rego:/trivy-ignore.rego:ro" \
+	--entrypoint sh aquasec/trivy:0.72.0 -c 'cat > /tmp/manifestos.yaml && trivy config \
+	--quiet --severity HIGH,CRITICAL --exit-code 1 --ignore-policy /trivy-ignore.rego \
+	/tmp/manifestos.yaml'
 
 manifests:
+	@scripts/ci/confere-senhas-do-script.sh
 	@set -e; for overlay in kind kind-ci k3s; do \
 		echo ">> k8s/overlays/$$overlay: kubeconform e trivy config"; \
 		manifestos="$$(kubectl kustomize "k8s/overlays/$$overlay")"; \

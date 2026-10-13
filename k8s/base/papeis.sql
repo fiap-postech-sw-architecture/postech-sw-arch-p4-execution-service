@@ -3,11 +3,11 @@
 -- como o superusuario postgres e conectada ao banco execucao. As senhas vem do
 -- ambiente do container do banco (Secret execucao-postgres) por \getenv, nunca
 -- de argumento; sem a variavel, a referencia fica crua e o script para no erro
--- de sintaxe (ON_ERROR_STOP).
---
--- Cada variavel vai na linha de baixo do PASSWORD, porque a regra KSV-0109 do
--- trivy toma a referencia do psql na mesma linha por senha escrita no
--- ConfigMap; ignorar a regra deixaria os outros ConfigMaps sem conferencia.
+-- de sintaxe (ON_ERROR_STOP). O trivy le PASSWORD :'var' como senha escrita no
+-- ConfigMap (KSV-0109): a excecao, so para este ConfigMap, esta em
+-- k8s/trivy-ignore.rego, e scripts/ci/confere-senhas-do-script.sh (make
+-- manifests) reprova PASSWORD com valor literal ou com variavel que nao vem do
+-- \getenv.
 \set ON_ERROR_STOP on
 -- O psql troca :'var' pelo valor antes de enviar o comando, e o servidor recebe
 -- a senha em claro. Estes dois SET, so desta sessao, a tiram do log do
@@ -20,16 +20,14 @@ SET log_min_error_statement = panic;
 \getenv monitor POSTGRES_EXPORTER_PASSWORD
 
 -- Dono do banco e das tabelas (DDL): so o Job de migracao.
-CREATE ROLE execucao LOGIN PASSWORD
-  :'dono';
+CREATE ROLE execucao LOGIN PASSWORD :'dono';
 ALTER DATABASE execucao OWNER TO execucao;
 ALTER SCHEMA public OWNER TO execucao;
 
 -- API, relay e consumidor: so DML. As tabelas nascem depois, no Job, como o
 -- dono; os privilegios padrao cobrem cada uma, inclusive a alembic_version que o
 -- aguarda-migracao le (um GRANT nas tabelas de agora nao alcancaria nenhuma).
-CREATE ROLE execucao_app LOGIN PASSWORD
-  :'aplicacao';
+CREATE ROLE execucao_app LOGIN PASSWORD :'aplicacao';
 GRANT CONNECT ON DATABASE execucao TO execucao_app;
 GRANT USAGE ON SCHEMA public TO execucao_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE execucao IN SCHEMA public
@@ -38,6 +36,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE execucao IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO execucao_app;
 
 -- postgres_exporter (sidecar do banco): estatisticas, sem ler tabela.
-CREATE ROLE execucao_exporter LOGIN PASSWORD
-  :'monitor';
+CREATE ROLE execucao_exporter LOGIN PASSWORD :'monitor';
 GRANT pg_monitor TO execucao_exporter;
