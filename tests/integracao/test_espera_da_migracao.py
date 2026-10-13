@@ -13,12 +13,13 @@ import io
 import json
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from alembic import command
 from sqlalchemy import inspect, make_url, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 from src import banco as modulo_banco
 from src.banco import aguardar, revisao_da_imagem
@@ -168,6 +169,61 @@ def test_banco_sem_a_tabela_de_versao_espera_e_nao_cria_nada(
         "migration_wait_done",
     ]
     assert eventos[0]["database_revision"] is None
+
+
+def test_banco_com_a_tabela_de_versao_vazia_espera(
+    engine: Engine, log_capturado: io.StringIO
+) -> None:
+    _, head = revisao_da_imagem()
+    esperas: list[float] = []
+
+    def esperar(segundos: float) -> None:
+        esperas.append(segundos)
+        # O Job grava a revisao durante a espera.
+        with engine.begin() as conexao:
+            conexao.execute(
+                text("INSERT INTO alembic_version VALUES (:v)"), {"v": head}
+            )
+
+    with engine.begin() as conexao:
+        conexao.execute(text("DELETE FROM alembic_version"))
+    try:
+        aguardar(engine, esperar=esperar)
+    finally:
+        with engine.begin() as conexao:
+            conexao.execute(text("DELETE FROM alembic_version"))
+            conexao.execute(
+                text("INSERT INTO alembic_version VALUES (:v)"), {"v": head}
+            )
+
+    assert esperas == [2.0]
+    espera, pronto = _eventos(log_capturado)
+    assert espera["event"] == "migration_wait_database_behind"
+    assert espera["database_revision"] is None
+    assert pronto["event"] == "migration_wait_done"
+
+
+def test_erro_que_nao_e_do_driver_sai_em_vez_de_esperar(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def conectar() -> Any:
+        raise InvalidRequestError("configuracao errada")
+
+    monkeypatch.setattr(engine, "connect", conectar)
+
+    with pytest.raises(InvalidRequestError):
+        aguardar(engine, esperar=_nunca_espera)
+
+
+def test_imagem_sem_nenhuma_migracao_recusa_em_vez_de_liberar_o_pod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: Engine
+) -> None:
+    (tmp_path / "migrations" / "versions").mkdir(parents=True)
+    (tmp_path / "alembic.ini").write_text("[alembic]\nscript_location = migrations\n")
+    monkeypatch.setattr(modulo_banco, "_RAIZ", tmp_path)
+
+    with pytest.raises(RuntimeError, match="nenhuma migracao"):
+        aguardar(engine, esperar=_nunca_espera)
 
 
 def test_banco_fora_do_ar_e_espera_e_o_log_traz_o_tipo_do_erro(

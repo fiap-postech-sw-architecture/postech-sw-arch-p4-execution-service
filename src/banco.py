@@ -26,7 +26,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError
 
 from src.compartilhado.infraestrutura.ambiente import url_de_conexao
 from src.compartilhado.infraestrutura.database import criar_engine
@@ -45,11 +45,20 @@ _PAPEL_DA_APLICACAO: Final = "execucao_app"
 
 
 def revisao_da_imagem() -> tuple[ScriptDirectory, str]:
-    """As migracoes desta imagem e a ``head`` delas."""
+    """As migracoes desta imagem e a ``head`` delas.
+
+    Raises:
+        RuntimeError: a imagem nao traz migracao nenhuma; liberar o pod por
+            isso esconderia um build sem as migracoes.
+    """
     config = Config(str(_RAIZ / "alembic.ini"))
     config.set_main_option("script_location", str(_RAIZ / "migrations"))
     script = ScriptDirectory.from_config(config)
-    return script, script.get_current_head() or ""
+    head = script.get_current_head()
+    if head is None:
+        msg = "a imagem nao traz nenhuma migracao em migrations/versions"
+        raise RuntimeError(msg)
+    return script, head
 
 
 def aguardar(
@@ -60,9 +69,11 @@ def aguardar(
 ) -> None:
     """Espera o banco na ``head`` da imagem, ou a frente dela.
 
-    Banco fora do ar, sem ``alembic_version`` e revisao conhecida mas atras da
-    ``head`` sao espera, e cada espera loga o motivo; o prazo e o do rollout no
-    Kubernetes. Erro que nao e do banco sai na hora.
+    Banco fora do ar (conexao recusada, senha, DNS: erro do driver), sem
+    ``alembic_version`` e revisao conhecida mas atras da ``head`` sao espera, e
+    cada espera loga o motivo; o prazo e o do rollout no Kubernetes. Qualquer
+    outro erro (configuracao, URL) sai na hora, em vez de virar laco com a mesma
+    linha no log.
     """
     script, head = revisao_da_imagem()
     conhecidas = {revisao.revision for revisao in script.walk_revisions()}
@@ -70,7 +81,7 @@ def aguardar(
         try:
             with engine.connect() as conexao:
                 atual = MigrationContext.configure(conexao).get_current_revision()
-        except SQLAlchemyError as exc:
+        except DBAPIError as exc:
             _log.warning(
                 "migration_wait_database_unavailable", error=type(exc).__name__
             )
