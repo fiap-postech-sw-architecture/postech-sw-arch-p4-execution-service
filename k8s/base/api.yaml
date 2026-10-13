@@ -30,17 +30,14 @@ spec:
       initContainers:
         # Espera o Job de migracao da mesma versao: no rolling update os pods
         # novos esperam a revisao nova e os antigos seguem servindo (ADR-042,
-        # migracao expandir e contrair).
+        # migracao expandir e contrair). Banco a frente da imagem nao e espera:
+        # depois de um rollout undo, o pod revertido sobe sobre o banco que o Job
+        # novo migrou. So le a alembic_version e loga por que ainda espera
+        # (src/banco.py).
         - name: aguarda-migracao
           image: pytstop-execution-service
           imagePullPolicy: IfNotPresent
-          command:
-            - sh
-            - -c
-            - >-
-              h="$(alembic heads | cut -d' ' -f1)" && [ -n "$h" ]
-              && until [ "$(alembic current 2>/dev/null | cut -d' ' -f1)" = "$h" ];
-              do sleep 2; done
+          command: ["python", "-m", "src.banco", "aguardar"]
           env:
             - name: POSTGRES_APP_PASSWORD
               valueFrom:

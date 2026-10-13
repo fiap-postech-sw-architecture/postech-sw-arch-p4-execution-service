@@ -34,13 +34,7 @@ spec:
         - name: aguarda-migracao
           image: pytstop-execution-service
           imagePullPolicy: IfNotPresent
-          command:
-            - sh
-            - -c
-            - >-
-              h="$(alembic heads | cut -d' ' -f1)" && [ -n "$h" ]
-              && until [ "$(alembic current 2>/dev/null | cut -d' ' -f1)" = "$h" ];
-              do sleep 2; done
+          command: ["python", "-m", "src.banco", "aguardar"]
           env:
             - name: POSTGRES_APP_PASSWORD
               valueFrom:
