@@ -64,18 +64,18 @@ Envelope: `id`, `tipo`, `versao`, `origem` (`execution-service`), `correlation_i
 - **Métricas** (porta `METRICS_PORT`, padrão 9100, em cada processo): `pytstop_mensagens_publicadas_total{tipo}` e `outbox_pendentes`/`outbox_dead` no relay; `pytstop_mensagens_consumidas_total{tipo,resultado}` (`processada`, `duplicada`, `ignorada`, `retry`, `dlq`) no consumidor.
 - **Prontidão**: cada processo toca um heartbeat em `/tmp/<processo>-heartbeat` a cada volta do laço (liveness; dependência fora não reinicia o pod) e mantém `/tmp/<processo>-pronto` enquanto está conectado (readiness). Na abertura da conexão com o broker, contam como broker fora o erro de conexão do cliente AMQP (`AMQPError`), o nome sem resolução no DNS (`socket.gaierror`, como no Service headless do RabbitMQ sem pod pronto) e o broker que aceita a conexão TCP e não responde o AMQP no prazo da pilha do cliente (15 s, `AMQPConnectorStackTimeout`); qualquer outro erro derruba o processo, para o Kubernetes reiniciá-lo e o defeito aparecer: falta de descritores, certificado TLS recusado e erro de disco ao tocar os arquivos de sinal. O cliente AMQP não põe prazo na resolução do nome, e a tentativa que falha toca o heartbeat de novo: a idade dele na espera é a da espera, não a soma das duas. A reconexão espera um sorteio entre 0 e o atraso da vez (1 a 30 s), para as réplicas não voltarem juntas. Depois de um erro de banco num handler, o consumidor confere o banco antes de consumir de novo: sem resposta, fecha a assinatura e sai da prontidão até o banco voltar, e as mensagens esperam na fila em vez de gastar a escada de retry. SIGTERM termina a mensagem em curso e fecha as conexões.
 
-Para rodar fora do compose, com o RabbitMQ e o PostgreSQL do `make compose-up` no ar:
+Para rodar fora do compose, com o RabbitMQ e o PostgreSQL do `make compose-up` no ar, o primeiro comando carrega a `DATABASE_URL` e a `RABBITMQ_URL` de demonstração, o relay publica a outbox e o consumidor consome a `execucao.comandos` (cada processo no seu terminal):
 
 ```bash
-set -a; . ./.env; set +a          # DATABASE_URL e RABBITMQ_URL de demonstracao
-uv run python -m src.relay        # publica a outbox
-uv run python -m src.consumidor   # consome execucao.comandos
+set -a; . ./.env; set +a
+uv run python -m src.relay
+uv run python -m src.consumidor
 ```
 
 Para ver o fluxo à mão com o `make compose-up` no ar, publique um comando como o OS Service (usuário `os`) e leia a resposta em `os.eventos` no console do RabbitMQ (`http://127.0.0.1:15673`, usuário `admin`, senha de demonstração em [`contratos/rabbitmq/rabbitmq-admin.json`](contratos/rabbitmq/rabbitmq-admin.json); em Queues and Streams, `os.eventos`, Get messages). Um `LiberarReserva` de uma ordem nova grava a lápide e responde `ReservaLiberada`:
 
 ```bash
-export RABBITMQ_OS_PASSWORD=pytstop-os-demo-2026  # gitleaks:allow (senha de demonstracao do compose)
+export RABBITMQ_OS_PASSWORD=pytstop-os-demo-2026
 uv run python - <<'PY'
 import json, os, uuid
 from datetime import UTC, datetime
@@ -153,11 +153,13 @@ O boot falha com mensagem clara se faltar uma variável obrigatória, se `JWKS_U
 Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 (instala o Python 3.14 do `.python-version`) e Docker (compose e os testes de integração com testcontainers).
 
 ```bash
-make compose-up    # API em http://127.0.0.1:8003, relay, consumidor, PostgreSQL (127.0.0.1:5433) e RabbitMQ (127.0.0.1:5673, console em 15673, usuário admin)
-make compose-logs  # acompanha o log da API
-make check         # uv.lock em dia, ruff, ruff format, import-linter, mypy strict, bandit e testes com gate de cobertura (90%)
-make compose-down  # derruba e apaga o volume
+make compose-up
+make compose-logs
+make check
+make compose-down
 ```
+
+O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`); o `make compose-logs` acompanha o log da API; o `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit e os testes com gate de cobertura (90%); o `make compose-down` derruba a stack e apaga o volume.
 
 Fora do compose, `.env.example` traz as variáveis com os valores de demonstração (`cp .env.example .env`, depois `set -a; . ./.env; set +a; make run`).
 
@@ -197,12 +199,12 @@ Os manifestos do Kubernetes estão em [`k8s/`](k8s) ([ADR-042](https://github.co
 **No kind**, com o `platform` clonado ao lado deste repositório:
 
 ```bash
-make -C ../postech-sw-arch-p4-platform kind-up deploy                    # plataforma e Secrets
-make kind-deploy                                                         # este checkout, pelo script do platform
+make -C ../postech-sw-arch-p4-platform kind-up deploy
+make kind-deploy
 ../postech-sw-arch-p4-platform/scripts/ci/smoke-servicos.sh execution-service
 ```
 
-O `make kind-deploy` chama o `scripts/ci/implantar-servicos.sh` do `platform` (o diretório vem de `PLATFORM_DIR`), o mesmo do CD: constrói a imagem deste checkout com o commit como tag, carrega-a no kind, gera sobre o overlay (`KIND_OVERLAY`, padrão `kind`) um com a imagem trocada, apaga o Job anterior (Job é imutável), aplica e espera o banco, o Job e os Deployments, nessa ordem. O smoke confere o Job, os rollouts, `https://localhost/execucao/api/v1/saude` com 200 e `/execucao/metrics` com 404 pela borda, `up = 1` de cada pod no Prometheus e a NetworkPolicy barrando o banco a quem vem de outro namespace. Sem o OS e o Billing implantados, a API sobe, mas rota autenticada com token responde 503 (JWKS indisponível). Sem cluster, `make manifests` valida os três overlays, como o job `build` do CI.
+O primeiro comando cria o cluster, sobe a plataforma e gera os Secrets. O `make kind-deploy` chama o `scripts/ci/implantar-servicos.sh` do `platform` (o diretório vem de `PLATFORM_DIR`), o mesmo do CD: constrói a imagem deste checkout com o commit como tag, carrega-a no kind, gera sobre o overlay (`KIND_OVERLAY`, padrão `kind`) um com a imagem trocada, apaga o Job anterior (Job é imutável), aplica e espera o banco, o Job e os Deployments, nessa ordem. O smoke confere o Job, os rollouts, `https://localhost/execucao/api/v1/saude` com 200 e `/execucao/metrics` com 404 pela borda, `up = 1` de cada pod no Prometheus e a NetworkPolicy barrando o banco a quem vem de outro namespace. Sem o OS e o Billing implantados, a API sobe, mas rota autenticada com token responde 503 (JWKS indisponível). Sem cluster, `make manifests` valida os três overlays, como o job `build` do CI.
 
 **Troca de senha do banco**, com janela até o restart. São os passos da [troca de senha do banco](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform#troca-de-senha-do-banco) do `platform`; o exemplo troca a do `execucao_app`, e para outro papel muda a chave e o nome do papel (`POSTGRES_EXPORTER_PASSWORD` e `execucao_exporter`, `POSTGRES_OWNER_PASSWORD` e `execucao`, `POSTGRES_PASSWORD` e `postgres`):
 
