@@ -90,8 +90,10 @@ spec:
           # nao pelo pronto: com o broker fora no boot, o processo fica de pe e fora
           # da prontidao, reconectando com backoff, em vez de ser reiniciado no fim
           # da janela da sonda. Nem pela existencia do arquivo: o /tmp e emptyDir e
-          # sobrevive ao restart do container, e o arquivo do container morto a
-          # satisfaria antes de o processo novo girar o laco.
+          # sobrevive ao restart do container, e o arquivo do container morto, de
+          # qualquer idade, a satisfaria na hora. Pela idade a janela encurta e nao
+          # fecha: o heartbeat de menos de 90 s do container morto ainda satisfaz a
+          # startup antes de o processo novo girar o laco (README, Processos e sondas).
           startupProbe:
             exec:
               command:
