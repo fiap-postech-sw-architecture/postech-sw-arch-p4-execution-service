@@ -1,12 +1,14 @@
-"""Scripts do CI (``scripts/ci/``): a conferencia que estreita a excecao do
-trivy (KSV-0109) ao ConfigMap do ``papeis.sql`` e o relatorio das imagens de
+"""Scripts do CI (``scripts/ci/``) e a excecao do trivy (KSV-0109): a conferencia
+que a estreita ao ConfigMap do ``papeis.sql`` e o relatorio das imagens de
 terceiros, que nunca reprova o job."""
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -118,6 +120,80 @@ def test_script_sem_password_reprova_porque_nao_prova_nada(tmp_path: Path) -> No
 
     assert resultado.returncode == 1
     assert "nenhum PASSWORD" in resultado.stderr
+
+
+def _trivy_config(configmap: str) -> subprocess.CompletedProcess[str]:
+    """O ``trivy config`` do ``make manifests`` (mesma imagem, mesma politica) sobre
+    um ConfigMap de nome ``configmap`` com ``DB_PASSWORD`` nos dados."""
+    docker = shutil.which("docker")
+    if docker is None:
+        motivo = "docker nao encontrado: o trivy do make manifests roda numa imagem"
+        if os.environ.get("CI"):
+            pytest.fail(motivo)
+        pytest.skip(motivo)
+    versao = re.search(
+        r"^TRIVY_VERSION := (\S+)$", (RAIZ / "Makefile").read_text(), re.MULTILINE
+    )
+    assert versao is not None
+    nome = f"execucao-teste-trivy-{uuid.uuid4().hex[:8]}"
+    manifesto = (
+        "apiVersion: v1\nkind: ConfigMap\n"
+        f"metadata:\n  name: {configmap}\n  namespace: pytstop-execucao\n"
+        "data:\n  DB_PASSWORD: valor-de-teste\n"
+    )
+    try:
+        return subprocess.run(  # noqa: S603 - docker do PATH, imagem pinada no Makefile
+            [
+                docker,
+                "run",
+                "--rm",
+                "-i",
+                "--name",
+                nome,
+                "-v",
+                f"{RAIZ / 'k8s' / 'trivy-ignore.rego'}:/trivy-ignore.rego:ro",
+                "--entrypoint",
+                "sh",
+                f"aquasec/trivy:{versao[1]}",
+                "-c",
+                "cat > /tmp/manifestos.yaml && trivy config --quiet "
+                "--severity HIGH,CRITICAL --exit-code 1 "
+                "--ignore-policy /trivy-ignore.rego /tmp/manifestos.yaml",
+            ],
+            input=manifesto,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+    finally:
+        subprocess.run(  # noqa: S603 - garante que o container nao fica para tras
+            [docker, "rm", "-f", nome], capture_output=True, check=False, timeout=60
+        )
+
+
+@pytest.mark.rede
+@pytest.mark.parametrize(
+    ("configmap", "reprova"),
+    [
+        ("outro-configmap", True),
+        ("execucao-postgres-init-evil", True),
+        ("execucao-postgres-init-72kb2dk7cf-evil", True),
+        ("execucao-postgres-init-72kb2dk7cf", False),
+    ],
+    ids=["outro-nome", "so-o-prefixo", "hash-com-sufixo", "o-do-kustomize"],
+)
+def test_a_excecao_do_ksv_0109_vale_so_para_o_configmap_do_papeis_sql(
+    configmap: str, reprova: bool
+) -> None:
+    resultado = _trivy_config(configmap)
+
+    # O nome inteiro, com o hash do kustomize: o prefixo sozinho deixaria passar
+    # senha num ConfigMap de nome parecido.
+    assert resultado.returncode == (1 if reprova else 0), (
+        resultado.stdout + resultado.stderr
+    )
+    assert ("KSV-0109" in resultado.stdout) is reprova
 
 
 def test_o_make_manifests_roda_a_conferencia_antes_do_trivy() -> None:
