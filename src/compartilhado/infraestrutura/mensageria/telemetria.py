@@ -130,7 +130,10 @@ class _SemTextoDeErro(SpanProcessor):
     com o texto do driver, o do FastAPI e o ``with`` do SDK, com o da excecao.
 
     Primeiro processador do provider: roda antes de qualquer exportador, sobre a
-    copia do span que todos recebem.
+    copia do span que todos recebem. O ``ReadableSpan`` nao tem setter, entao o
+    processador troca os atributos protegidos ``_status`` e ``_events`` da copia
+    (nao os do span vivo, que ja terminou); os testes de cada regra reprovam se o
+    SDK mudar isso.
     """
 
     def on_end(self, span: ReadableSpan) -> None:

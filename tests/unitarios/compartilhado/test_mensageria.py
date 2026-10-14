@@ -448,6 +448,33 @@ def test_desfechos_com_ack_comitam_a_transacao_da_mensagem(
     assert _consumidas("ReservarPecas", resultado) == antes + 1
 
 
+@pytest.mark.parametrize(
+    ("handler", "resultado", "passo"),
+    [
+        pytest.param(_Handler(), "processada", "basic_ack", id="ack"),
+        pytest.param(
+            _Handler(RuntimeError("defeito")), "dlq", "basic_reject", id="reject"
+        ),
+    ],
+)
+def test_mensagem_so_conta_depois_do_ack_ou_do_reject(
+    monkeypatch: pytest.MonkeyPatch, handler: _Handler, resultado: str, passo: str
+) -> None:
+    # A conexao cai no ack: o broker reentrega, e contar antes contaria a mesma
+    # entrega duas vezes.
+    def conexao_perdida(*_: object, **__: object) -> None:
+        raise StreamLostError
+
+    canal = _Canal()
+    monkeypatch.setattr(canal, passo, conexao_perdida)
+    antes = _consumidas("ReservarPecas", resultado)
+
+    with pytest.raises(StreamLostError):
+        _consumir(handler, canal=canal)
+
+    assert _consumidas("ReservarPecas", resultado) == antes
+
+
 def test_id_ja_processado_recebe_ack_sem_chamar_o_handler() -> None:
     handler = _Handler()
     canal = _consumir(handler, transacoes=_Transacoes(processada=True))

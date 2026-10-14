@@ -14,11 +14,11 @@ valor, e os paineis agregam com ``max``.
 - ``pytstop_pecas_em_falta{sku}``: reservas recusadas nos ultimos 7 dias em que o
   SKU faltou.
 
-Cada gauge tem a propria consulta, numa conexao curta e com prazo de 2 s (1 s
-para esperar um lock): a que falha (banco fora, tabela travada, prazo esgotado)
-fica ausente da raspagem, nunca em zero, e nao leva as outras junto. Os rotulos
-``servico`` e ``sku`` vem do que o diagnostico e a reserva guardam, codigos que
-o Billing e o estoque ja validaram: a cardinalidade e a do catalogo.
+Cada gauge tem a propria consulta, numa conexao curta e com prazo de 2 s (o da
+espera por um lock inclusive): a que falha (banco fora, tabela travada, prazo
+esgotado) fica ausente da raspagem, nunca em zero, e nao leva as outras junto.
+Os rotulos ``servico`` e ``sku`` vem do que o diagnostico e a reserva guardam,
+codigos que o Billing e o estoque ja validaram: a cardinalidade e a do catalogo.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 _log = structlog.get_logger(__name__)
 
 JANELA_DE_NEGOCIO: Final = timedelta(days=7)
+_DIAS: Final = JANELA_DE_NEGOCIO.days
 
 _IDADE_DA_OUTBOX: Final = text(
     "SELECT COALESCE(EXTRACT(EPOCH FROM clock_timestamp() - min(criado_em)), 0) "
@@ -56,15 +57,13 @@ _DURACAO_POR_SERVICO: Final = text(
     "GROUP BY s.codigo"
 )
 _FALTA_POR_SKU: Final = text(
-    "SELECT falta ->> 'sku', count(DISTINCT r.id) FROM reservas r "
+    "SELECT falta ->> 'sku', count(*) FROM reservas r "
     "CROSS JOIN LATERAL jsonb_array_elements(r.faltantes) AS falta "
     "WHERE r.status = 'RECUSADA' AND r.criada_em >= now() - :janela "
     "GROUP BY falta ->> 'sku'"
 )
-_PRAZOS: Final = (
-    text("SET LOCAL statement_timeout = '2s'"),
-    text("SET LOCAL lock_timeout = '1s'"),
-)
+# O statement_timeout tambem corta a espera por um lock.
+_PRAZO: Final = text("SET LOCAL statement_timeout = '2s'")
 
 
 def _idade_da_outbox() -> GaugeMetricFamily:
@@ -77,7 +76,8 @@ def _idade_da_outbox() -> GaugeMetricFamily:
 def _duracao_media() -> GaugeMetricFamily:
     return GaugeMetricFamily(
         "pytstop_execucao_duracao_media_segundos",
-        "Duracao media das execucoes finalizadas nos ultimos 7 dias, por servico.",
+        f"Duracao media das execucoes finalizadas nos ultimos {_DIAS} dias, "
+        "por servico.",
         labels=["servico"],
     )
 
@@ -85,7 +85,7 @@ def _duracao_media() -> GaugeMetricFamily:
 def _pecas_em_falta() -> GaugeMetricFamily:
     return GaugeMetricFamily(
         "pytstop_pecas_em_falta",
-        "Reservas recusadas nos ultimos 7 dias em que o SKU faltou.",
+        f"Reservas recusadas nos ultimos {_DIAS} dias em que o SKU faltou.",
         labels=["sku"],
     )
 
@@ -125,8 +125,7 @@ class ColetorDaApi:
         """As linhas da consulta, ou ``None`` se ela falhou (e o gauge sai ausente)."""
         try:
             with self._abrir_conexao() as conexao, conexao.begin():
-                for prazo in _PRAZOS:
-                    conexao.execute(prazo)
+                conexao.execute(_PRAZO)
                 return conexao.execute(consulta, {"janela": JANELA_DE_NEGOCIO}).all()
         except Exception as exc:  # noqa: BLE001 - a raspagem nunca cai pelo coletor
             _log.warning("api_gauge_unavailable", gauge=nome, error=type(exc).__name__)

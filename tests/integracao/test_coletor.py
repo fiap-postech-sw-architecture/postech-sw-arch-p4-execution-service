@@ -233,9 +233,9 @@ def test_tabela_travada_omite_so_o_gauge_dela_dentro_do_prazo(
         coletado = _coletar(engine)
         gasto = time.monotonic() - inicio
 
-    # O lock_timeout de 1 s da consulta, e nao os 5 s do engine nem o statement
-    # timeout de 15 s.
-    assert gasto < 4
+    # O prazo de 2 s da consulta corta a espera pelo lock; o engine do coletor nao
+    # tem outro limite, e sem ele a raspagem esperaria a trava ser solta.
+    assert 1.5 < gasto < 4
     assert set(coletado) == {IDADE, DURACAO, FALTA} - {ausente}
 
 
@@ -279,6 +279,25 @@ def test_metrics_da_api_traz_os_gauges_por_consulta(
     idade = REGISTRY.get_sample_value(IDADE)
     assert idade is not None
     assert 59 <= idade < 70
+
+
+def test_raspagem_nao_disputa_o_pool_das_requisicoes(
+    api_com_uma_linha_pendente: TestClient,
+) -> None:
+    # Pool de 5 mais 10 de excesso (os padroes): todo ocupado, como sob carga.
+    engine_da_api = api_com_uma_linha_pendente.app.state.session_factory.kw["bind"]
+    conexoes = [engine_da_api.connect() for _ in range(15)]
+    try:
+        assert engine_da_api.pool.checkedout() == 15
+        inicio = time.monotonic()
+        resposta = api_com_uma_linha_pendente.get("/metrics")
+        gasto = time.monotonic() - inicio
+    finally:
+        for conexao in conexoes:
+            conexao.close()
+
+    assert f"\n{IDADE} " in resposta.text
+    assert gasto < 1.5
 
 
 def test_coletor_sai_do_registro_com_o_app_e_o_proximo_app_registra_de_novo(
