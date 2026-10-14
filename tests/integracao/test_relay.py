@@ -281,6 +281,13 @@ def _vezes_fora_do_ar(log: io.StringIO) -> int:
     return log.getvalue().count('"dependencia": "broker"')
 
 
+def _reconexoes() -> float:
+    valor = REGISTRY.get_sample_value(
+        "pytstop_reconexoes_ao_broker_total", {"componente": "relay"}
+    )
+    return valor or 0.0
+
+
 def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
     broker: Broker,
     session_factory: sessionmaker[Session],
@@ -290,6 +297,7 @@ def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
     log_capturado: io.StringIO,
 ) -> None:
     pronto = tmp_path / "relay-pronto"
+    reconexoes_antes = _reconexoes()
     with EmSegundoPlano(relay()):
         esperar_ate(pronto.exists)
         broker.rabbitmqctl("stop_app")
@@ -306,6 +314,8 @@ def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
         esperar_ate(lambda: outbox()[0]["status"] == "entregue", prazo_s=60)
     assert outbox()[0]["tentativas"] == 0
     assert esperar_ate(lambda: broker.pegar("os.eventos"))
+    # Cada espera antes de reconectar conta uma vez, com o log dela.
+    assert _reconexoes() - reconexoes_antes == _vezes_fora_do_ar(log_capturado) >= 2
 
 
 def test_queda_real_do_broker_no_meio_do_lote_devolve_as_linhas_sem_gastar_tentativa(
@@ -384,12 +394,15 @@ def test_banco_fora_tira_a_prontidao_e_o_gauge_vira_nan(
     morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
     sinais = SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto")
     relay = Relay(morto, broker.url("execucao"), sinais, backoff=Backoff(0.05, 0.1))
+    reconexoes_antes = _reconexoes()
     with EmSegundoPlano(relay):
         esperar_ate(lambda: "relay_dependency_unavailable" in log_capturado.getvalue())
         assert not (tmp_path / "pronto").exists()
         assert (tmp_path / "hb").exists()
     assert math.isnan(REGISTRY.get_sample_value("outbox_pendentes") or 0.0)
     assert '"dependencia": "database"' in log_capturado.getvalue()
+    # A espera por causa do banco nao e reconexao ao broker.
+    assert _reconexoes() == reconexoes_antes
 
 
 def test_retencao_apaga_entregues_e_processadas_antigas(

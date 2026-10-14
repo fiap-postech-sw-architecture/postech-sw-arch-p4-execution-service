@@ -40,6 +40,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.compartilhado.infraestrutura.database import argumentos_de_conexao
 from src.compartilhado.infraestrutura.mensageria.amqp import (
     BROKER_FORA,
+    RECONEXOES,
     abrir_canal,
     fechar,
     propriedades,
@@ -48,6 +49,7 @@ from src.compartilhado.infraestrutura.mensageria.amqp import (
 from src.compartilhado.infraestrutura.mensageria.contratos import (
     EXCHANGE_EVENTOS,
     MensagemInvalidaError,
+    tipos_publicados_por,
     validar,
 )
 from src.compartilhado.infraestrutura.mensageria.outbox import LinhaDaOutbox, Outbox
@@ -62,11 +64,11 @@ from src.compartilhado.infraestrutura.outbox_mapping import CANAL_NOTIFY
 if TYPE_CHECKING:
     import threading
     from collections.abc import Sequence
-
-    from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
     from contextlib import AbstractContextManager
-    from sqlalchemy import Engine
+
     from opentelemetry.trace import Span
+    from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
+    from sqlalchemy import Engine
 
     from src.compartilhado.infraestrutura.mensageria.processo import SinaisDoProcesso
 
@@ -172,8 +174,6 @@ class _Broker:
         _log.info("relay_broker_unblocked")
 
 
-class Relay:
-    """Publica a outbox no RabbitMQ; ``executar`` roda ate ``parar`` ser ligado."""
 def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
     """Span PRODUCER filho do contexto gravado na outbox; ele vai nos headers."""
     pai = contexto_de(
@@ -193,6 +193,8 @@ def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
     )
 
 
+class Relay:
+    """Publica a outbox no RabbitMQ; ``executar`` roda ate ``parar`` ser ligado."""
 
     def __init__(
         self,
@@ -215,6 +217,11 @@ def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
         # Conexao crua do psycopg2 (sem tipos), dedicada ao LISTEN.
         self._ouvinte: Any = None
         self._limpeza = Periodico()
+        # Toda serie fechada nasce com zero no boot: sem isso o increase() dos
+        # paineis perderia o primeiro evento de cada uma.
+        for tipo in tipos_publicados_por(usuario_da_url(rabbitmq_url)):
+            _PUBLICADAS.labels(tipo)
+        self._reconexoes = RECONEXOES.labels("relay")
         _PENDENTES.set_function(lambda: self._outbox.contar("pendente"))
         _DEAD.set_function(lambda: self._outbox.contar("dead"))
 
@@ -233,6 +240,7 @@ def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
                     self._ciclo(parar)
                 except BrokerIndisponivelError as exc:
                     self._fora_do_ar("broker", exc)
+                    self._reconexoes.inc()
                     self._backoff.esperar(parar)
                 except (SQLAlchemyError, self._erro_do_driver) as exc:
                     self._fora_do_ar("database", exc)

@@ -995,6 +995,13 @@ class _CanalFalso:
         pass
 
 
+def _reconexoes(componente: str) -> float:
+    valor = REGISTRY.get_sample_value(
+        "pytstop_reconexoes_ao_broker_total", {"componente": componente}
+    )
+    return valor or 0.0
+
+
 def _rodar_laco(
     monkeypatch: pytest.MonkeyPatch,
     primeira_volta: Callable[[_CanalFalso], None],
@@ -1102,9 +1109,12 @@ def test_assinatura_cancelada_pelo_broker_vira_nova_assinatura(
         assert canal.ao_cancelar is not None
         canal.ao_cancelar(object())  # Basic.Cancel: o pika so chama o callback
 
+    antes = _reconexoes("consumidor")
     assinaturas, backoff = _rodar_laco(monkeypatch, cancelar, tmp_path)
     assert (assinaturas, backoff.esperas) == (2, 1)
     assert '"error": "ConsumerCancelled"' in log_capturado.getvalue()
+    # Uma contagem por espera antes de reconectar, so do consumidor.
+    assert _reconexoes("consumidor") == antes + 1
 
 
 def test_copia_recusada_pelo_broker_reconecta_com_backoff(
@@ -1114,9 +1124,13 @@ def test_copia_recusada_pelo_broker_reconecta_com_backoff(
         # basic_publish da copia num canal que o broker fechou (403 ou 406).
         raise ChannelClosedByBroker(403, "ACCESS_REFUSED")
 
+    antes = _reconexoes("consumidor")
+    relay_antes = _reconexoes("relay")
     assinaturas, backoff = _rodar_laco(monkeypatch, recusar, tmp_path)
     assert (assinaturas, backoff.esperas) == (2, 1)
     assert '"error": "ChannelClosedByBroker"' in log_capturado.getvalue()
+    assert _reconexoes("consumidor") == antes + 1
+    assert _reconexoes("relay") == relay_antes
 
 
 def test_nome_do_broker_sem_resolucao_reconecta_com_backoff_fora_da_prontidao(

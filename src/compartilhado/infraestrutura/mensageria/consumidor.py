@@ -57,6 +57,7 @@ from src.compartilhado.infraestrutura.database import (
 from src.compartilhado.infraestrutura.mensageria.amqp import (
     BROKER_FORA,
     EXCHANGE_RETRY,
+    RECONEXOES,
     abrir_canal,
     fechar,
     propriedades,
@@ -202,6 +203,12 @@ class Consumidor:
         self._conexao: BlockingConnection | None = None
         self._cancelado = False
         self._limpeza = Periodico()
+        # Toda serie fechada nasce com zero no boot: sem isso o increase() dos
+        # paineis perderia o primeiro evento de cada uma.
+        for tipo in (*handlers, _TIPO_DESCONHECIDO):
+            for resultado in Resultado:
+                _CONSUMIDAS.labels(tipo, resultado.value)
+        self._reconexoes = RECONEXOES.labels("consumidor")
         # Um handler falhou com erro de banco: antes de consumir de novo, o
         # laco confere se o banco responde.
         self._banco_suspeito = False
@@ -238,6 +245,7 @@ class Consumidor:
                     # O pika nao poe prazo na resolucao do nome: a idade do
                     # heartbeat na espera nao soma a duracao da tentativa.
                     self._sinais.heartbeat()
+                    self._reconexoes.inc()
                     self._backoff.esperar(parar)
                 self._limpar_processadas_antigas()
         finally:

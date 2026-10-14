@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 import pika
 from pika.adapters.utils.connection_workflow import AMQPConnectorStackTimeout
 from pika.exceptions import AMQPError
+from prometheus_client import Counter
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -32,6 +33,15 @@ EXCHANGE_RETRY: Final = "pytstop.retry"
 # defeito; o processo cai e o Kubernetes o reinicia. Depois de aberta a conexao,
 # o pika ja embrulha o erro de socket em AMQPError.
 BROKER_FORA: Final = (AMQPError, socket.gaierror, AMQPConnectorStackTimeout)
+# Processo preso em reconexao (credencial, permissao ou broker fora): uma contagem
+# por espera antes de reconectar, no /metrics do proprio processo. O rotulo e
+# componente, e nao processo, porque o Prometheus ja poe `processo` em todo alvo
+# e o da metrica viraria exported_processo.
+RECONEXOES: Final = Counter(
+    "pytstop_reconexoes_ao_broker_total",
+    "Esperas antes de reconectar ao RabbitMQ (conexao perdida ou recusada).",
+    ["componente"],
+)
 # Broker com alarme de memoria ou disco segura os publishers; depois disto a
 # conexao cai e o processo reconecta, em vez de ficar parado sem sinal.
 _BLOQUEIO_MAXIMO_S: Final = 30.0

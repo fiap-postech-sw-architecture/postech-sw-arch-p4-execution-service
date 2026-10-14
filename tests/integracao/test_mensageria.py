@@ -87,6 +87,13 @@ def consumidas(tipo: str, resultado: str) -> float:
     return valor or 0.0
 
 
+def reconexoes_do_consumidor() -> float:
+    valor = REGISTRY.get_sample_value(
+        "pytstop_reconexoes_ao_broker_total", {"componente": "consumidor"}
+    )
+    return valor or 0.0
+
+
 def _esperar_consumo(tipo: str, resultado: str, antes: float, vezes: int = 1) -> None:
     esperar_ate(lambda: consumidas(tipo, resultado) >= antes + vezes)
 
@@ -1376,6 +1383,7 @@ def test_banco_fora_para_o_consumo_em_vez_de_gastar_a_escada_de_retry(
         Backoff(0.05, 0.1),
     )
     antes = consumidas("ReservarPecas", "retry")
+    reconexoes_antes = reconexoes_do_consumidor()
     with EmSegundoPlano(consumidor):
         esperar_ate((tmp_path / "pronto").exists)
         broker.publicar_comando(
@@ -1394,6 +1402,8 @@ def test_banco_fora_para_o_consumo_em_vez_de_gastar_a_escada_de_retry(
         assert broker.contar("execucao.comandos") == 1
         assert not (tmp_path / "pronto").exists()
     assert consumidas("ReservarPecas", "retry") == antes + 1
+    # A pausa por causa do banco nao e reconexao ao broker.
+    assert reconexoes_do_consumidor() == reconexoes_antes
 
 
 def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
@@ -1407,6 +1417,7 @@ def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
     # levanta erro; sem tratar, o processo seguiria pronto sem consumir nada.
     _criar_item(engine, "PEC-VELA", 5)
     pronto = tmp_path / "consumidor-pronto"
+    reconexoes_antes = reconexoes_do_consumidor()
     with EmSegundoPlano(consumidor()):
         esperar_ate(pronto.exists)
         with broker.canal() as canal:
@@ -1428,6 +1439,7 @@ def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
             envelope_de_comando("ReservarPecas", _reservar(uuid4()))
         )
         esperar_ate(outbox)
+    assert reconexoes_do_consumidor() >= reconexoes_antes + 1
 
 
 def _trace(traceparent: str | None) -> str | None:
