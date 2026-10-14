@@ -212,17 +212,24 @@ def spans() -> InMemorySpanExporter:
 
 
 @pytest.fixture(autouse=True)
-def _telemetria_hermetica(monkeypatch: pytest.MonkeyPatch) -> None:
+def _telemetria_hermetica() -> Iterator[None]:
     """Nenhum teste instala um provider global por conta propria: ``criar_app``
     sem ``provedor=`` instalaria o do processo (e um exportador, com
     ``OTEL_ENABLED`` no ambiente). O teste que quer exercitar esse caminho troca o
-    ``configurar_telemetria`` por um espiao."""
+    ``configurar_telemetria`` por um espiao.
+
+    Um ``MonkeyPatch`` proprio, nao o fixture ``monkeypatch``: este e compartilhado
+    com o teste, e o que o teste troca (o ``connect`` de um engine) so voltaria
+    depois dos fixtures de limpeza que dependem desse engine.
+    """
 
     def sem_provider_global(_processo: str) -> TracerProvider:
         msg = "em teste, passe provedor= a criar_app (provedor_dos_testes())"
         raise AssertionError(msg)
 
-    monkeypatch.setattr("src.main.configurar_telemetria", sem_provider_global)
+    with pytest.MonkeyPatch.context() as isolado:
+        isolado.setattr("src.main.configurar_telemetria", sem_provider_global)
+        yield
 
 
 @pytest.fixture(autouse=True)

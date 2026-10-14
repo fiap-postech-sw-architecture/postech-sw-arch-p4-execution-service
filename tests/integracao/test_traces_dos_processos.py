@@ -107,6 +107,23 @@ def test_relay_ocioso_nao_exporta_span_com_o_banco_instrumentado(
     assert spans.get_finished_spans() == ()
 
 
+def test_consumidor_ocioso_nao_exporta_span_com_o_banco_instrumentado(
+    engine_instrumentado: Engine,
+    comandos_sql: list[str],
+    consumidor: Callable[..., Consumidor],
+    spans: InMemorySpanExporter,
+) -> None:
+    # A limpeza das mensagens processadas e a conferencia do banco depois de um
+    # erro rodam fora de qualquer mensagem: comandos de cliente sem pai.
+    ocioso = consumidor()
+
+    ocioso._limpar_processadas_antigas()
+    assert ocioso._banco_responde() is True
+
+    assert any("mensagens_processadas" in comando for comando in comandos_sql)
+    assert spans.get_finished_spans() == ()
+
+
 def test_saga_tem_um_trace_so_com_os_comandos_de_banco_do_consumidor_e_do_relay(
     broker: Broker,
     engine_instrumentado: Engine,

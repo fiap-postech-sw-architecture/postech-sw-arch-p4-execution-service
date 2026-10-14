@@ -463,6 +463,10 @@ def test_o_teto_do_tracestate_e_sobre_a_soma_das_linhas_do_cabecalho() -> None:
             trace.get_current_span(contexto).get_span_context().trace_state.to_header()
         )
 
+    # O getter de baixo segue sendo o do portador: as chaves passam inteiras.
+    assert telemetria._SemTracestateLongo(Linhas()).keys({"traceparent": []}) == [
+        "traceparent"
+    ]
     # Duas linhas de 255 e 256 caracteres somam 512 com a virgula: passam; 257, nao.
     a, b = "a=" + "x" * 253, "b=" + "y" * 254
     assert len(a) == 255
