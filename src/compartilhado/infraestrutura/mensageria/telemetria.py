@@ -9,8 +9,8 @@ Dois cuidados valem para todo span do provider, venha do codigo do servico ou do
 instrumentador de FastAPI, SQLAlchemy e httpx:
 
 - o amostrador descarta o span de cliente sem pai (``AmostradorDeRaiz``):
-  o poll do relay, a raspagem do coletor e o ciclo ocioso so abrem esse tipo de
-  span, e cada um virava um trace raiz;
+  o poll do relay, as contagens do /metrics e o ciclo ocioso so abrem esse tipo
+  de span, e cada um virava um trace raiz;
 - nenhum span leva a mensagem de uma excecao nem a descricao do status de erro
   (``_SemTextoDeErro``): o erro do driver traz o ``DETAIL`` do PostgreSQL com a
   linha inteira (placa, texto livre). O motivo de uma falha vai em atributo
@@ -124,8 +124,8 @@ class AmostradorDeRaiz(Sampler):
     """Raiz do ``ParentBased``: o span de cliente sem pai nao vira trace.
 
     So chega aqui o span sem pai. O de cliente (uma consulta do SQLAlchemy, uma
-    chamada do httpx) sem span em volta e o poll do relay, a raspagem do coletor
-    ou um ciclo ocioso: descartado. O de cliente com pai (a consulta de uma
+    chamada do httpx) sem span em volta e o poll do relay, as contagens do
+    /metrics ou um ciclo ocioso: descartado. O de cliente com pai (a consulta de uma
     requisicao ou de uma mensagem) nao passa por aqui e segue a decisao do pai.
     Qualquer outro tipo de span sem pai (a requisicao, a publicacao, o consumo)
     abre o trace.
