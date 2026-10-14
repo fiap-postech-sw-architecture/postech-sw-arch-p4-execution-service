@@ -312,6 +312,7 @@ class Consumidor:
         # Propriedades ainda nao conferidas: no span so o que tem forma de UUID.
         atributos = {
             "messaging.system": "rabbitmq",
+            "messaging.operation.type": "process",
             "messaging.destination.name": FILA,
             "messaging.message.id": _uuid_ou_none(props.message_id),
             "messaging.message.conversation_id": _uuid_ou_none(props.correlation_id),

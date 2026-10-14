@@ -21,7 +21,7 @@ from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.instrumentacao import (
     instrumentar_api,
     instrumentar_cliente_http,
-    redigir_url_da_span,
+    trocar_url_pelo_template,
 )
 from src.compartilhado.infraestrutura.mensageria import telemetria
 from src.compartilhado.infraestrutura.mensageria.telemetria import tracer
@@ -78,7 +78,9 @@ def _span(span: _SpanFalso) -> Any:
 def test_hook_troca_os_quatro_atributos_de_url_pelo_template() -> None:
     span = _SpanFalso({"http.route": TEMPLATE})
 
-    redigir_url_da_span(_span(span), {"path": f"/api/v1/execucoes/{SEGREDO}/inicio"})
+    trocar_url_pelo_template(
+        _span(span), {"path": f"/api/v1/execucoes/{SEGREDO}/inicio"}
+    )
 
     assert span.gravados == dict.fromkeys(URL, TEMPLATE)
 
@@ -86,7 +88,7 @@ def test_hook_troca_os_quatro_atributos_de_url_pelo_template() -> None:
 def test_hook_requisicao_sem_rota_casada_leva_nao_roteada() -> None:
     span = _SpanFalso({})
 
-    redigir_url_da_span(_span(span), {"path": f"/qualquer/{SEGREDO}"})
+    trocar_url_pelo_template(_span(span), {"path": f"/qualquer/{SEGREDO}"})
 
     assert span.gravados == dict.fromkeys(URL, "nao_roteada")
 
@@ -94,7 +96,7 @@ def test_hook_requisicao_sem_rota_casada_leva_nao_roteada() -> None:
 def test_hook_com_query_marca_a_query_como_redigida() -> None:
     span = _SpanFalso({"http.route": TEMPLATE})
 
-    redigir_url_da_span(_span(span), {"query_string": f"x={SEGREDO}".encode()})
+    trocar_url_pelo_template(_span(span), {"query_string": f"x={SEGREDO}".encode()})
 
     assert span.gravados["url.query"] == "REDACTED"
     assert SEGREDO not in repr(span.gravados)
@@ -103,7 +105,7 @@ def test_hook_com_query_marca_a_query_como_redigida() -> None:
 def test_hook_sem_query_nao_inventa_a_query() -> None:
     span = _SpanFalso({"http.route": TEMPLATE})
 
-    redigir_url_da_span(_span(span), {"query_string": b""})
+    trocar_url_pelo_template(_span(span), {"query_string": b""})
 
     assert "url.query" not in span.gravados
 
@@ -111,7 +113,7 @@ def test_hook_sem_query_nao_inventa_a_query() -> None:
 def test_hook_span_que_nao_grava_nao_toca_nos_atributos() -> None:
     span = _SpanFalso({"http.route": TEMPLATE}, gravando=False)
 
-    redigir_url_da_span(_span(span), {"query_string": b"a=b"})
+    trocar_url_pelo_template(_span(span), {"query_string": b"a=b"})
 
     assert span.gravados == {}
 
@@ -121,7 +123,7 @@ def test_hook_troca_o_que_vem_do_chamador_por_valor_fixo() -> None:
     entrada |= dict.fromkeys(PORTAS_DO_CHAMADOR, 51234)
     span = _SpanFalso({"http.route": TEMPLATE, **entrada})
 
-    redigir_url_da_span(_span(span), {})
+    trocar_url_pelo_template(_span(span), {})
 
     esperado = dict.fromkeys(TEXTOS_DO_CHAMADOR, "REDACTED")
     esperado |= dict.fromkeys(PORTAS_DO_CHAMADOR, 0)
@@ -132,7 +134,7 @@ def test_hook_nao_inventa_o_dado_do_chamador_que_o_span_nao_tem() -> None:
     # Na convencao nova o span nao traz os nomes da antiga, e vice-versa.
     span = _SpanFalso({"http.route": TEMPLATE, "http.user_agent": "x"})
 
-    redigir_url_da_span(_span(span), {})
+    trocar_url_pelo_template(_span(span), {})
 
     assert set(span.gravados) == {*URL, "http.user_agent"}
 

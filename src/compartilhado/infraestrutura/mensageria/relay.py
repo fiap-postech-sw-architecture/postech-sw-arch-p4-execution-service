@@ -27,7 +27,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
-from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.trace import SpanKind
 from pika.exceptions import (
     AMQPError,
     ChannelClosedByBroker,
@@ -57,6 +57,7 @@ from src.compartilhado.infraestrutura.mensageria.processo import Backoff, Period
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
     contexto_atual,
     contexto_de,
+    marcar_falha,
     tracer,
 )
 from src.compartilhado.infraestrutura.outbox_mapping import CANAL_NOTIFY
@@ -185,6 +186,7 @@ def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
         kind=SpanKind.PRODUCER,
         attributes={
             "messaging.system": "rabbitmq",
+            "messaging.operation.type": "send",
             "messaging.destination.name": linha.exchange,
             "messaging.rabbitmq.destination.routing_key": linha.routing_key,
             "messaging.message.id": linha.envelope["id"],
@@ -377,8 +379,7 @@ class Relay:
                 if falha is not None:
                     # Texto fixo (classe e codigo do broker), em atributo: o
                     # status do span nao leva descricao.
-                    span.set_attribute("pytstop.falha", falha)
-                    span.set_status(StatusCode.ERROR)
+                    marcar_falha(span, falha)
                 self._registrar_desfecho(linha, falha)
 
     def _registrar_desfecho(self, linha: LinhaDaOutbox, falha: str | None) -> None:

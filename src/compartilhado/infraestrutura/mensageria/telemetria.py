@@ -8,7 +8,7 @@ que carrega o gRPC (``criar_provedor``).
 Dois cuidados valem para todo span do provider, venha do codigo do servico ou do
 instrumentador de FastAPI, SQLAlchemy e httpx:
 
-- o amostrador descarta o span de cliente sem pai (``_RaizSemClienteOrfao``):
+- o amostrador descarta o span de cliente sem pai (``AmostradorDeRaiz``):
   o poll do relay, a raspagem do coletor e o ciclo ocioso so abrem esse tipo de
   span, e cada um virava um trace raiz;
 - nenhum span leva a mensagem de uma excecao nem a descricao do status de erro
@@ -45,12 +45,15 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from opentelemetry.context import Context
-    from opentelemetry.sdk.trace import Span
-    from opentelemetry.trace import Link, TraceState
+    from opentelemetry.sdk.trace import Span as SpanDoSdk
+    from opentelemetry.trace import Link, Span, TraceState
     from opentelemetry.util.types import Attributes
 
 _TRACESTATE_MAXIMO: Final = 512
 _TRACESTATE: Final = "tracestate"
+# Motivo da falha de um span: texto fixo (a classe da excecao, o codigo do broker),
+# nunca o texto da excecao.
+ATRIBUTO_FALHA: Final = "pytstop.falha"
 _VERDADEIROS: Final = frozenset({"true", "1"})
 # Mesmos padroes do compose da plataforma (Jaeger por OTLP/gRPC).
 _ENDPOINT_PADRAO: Final = "http://jaeger:4317"
@@ -117,7 +120,7 @@ def contexto_de(portador: Mapping[str, object]) -> Context:
     return _PROPAGADOR.extract(textos)
 
 
-class _RaizSemClienteOrfao(Sampler):
+class AmostradorDeRaiz(Sampler):
     """Raiz do ``ParentBased``: o span de cliente sem pai nao vira trace.
 
     So chega aqui o span sem pai. O de cliente (uma consulta do SQLAlchemy, uma
@@ -145,7 +148,7 @@ class _RaizSemClienteOrfao(Sampler):
         )
 
     def get_description(self) -> str:
-        return "RaizSemClienteOrfao"
+        return "AmostradorDeRaiz{descarta span de cliente sem pai}"
 
 
 def _sem_texto_de_excecao(evento: Event) -> Event:
@@ -177,7 +180,7 @@ class _SemTextoDeErro(SpanProcessor):
     def __init__(self, exportador: SpanProcessor) -> None:
         self._exportador = exportador
 
-    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+    def on_start(self, span: SpanDoSdk, parent_context: Context | None = None) -> None:
         self._exportador.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
@@ -193,6 +196,16 @@ class _SemTextoDeErro(SpanProcessor):
         return self._exportador.force_flush(timeout_millis)
 
 
+def marcar_falha(span: Span, falha: str) -> None:
+    """Span com status de erro e o motivo em ``pytstop.falha``.
+
+    O motivo e texto fixo, a classe da excecao ou o codigo do broker; o status vai
+    sem descricao (o ``_SemTextoDeErro`` tiraria o texto de qualquer jeito).
+    """
+    span.set_status(Status(StatusCode.ERROR))
+    span.set_attribute(ATRIBUTO_FALHA, falha)
+
+
 def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvider:
     """``TracerProvider`` do processo; com ``OTEL_ENABLED``, exporta por OTLP.
 
@@ -201,7 +214,7 @@ def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvi
     O exportador entra por dentro do ``_SemTextoDeErro``, nunca ao lado dele.
     """
     provedor = TracerProvider(
-        sampler=ParentBased(root=_RaizSemClienteOrfao()),
+        sampler=ParentBased(root=AmostradorDeRaiz()),
         resource=Resource.create(
             {
                 "service.name": ambiente.get("OTEL_SERVICE_NAME", _SERVICO_PADRAO),

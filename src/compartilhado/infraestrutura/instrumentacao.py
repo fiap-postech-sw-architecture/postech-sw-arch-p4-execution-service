@@ -9,7 +9,7 @@ spans de publicacao e de consumo e levam o contexto no envelope.
 O que a API nao exporta: ``/metrics`` e as sondas (``/api/v1/saude`` e
 ``/api/v1/saude/pronto``), os spans de ``receive`` e ``send`` do ASGI, o corpo
 das requisicoes e os parametros dos comandos SQL, o caminho cru da requisicao e
-o que o instrumentador grava de quem chamou (``redigir_url_da_span``).
+o que o instrumentador grava de quem chamou (``trocar_url_pelo_template``).
 """
 
 from __future__ import annotations
@@ -32,15 +32,13 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
 
 # A instrumentacao testa estas regex contra `esquema://<Host><caminho>`, sem a
-# query, e o Host vem do chamador: uma regex solta (`/api/v1/saude`) casaria com
-# `Host: x/api/v1/saude` e tiraria do trace a requisicao inteira. Ancorada, o `$`
-# e o fim do caminho de verdade: o Host nao tem `/`, `?` nem `#`, so segmentos de
-# caminho (o prefixo do ROOT_PATH, `/execucao` na borda) podem vir antes da rota.
-# /metrics e as sondas disparam a cada poucos segundos e nao contam historia.
-_INICIO_DA_URL: Final = r"^https?://[^/?#]+(?:/[^/?#]+)*"
-_URLS_SEM_TRACE: Final = (
-    rf"{_INICIO_DA_URL}/metrics$,{_INICIO_DA_URL}/api/v1/saude(?:/pronto)?$"
-)
+# query, e o Host vem do chamador. O `$` e o que as ancora no fim do caminho: sem
+# ele, `Host: x/api/v1/saude` casava com `/api/v1/saude` no meio da URL e tirava
+# do trace qualquer requisicao. Com ele, so a requisicao cujo caminho termina em
+# /metrics ou numa sonda sai do trace, venha o Host que vier (e com o prefixo do
+# ROOT_PATH, `/execucao` na borda). /metrics e as sondas disparam a cada poucos
+# segundos e nao contam historia.
+_URLS_SEM_TRACE: Final = "/metrics$,/api/v1/saude(?:/pronto)?$"
 # Os atributos que levam o caminho cru nas duas convencoes semanticas do
 # OpenTelemetry (a antiga, que e a padrao, e a nova).
 _ATRIBUTOS_DE_URL: Final = ("url.path", "http.target", "http.url", "url.full")
@@ -61,7 +59,7 @@ _TEXTOS_DO_CHAMADOR: Final = (
 _PORTAS: Final = ("net.peer.port", "client.port", "net.host.port", "server.port")
 
 
-def redigir_url_da_span(span: Span, scope: Mapping[str, Any]) -> None:
+def trocar_url_pelo_template(span: Span, scope: Mapping[str, Any]) -> None:
     """``server_request_hook`` do FastAPI: o span guarda o template da rota.
 
     O caminho cru traz o que identifica a requisicao (``/execucoes/<ordem_id>/...``,
@@ -96,7 +94,7 @@ def instrumentar_api(app: FastAPI, provedor: TracerProvider) -> None:
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=provedor,
-        server_request_hook=redigir_url_da_span,
+        server_request_hook=trocar_url_pelo_template,
         excluded_urls=_URLS_SEM_TRACE,
         exclude_spans=["receive", "send"],
     )

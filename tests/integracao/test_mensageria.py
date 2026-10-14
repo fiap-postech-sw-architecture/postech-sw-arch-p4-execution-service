@@ -171,6 +171,9 @@ def test_comando_vira_evento_do_contrato_com_causa_e_trace_encadeados(
     publicacao = _span(spans, "publish PecasReservadas")
     assert processo.kind is SpanKind.CONSUMER
     assert publicacao.kind is SpanKind.PRODUCER
+    # A tag que o Jaeger filtra nos tres servicos: send e process.
+    assert (processo.attributes or {})["messaging.operation.type"] == "process"
+    assert (publicacao.attributes or {})["messaging.operation.type"] == "send"
     assert processo.parent.span_id == origem.context.span_id
     assert publicacao.parent.span_id == processo.context.span_id
     assert {s.context.trace_id for s in (origem, processo, publicacao)} == {

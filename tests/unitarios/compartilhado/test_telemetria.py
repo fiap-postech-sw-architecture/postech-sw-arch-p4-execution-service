@@ -85,12 +85,12 @@ def _pai_remoto(*, amostrado: bool) -> trace.Span:
     ],
 )
 def test_raiz_descarta_so_o_span_de_cliente(tipo: SpanKind, decisao: Decision) -> None:
-    amostrador = telemetria._RaizSemClienteOrfao()
+    amostrador = telemetria.AmostradorDeRaiz()
 
     resultado = amostrador.should_sample(None, 1, "x", tipo)
 
     assert resultado.decision is decisao
-    assert amostrador.get_description() == "RaizSemClienteOrfao"
+    assert "descarta span de cliente sem pai" in amostrador.get_description()
 
 
 def test_span_de_cliente_sem_pai_nao_gera_trace(provedor: _Provedor) -> None:
@@ -325,3 +325,21 @@ def test_sem_exportacao_o_processador_nao_tem_exportador_por_dentro() -> None:
     (limpeza,) = provedor._active_span_processor._span_processors
     assert isinstance(limpeza, telemetria._SemTextoDeErro)
     assert type(limpeza._exportador) is SpanProcessor
+
+
+# --- marcar_falha ----------------------------------------------------------------
+
+
+def test_marcar_falha_poe_o_motivo_em_atributo_e_o_status_sem_descricao(
+    provedor: _Provedor,
+) -> None:
+    with provedor.tracer().start_as_current_span("publish X") as span:
+        telemetria.marcar_falha(span, "ChannelClosedByBroker (403)")
+
+    (exportado,) = provedor.exportados.get_finished_spans()
+    assert exportado.status.status_code is StatusCode.ERROR
+    assert exportado.status.description is None
+    assert dict(exportado.attributes or {}) == {
+        "pytstop.falha": "ChannelClosedByBroker (403)"
+    }
+    assert telemetria.ATRIBUTO_FALHA == "pytstop.falha"

@@ -815,6 +815,7 @@ def test_atributos_do_span_sao_so_messaging_com_ids_conferidos(
     (span,) = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
     assert dict(span.attributes or {}) == {
         "messaging.system": "rabbitmq",
+        "messaging.operation.type": "process",
         "messaging.destination.name": "execucao.comandos",
         "messaging.message.id": corpo["id"],
         "pytstop.resultado": "processada",
