@@ -40,9 +40,8 @@ services:
       <<: *banco
       JWKS_URL: ${JWKS_URL:-http://os-service:8000/.well-known/jwks.json}
       BILLING_URL: ${BILLING_URL:-http://billing-service:8000}
-      # Como no cluster, a API ve o endpoint OTLP no ambiente (so o relay e o
-      # consumidor exportam; o make smoke confere que o boot da API nao avisa
-      # da telemetria automatica do FastAPI).
+      # Nada exporta neste compose; a API recebe o endpoint do cluster so para o
+      # make smoke provar que o boot nao avisa da telemetria automatica.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4317}
       RUN_MIGRATIONS_ON_STARTUP: "true"
       RUN_SEED_ON_STARTUP: "true"

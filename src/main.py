@@ -71,8 +71,8 @@ def criar_app() -> FastAPI:
         dependencies=[Depends(correlacionar_pela_ordem)],
         # Sem o export automatico do FastAPI: com o endpoint OTLP no ambiente
         # ele soma exportadores http/protobuf na partida, que pedem o extra
-        # fastapi[opentelemetry] (o endpoint do cluster e gRPC) e deixavam um
-        # aviso no log de boot. A telemetria de cada processo e a de
+        # fastapi[opentelemetry] (o endpoint do cluster e gRPC) e a partida
+        # avisaria no log. A telemetria de cada processo e a de
         # mensageria/telemetria.py.
         telemetry={"auto_configure": False},
     )
