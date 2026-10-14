@@ -7,10 +7,17 @@
 # indisponivel) e sem token 401; aponte JWKS_URL/BILLING_URL para servicos
 # acessiveis quando quiser exercita-las. Portas so em 127.0.0.1.
 
+# Credencial de demonstracao, so do banco local do compose. ENVIRONMENT=
+# development: fora dele (e sem ele) o boot recusa as senhas de demonstracao
+# deste arquivo.
+x-banco: &banco
+  ENVIRONMENT: development
+  DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
+
 # Mensageria pelo usuario `execucao` (senha de demonstracao, a mesma do
 # compose da plataforma) e trace sem exportacao (sem Jaeger aqui).
 x-mensageria: &mensageria
-  DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
+  <<: *banco
   RABBITMQ_URL: amqp://execucao:pytstop-execucao-demo-2026@rabbitmq:5672/%2F  # gitleaks:allow
   OTEL_ENABLED: "false"
   OTEL_SERVICE_NAME: execution-service
@@ -30,8 +37,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Credencial de demonstracao, so do banco local do compose.
-      DATABASE_URL: postgresql://execucao:execucao-demo@postgres:5432/execucao  # gitleaks:allow
+      <<: *banco
       JWKS_URL: ${JWKS_URL:-http://os-service:8000/.well-known/jwks.json}
       BILLING_URL: ${BILLING_URL:-http://billing-service:8000}
       RUN_MIGRATIONS_ON_STARTUP: "true"

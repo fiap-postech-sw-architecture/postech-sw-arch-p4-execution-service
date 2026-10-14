@@ -1,0 +1,12 @@
+# Overlay do kind local, sobre a plataforma do platform (make kind-up deploy).
+# A tag dev e a de quem constroi a imagem e a carrega no kind a mao; o
+# make kind-deploy (implantar-servicos.sh do platform) a troca pelo commit.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: pytstop-execution-service
+    newTag: dev

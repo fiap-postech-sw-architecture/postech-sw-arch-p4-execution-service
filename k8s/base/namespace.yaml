@@ -1,0 +1,14 @@
+# Pod Security restricted em enforce, warn e audit: pod fora do perfil nem
+# entra no namespace. O make deploy do platform cria o namespace vazio, se ainda
+# nao existe, com a Role do Kong; este repositorio continua dono dele.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pytstop-execucao
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

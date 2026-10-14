@@ -32,7 +32,7 @@ from uuid import UUID
 
 import structlog
 from opentelemetry.trace import SpanKind, StatusCode
-from pika.exceptions import AMQPError, ConsumerCancelled, NackError, UnroutableError
+from pika.exceptions import ConsumerCancelled, NackError, UnroutableError
 from prometheus_client import Counter
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import (
@@ -55,6 +55,7 @@ from src.compartilhado.infraestrutura.database import (
     descrever_erro_de_banco,
 )
 from src.compartilhado.infraestrutura.mensageria.amqp import (
+    BROKER_FORA,
     EXCHANGE_RETRY,
     abrir_canal,
     fechar,
@@ -208,12 +209,15 @@ class Consumidor:
     def executar(self, parar: threading.Event) -> None:
         """Laco principal: a mensagem em curso termina antes de ``parar`` valer.
 
-        Broker fora (inclusive o nome dele sem resolucao no DNS), copia de retry
-        recusada (o canal fecha) ou assinatura cancelada pelo broker: sai da
-        prontidao, loga, fecha e assina de novo com backoff. Banco fora (um
-        handler falhou com erro de banco e o ``SELECT 1`` nao responde): para de
-        consumir, sem a assinatura e sem a prontidao, ate o banco voltar; as
-        mensagens esperam na fila em vez de gastar a escada de retry.
+        Broker fora (``BROKER_FORA``: inclusive o nome dele sem resolucao no DNS
+        e o broker que aceita o TCP e nao fala AMQP), copia de retry recusada (o
+        canal fecha) ou assinatura cancelada pelo broker: sai da prontidao,
+        loga, fecha e assina de novo com backoff. Outro ``OSError`` (descritores
+        esgotados ou falha de TLS na abertura, disco ao tocar os arquivos de
+        sinal) derruba o processo. Banco fora (um handler falhou com erro de
+        banco e o ``SELECT 1`` nao responde): para de consumir, sem a assinatura
+        e sem a prontidao, ate o banco voltar; as mensagens esperam na fila em
+        vez de gastar a escada de retry.
         """
         try:
             while not parar.is_set():
@@ -224,15 +228,16 @@ class Consumidor:
                 try:
                     self._consumir()
                     self._backoff.reiniciar()
-                except (AMQPError, OSError) as exc:
-                    # OSError: o pika nao embrulha o socket.gaierror do nome sem
-                    # resolucao (Service headless do broker sem pod pronto).
+                except BROKER_FORA as exc:
                     self._sinais.indisponivel()
                     _log.warning(
                         "consumer_broker_unavailable", error=type(exc).__name__
                     )
                     fechar(self._conexao)
                     self._conexao = None
+                    # O pika nao poe prazo na resolucao do nome: a idade do
+                    # heartbeat na espera nao soma a duracao da tentativa.
+                    self._sinais.heartbeat()
                     self._backoff.esperar(parar)
                 self._limpar_processadas_antigas()
         finally:

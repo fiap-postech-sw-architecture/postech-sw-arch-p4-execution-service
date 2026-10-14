@@ -9,9 +9,11 @@ fecharia o canal (ADR-036).
 from __future__ import annotations
 
 import contextlib
+import socket
 from typing import TYPE_CHECKING, Any, Final
 
 import pika
+from pika.adapters.utils.connection_workflow import AMQPConnectorStackTimeout
 from pika.exceptions import AMQPError
 
 if TYPE_CHECKING:
@@ -20,6 +22,16 @@ if TYPE_CHECKING:
     from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
 
 EXCHANGE_RETRY: Final = "pytstop.retry"
+# Broker fora, que o laco do processo trata com backoff e fora da prontidao: o
+# AMQPError e os dois erros que o pika deixa sair crus da abertura e que tambem
+# sao broker fora, o nome sem resolucao no DNS (socket.gaierror: o Service
+# headless do RabbitMQ some do DNS sem pod pronto, no boot ou depois de uma
+# queda) e o prazo da pilha vencido (AMQPConnectorStackTimeout: o broker aceitou
+# o TCP e nao respondeu o AMQP). Nao e todo OSError: descritores esgotados e
+# falha de TLS tambem saem crus da abertura, e reconectar em laco esconderia o
+# defeito; o processo cai e o Kubernetes o reinicia. Depois de aberta a conexao,
+# o pika ja embrulha o erro de socket em AMQPError.
+BROKER_FORA: Final = (AMQPError, socket.gaierror, AMQPConnectorStackTimeout)
 # Broker com alarme de memoria ou disco segura os publishers; depois disto a
 # conexao cai e o processo reconecta, em vez de ficar parado sem sinal.
 _BLOQUEIO_MAXIMO_S: Final = 30.0
@@ -45,8 +57,12 @@ def abrir_canal(
     Raises:
         AMQPError: broker fora, credencial recusada ou recurso ausente (404) ou
             sem permissao (403); quem chama tenta de novo com backoff.
-        OSError: nome do broker sem resolucao no DNS (``socket.gaierror``, que
-            o pika nao embrulha); tambem broker fora, com backoff.
+        socket.gaierror: nome do broker sem resolucao no DNS, que o pika nao
+            embrulha; tambem broker fora (``BROKER_FORA``).
+        AMQPConnectorStackTimeout: o broker aceitou o TCP e nao respondeu o
+            AMQP no prazo da pilha do pika; tambem broker fora.
+        OSError: descritores esgotados ou falha de TLS, crus do pika; nao e
+            broker fora e derruba o processo.
     """
     parametros = pika.URLParameters(url)
     parametros.heartbeat = _HEARTBEAT_S

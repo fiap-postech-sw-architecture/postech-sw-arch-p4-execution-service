@@ -39,6 +39,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.compartilhado.infraestrutura.database import argumentos_de_conexao
 from src.compartilhado.infraestrutura.mensageria.amqp import (
+    BROKER_FORA,
     abrir_canal,
     fechar,
     propriedades,
@@ -197,7 +198,13 @@ class Relay:
         _DEAD.set_function(lambda: self._outbox.contar("dead"))
 
     def executar(self, parar: threading.Event) -> None:
-        """Laco principal: conecta, drena, limpa e espera o NOTIFY ou o poll."""
+        """Laco principal: conecta, drena, limpa e espera o NOTIFY ou o poll.
+
+        Broker fora (``BROKER_FORA`` na abertura, queda ou bloqueio) e banco fora
+        tiram a prontidao e reconectam com backoff. Outro ``OSError``
+        (descritores esgotados ou falha de TLS na abertura, disco ao tocar os
+        arquivos de sinal) derruba o processo.
+        """
         try:
             while not parar.is_set():
                 self._sinais.heartbeat()
@@ -206,7 +213,7 @@ class Relay:
                 except BrokerIndisponivelError as exc:
                     self._fora_do_ar("broker", exc)
                     self._backoff.esperar(parar)
-                except (SQLAlchemyError, OSError, self._erro_do_driver) as exc:
+                except (SQLAlchemyError, self._erro_do_driver) as exc:
                     self._fora_do_ar("database", exc)
                     self._backoff.esperar(parar)
                 else:
@@ -239,7 +246,7 @@ class Relay:
         if self._broker is None:
             try:
                 self._broker = _Broker(self._url)
-            except (AMQPError, OSError) as exc:  # fora, credencial ou topologia
+            except BROKER_FORA as exc:  # fora, credencial ou topologia
                 raise BrokerIndisponivelError from exc
             _log.info("relay_broker_connected")
         return self._broker
@@ -274,6 +281,9 @@ class Relay:
         # As duas conexoes recomecam do zero na volta seguinte.
         self._fechar_broker()
         self._fechar_ouvinte()
+        # O pika nao poe prazo na resolucao do nome: a idade do heartbeat na
+        # espera nao soma a duracao da tentativa que falhou.
+        self._sinais.heartbeat()
 
     def _fechar_broker(self) -> None:
         if self._broker is not None:

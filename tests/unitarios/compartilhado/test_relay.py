@@ -6,13 +6,22 @@ O caminho com PostgreSQL e RabbitMQ esta em ``tests/integracao/test_relay.py``.
 from __future__ import annotations
 
 import ast
+import errno
+import io
+import json
+import os
+import socket
+import ssl
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 from uuid import uuid4
 
 import pytest
+from pika.adapters.utils.connection_workflow import AMQPConnectorStackTimeout
 from pika.exceptions import (
+    AMQPConnectionError,
     ChannelClosedByBroker,
     ConnectionBlockedTimeout,
     NackError,
@@ -28,6 +37,7 @@ from src.compartilhado.infraestrutura.mensageria.outbox import (
     atraso_depois_da_falha,
 )
 from src.compartilhado.infraestrutura.mensageria.processo import (
+    Backoff,
     Periodico,
     SinaisDoProcesso,
 )
@@ -112,6 +122,7 @@ class _Canal:
 
 class _Conexao:
     def __init__(self) -> None:
+        self.is_open = True
         self.ao_bloquear: Any = None
         self.ao_desbloquear: Any = None
         self.canais: list[_Canal] = []
@@ -131,6 +142,9 @@ class _Conexao:
     def process_data_events(self, time_limit: float) -> None:
         if self.erro_nos_eventos is not None:
             raise self.erro_nos_eventos
+
+    def close(self) -> None:
+        self.is_open = False
 
 
 def _broker(
@@ -316,3 +330,129 @@ def test_canal_que_nao_reabre_e_broker_indisponivel(
     monkeypatch.setattr(conexao, "channel", sem_canal)
     with pytest.raises(BrokerIndisponivelError):
         broker.publicar(_linha())
+
+
+# --- abertura da conexao no laco do relay -----------------------------------
+
+_BANCO_MORTO = "postgresql://x:y@127.0.0.1:1/nada"  # gitleaks:allow - nunca conecta
+
+
+# mtime fixo e velho (1 s depois de 1970): o teste so quer saber se o heartbeat foi
+# tocado de novo, e nao depende do relogio nem de um limite de idade.
+_MTIME_ANTIGO_NS = 1_000_000_000
+
+
+class _EsperaQueAnota(Backoff):
+    """Anota o mtime do heartbeat na espera e para o laco na primeira."""
+
+    def __init__(self, heartbeat: Path) -> None:
+        super().__init__(0.0, 0.0)
+        self._heartbeat = heartbeat
+        self.mtimes_ns: list[int] = []
+
+    def esperar(self, parar: threading.Event) -> None:
+        self.mtimes_ns.append(self._heartbeat.stat().st_mtime_ns)
+        parar.set()
+
+
+class _Ouvinte:
+    """Conexao do LISTEN que nunca e usada: o teste para antes do select."""
+
+    def close(self) -> None:
+        pass
+
+
+def _rodar_relay(
+    tmp_path: Path, abrir: Any, *, pronto: str = "pronto"
+) -> _EsperaQueAnota:
+    backoff = _EsperaQueAnota(tmp_path / "hb")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(modulo_relay, "abrir_canal", abrir)
+        patch.setattr(modulo_relay.Relay, "_ouvir", lambda _self: _Ouvinte())
+        modulo_relay.Relay(
+            criar_engine(_BANCO_MORTO),
+            _URL,
+            SinaisDoProcesso(tmp_path / "hb", tmp_path / pronto),
+            backoff=backoff,
+        ).executar(threading.Event())
+    return backoff
+
+
+def _falha(erro: Exception) -> Any:
+    def abrir(*_: object, **__: object) -> Any:
+        raise erro
+
+    return abrir
+
+
+@pytest.mark.parametrize(
+    ("erro", "nome"),
+    [
+        (AMQPConnectionError("broker fora"), "AMQPConnectionError"),
+        (socket.gaierror(socket.EAI_NONAME, "Name or service not known"), "gaierror"),
+        (AMQPConnectorStackTimeout("15 s"), "AMQPConnectorStackTimeout"),
+    ],
+    ids=["broker-fora", "sem-dns", "broker-mudo"],
+)
+def test_broker_fora_na_abertura_reconecta_com_backoff_fora_da_prontidao(
+    tmp_path: Path, log_capturado: io.StringIO, erro: Exception, nome: str
+) -> None:
+    backoff = _rodar_relay(tmp_path, _falha(erro))
+    assert len(backoff.mtimes_ns) == 1
+    assert not (tmp_path / "pronto").exists()
+    [aviso] = [
+        json.loads(linha)
+        for linha in log_capturado.getvalue().splitlines()
+        if "relay_dependency_unavailable" in linha
+    ]
+    assert (aviso["dependencia"], aviso["error"]) == ("broker", nome)
+
+
+def test_abertura_lenta_que_falha_toca_o_heartbeat_antes_da_espera(
+    tmp_path: Path,
+) -> None:
+    heartbeat = tmp_path / "hb"
+
+    def resolucao_lenta(*_: object, **__: object) -> Any:
+        # O pika nao poe prazo na resolucao do nome: com o DNS mudo a tentativa
+        # leva dezenas de segundos, e o heartbeat, tocado antes dela, envelhece.
+        os.utime(heartbeat, ns=(_MTIME_ANTIGO_NS, _MTIME_ANTIGO_NS))
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    # Tocado depois da tentativa, antes da espera: a duracao da tentativa nao se
+    # soma a idade do heartbeat.
+    [mtime_na_espera] = _rodar_relay(tmp_path, resolucao_lenta).mtimes_ns
+    assert mtime_na_espera > _MTIME_ANTIGO_NS
+
+
+@pytest.mark.parametrize(
+    ("erro", "mensagem"),
+    [
+        pytest.param(
+            OSError(errno.EMFILE, "Too many open files"),
+            "Too many open files",
+            id="sem-descritores",
+        ),
+        pytest.param(
+            ssl.SSLCertVerificationError(1, "certificate verify failed"),
+            "certificate verify failed",
+            id="tls",
+        ),
+    ],
+)
+def test_oserror_na_abertura_que_nao_e_broker_fora_derruba_o_relay(
+    tmp_path: Path, erro: OSError, mensagem: str
+) -> None:
+    # Nem broker fora nem banco fora: reconectar em laco esconderia o defeito.
+    with pytest.raises(OSError, match=mensagem):
+        _rodar_relay(tmp_path, _falha(erro))
+
+
+def test_disco_no_arquivo_de_prontidao_derruba_o_relay_em_vez_de_virar_banco_fora(
+    tmp_path: Path,
+) -> None:
+    def conecta(*_: object, **__: object) -> tuple[_Conexao, _Canal]:
+        return _Conexao(), _Canal()
+
+    with pytest.raises(FileNotFoundError):
+        _rodar_relay(tmp_path, conecta, pronto="sem-diretorio/pronto")

@@ -6,7 +6,9 @@ a trilha de auditoria. Duas entradas tiveram a referencia a documento fora dos
 repositorios publicos trocada pela fonte publica ou retirada (a da branch
 protection, agora o ADR-042, e a da variavel do broker, sem a citacao da
 especificacao); o texto exato esta no historico do git
-(`git show 1424ec5:MEMORY.md`).
+(`git show 1424ec5:MEMORY.md`). A divida do `root_path`, resolvida depois da
+consolidacao (PR #5: `ROOT_PATH` no ConfigMap e `--root-path` no entrypoint), foi
+movida para ca no fim de Tech debt / TODO.
 
 ## Recent decisions
 
@@ -109,6 +111,7 @@ especificacao); o texto exato esta no historico do git
 - 2026-10-06 - LOW - ADRs a alinhar ao codigo: ADR-037 ainda cita NOWAIT e reserva por OS e peca, ADR-034 diz que SKU sem estoque so falha na reserva (a conclusao ja recusa), ADR-039 nao lista o atendente lendo fila e estoque - PR #2
 - 2026-10-06 - MEDIUM - Saga: `SolicitarDiagnostico` nao tem resposta tecnica no catalogo (o proximo fato, `DiagnosticoIniciado`, depende do mecanico), entao o prazo tecnico do orquestrador (120 s x 5) compensaria OS esperando mecanico. E passo com prazo esgotado pode ter efeito tardio (reserva ATIVA ou execucao na fila de ordem compensada) se a compensacao so incluir passos concluidos
 - 2026-10-06 - LOW - Metricas da RFC-004 secao 9 (`outbox_pendentes`, `mensagens_*`) e tracing OTel ficam para a fase de observabilidade; hoje: `http_request_duration_seconds`, `pytstop_circuit_breaker_aberto{dependencia}` (1 aberto, 0,5 meia-abertura, 0 fechado) e `pytstop_jwks_falhas_total` - PR #2
+- 2026-10-07 - LOW - `root_path`/`--root-path` atras do Kong (prefixo `/execucao`): sem ele o Swagger quebra atras da borda; o ADR-038 (consequencias) e o README do platform (Gateway) registram que o Swagger precisa do `root_path` fixo, e nao do `X-Forwarded-Prefix`; entra com os manifests do Kubernetes - PR #2 (resolvida no PR #5)
 
 ## Review lessons
 

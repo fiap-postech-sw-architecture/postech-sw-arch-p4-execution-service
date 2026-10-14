@@ -141,10 +141,11 @@ jobs:
           path: reports/sonarqube.json
           retention-days: 90
 
-  # Imagem de runtime e smoke do compose do servico: sobe api e banco pelo
-  # entrypoint real (migracao, seed) e confere a readiness, o 401 sem token, o
-  # usuario 1001:1001 da imagem, a ausencia do header `server` e do access log
-  # do uvicorn.
+  # Manifestos do Kubernetes, imagem de runtime e smoke do compose do servico:
+  # os tres overlays no kubeconform e no trivy config; a stack pelo entrypoint
+  # real (migracao, seed), conferindo a readiness, o 401 sem token, o usuario
+  # 1001:1001 da imagem, a ausencia do header `server` e do access log do
+  # uvicorn e a senha de demonstracao recusada em producao.
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -152,6 +153,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # kubectl (com o kustomize) e docker vem no runner; kubeconform e trivy
+      # rodam pelas imagens pinadas no Makefile, as do platform.
+      - name: Manifestos do Kubernetes (make manifests)
+        run: make manifests
       - name: Build da imagem
         run: docker build -t "${GITHUB_REPOSITORY#*/}:ci-${GITHUB_SHA}" .
       - name: Smoke do compose (make smoke)

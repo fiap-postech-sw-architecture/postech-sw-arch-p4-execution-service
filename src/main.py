@@ -9,8 +9,8 @@ import structlog
 from fastapi import Depends, FastAPI
 
 from src.compartilhado.infraestrutura.ambiente import (
+    url_de_conexao,
     url_http_obrigatoria,
-    variavel_obrigatoria,
 )
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.database import (
@@ -43,7 +43,7 @@ _DESCRICAO = (
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Cria engine, validador de token e cliente do Billing; descarta no shutdown."""
-    engine = criar_engine(variavel_obrigatoria("DATABASE_URL"))
+    engine = criar_engine(url_de_conexao("DATABASE_URL"))
     app.state.session_factory = criar_session_factory(engine)
     app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
     app.state.billing_client = httpx.Client(

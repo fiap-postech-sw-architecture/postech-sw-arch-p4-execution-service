@@ -6,10 +6,27 @@ title = "PytStop fase 4 gitleaks config"
 [extend]
 useDefault = true
 
-# URL AMQP com senha, como a RABBITMQ_URL: as regras padrao nao a reconhecem, e
-# uma senha real (como a que o make deploy do platform gera) passaria. Ficam de
-# fora, pelos caracteres excluidos, o placeholder (<senha>), a variavel de shell
-# ($senha) e a f-string ({senha}). Mesma regra do platform.
+# URI de banco e URL AMQP com senha, como a DATABASE_URL e a RABBITMQ_URL: as
+# regras padrao nao as reconhecem, e uma senha real (como as que o make deploy do
+# platform gera, 48 hexadecimais) passaria num manifesto. Ficam de fora, pelos
+# caracteres excluidos, o placeholder (<senha>), a variavel de shell ($senha), a
+# expansao do Kubernetes ($(POSTGRES_APP_PASSWORD), a forma dos manifestos de
+# k8s/) e a f-string ({senha}). A regra do AMQP e a do platform.
+[[rules]]
+id = "pytstop-url-postgresql-com-senha"
+description = "URI PostgreSQL com senha"
+regex = '''postgres(?:ql)?://[^:/\s@]+:([^@\s"'{}<>$]{8,})@'''
+secretGroup = 1
+keywords = ["postgres"]
+
+# A senha execucao-demo do banco so vale no compose e no .env.example (o mesmo
+# valor); essas linhas levam tambem o marcador gitleaks:allow.
+[[rules.allowlists]]
+description = "Senha de demonstracao do banco no compose"
+condition = "AND"
+paths = ['''(^|/)(docker-compose\.yml|\.env\.example)$''']
+regexes = ['''^execucao-demo$''']
+
 [[rules]]
 id = "pytstop-url-amqp-com-senha"
 description = "URL AMQP com senha"
