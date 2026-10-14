@@ -52,6 +52,7 @@ from src.compartilhado.infraestrutura.mensageria import amqp, processo, telemetr
 from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_consumidor
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
+from tests.conftest import valor_da_serie
 from tests.fakes import FakeTransacaoDoComando
 
 if TYPE_CHECKING:
@@ -252,16 +253,16 @@ def test_configurar_telemetria_instala_e_devolve_o_provider_do_processo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instalados: list[object] = []
-    monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
     propagadores: list[object] = []
-
+    monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
     monkeypatch.setattr(telemetria, "set_global_textmap", propagadores.append)
+
     devolvido = telemetria.configurar_telemetria("relay")
 
-    # Quem instala e dono do provider: devolve o mesmo que o global recebeu.
     # So traceparent e tracestate: o padrao do SDK soma o baggage do chamador.
     (propagador,) = propagadores
     assert propagador.fields == {"traceparent", "tracestate"}
+    # Quem instala e dono do provider: devolve o mesmo que o global recebeu.
     (provedor,) = instalados
     assert devolvido is provedor
     assert isinstance(provedor, TracerProvider)
@@ -1038,10 +1039,7 @@ class _CanalFalso:
 
 
 def _reconexoes(componente: str) -> float:
-    valor = REGISTRY.get_sample_value(
-        "pytstop_reconexoes_ao_broker_total", {"componente": componente}
-    )
-    return valor or 0.0
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente=componente)
 
 
 def _rodar_laco(

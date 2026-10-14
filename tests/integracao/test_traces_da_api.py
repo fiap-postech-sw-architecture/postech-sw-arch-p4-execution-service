@@ -22,6 +22,7 @@ from src.diagnostico.aplicacao.use_cases import RegistrarSolicitacaoDeDiagnostic
 from src.diagnostico.infraestrutura.repository import DiagnosticoSQLAlchemyRepository
 from src.estoque.infraestrutura.seed import semear
 from tests.integracao.transacao import transacao_do_comando
+from tests.spans import tudo_que_o_span_leva
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,6 +43,7 @@ ITENS = [
     {"tipo": "peca", "codigo": "PEC-PASTILHA-FREIO", "quantidade": 1},
 ]
 TEMPLATE_INICIO = "/api/v1/diagnosticos/{ordem_id}/inicio"
+CHAMADOR_TRACE_ID = 0x0AF7651916CD43DD8448EB211C80319C
 
 
 @pytest.fixture
@@ -70,7 +72,7 @@ def _por_tipo(spans: InMemorySpanExporter, tipo: SpanKind) -> list[ReadableSpan]
 
 
 def _texto(span: ReadableSpan) -> str:
-    return json.dumps(span.to_json())
+    return "\n".join(tudo_que_o_span_leva(span))
 
 
 def test_requisicao_gera_span_server_com_os_comandos_de_banco_como_filhos(
@@ -93,6 +95,41 @@ def test_requisicao_gera_span_server_com_os_comandos_de_banco_como_filhos(
         "FROM itens_estoque" in str((s.attributes or {}).get("db.statement"))
         for s in consultas
     )
+
+
+def _traceparent(*, amostrado: bool) -> dict[str, str]:
+    sinal = "01" if amostrado else "00"
+    return {"traceparent": f"00-{CHAMADOR_TRACE_ID:032x}-b7ad6b7169203331-{sinal}"}
+
+
+def test_traceparent_amostrado_do_chamador_continua_o_trace_com_o_banco(
+    api: TestClient,
+    autenticar: Callable[..., dict[str, str]],
+    spans: InMemorySpanExporter,
+) -> None:
+    cabecalhos = {**autenticar("atendente"), **_traceparent(amostrado=True)}
+
+    assert api.get("/api/v1/estoque", headers=cabecalhos).status_code == 200
+
+    (servidor,) = _por_tipo(spans, SpanKind.SERVER)
+    assert servidor.context.trace_id == CHAMADOR_TRACE_ID
+    assert servidor.parent.span_id == 0xB7AD6B7169203331
+    consultas = _por_tipo(spans, SpanKind.CLIENT)
+    assert consultas
+    assert {s.context.trace_id for s in consultas} == {CHAMADOR_TRACE_ID}
+
+
+def test_traceparent_nao_amostrado_do_chamador_derruba_a_requisicao_e_o_banco(
+    api: TestClient,
+    autenticar: Callable[..., dict[str, str]],
+    spans: InMemorySpanExporter,
+) -> None:
+    # Quem decide e o pai: o SERVER cai, e as consultas filhas dele com ele.
+    cabecalhos = {**autenticar("atendente"), **_traceparent(amostrado=False)}
+
+    assert api.get("/api/v1/estoque", headers=cabecalhos).status_code == 200
+
+    assert spans.get_finished_spans() == ()
 
 
 @pytest.mark.parametrize(

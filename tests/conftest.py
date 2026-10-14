@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from prometheus_client import REGISTRY
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
@@ -54,6 +55,12 @@ _PROVEDOR = criar_provedor({}, processo="testes")
 _PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
 trace.set_tracer_provider(_PROVEDOR)
 instalar_propagador()
+
+
+def valor_da_serie(nome: str, **rotulos: str) -> float:
+    """O valor da serie no registro, ou 0 se ela ainda nao existe (contador que
+    ninguem incrementou e que nao nasce com zero)."""
+    return REGISTRY.get_sample_value(nome, rotulos) or 0.0
 
 
 def provedor_dos_testes() -> TracerProvider:

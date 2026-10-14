@@ -7,7 +7,6 @@ tres processos.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -23,6 +22,7 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
 )
 from tests.conftest import provedor_dos_testes
 from tests.integracao.broker import EmSegundoPlano, envelope_de_comando, esperar_ate
+from tests.spans import tudo_que_os_spans_levam
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -155,13 +155,15 @@ def test_span_de_banco_do_consumo_nao_leva_o_valor_dos_parametros(
             )
         )
 
-    texto = json.dumps([s.to_json() for s in spans.get_finished_spans()])
+    texto = "\n".join(tudo_que_os_spans_levam(spans.get_finished_spans()))
     assert "INSERT INTO reservas" in texto
     # O correlation_id do span de consumo e o unico lugar da ordem; o SKU, so no
     # valor dos parametros.
     consumo = _span(spans, "process ReservarPecas")
-    sem_o_consumo = json.dumps(
-        [s.to_json() for s in spans.get_finished_spans() if s is not consumo]
+    sem_o_consumo = "\n".join(
+        tudo_que_os_spans_levam(
+            s for s in spans.get_finished_spans() if s is not consumo
+        )
     )
     assert str(ordem_id) not in sem_o_consumo
     assert "PEC-VELA" not in texto

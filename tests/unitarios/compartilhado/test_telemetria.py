@@ -30,6 +30,7 @@ from opentelemetry.trace import (
 )
 
 from src.compartilhado.infraestrutura.mensageria import telemetria
+from tests.spans import tudo_que_o_span_leva
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
@@ -140,6 +141,21 @@ def test_o_pai_remoto_decide_o_filho_de_cliente(provedor: _Provedor) -> None:
     assert set(provedor.spans()) == {"com"}
 
 
+def test_o_pai_local_nao_amostrado_derruba_os_filhos(provedor: _Provedor) -> None:
+    """A requisicao com ``traceparent`` de flag 00 nao vira trace, e a consulta de
+    banco e o passo dela, filhos do SERVER, tambem nao: quem decide e o pai."""
+    ignorado = trace.set_span_in_context(_pai_remoto(amostrado=False))
+    tracer = provedor.tracer()
+
+    with tracer.start_as_current_span("GET /x", context=ignorado, kind=SpanKind.SERVER):
+        with tracer.start_as_current_span("SELECT", kind=SpanKind.CLIENT):
+            pass
+        with tracer.start_as_current_span("passo"):
+            pass
+
+    assert provedor.spans() == {}
+
+
 # --- texto de erro ------------------------------------------------------------
 
 # Escopo do instrumentador do SQLAlchemy e o deste servico: a limpeza vale igual.
@@ -168,7 +184,7 @@ def test_span_perde_a_mensagem_e_a_descricao_do_erro(
         "exception.type": "RuntimeError",
         "exception.escaped": "False",
     }
-    assert _PLACA not in repr(exportado.to_json())
+    assert _PLACA not in "\n".join(tudo_que_o_span_leva(exportado))
 
 
 @pytest.mark.parametrize("escopo", _ESCOPOS)
@@ -185,7 +201,7 @@ def test_excecao_que_escapa_do_span_nao_leva_texto(
     (exportado,) = provedor.exportados.get_finished_spans()
     assert exportado.status.status_code is StatusCode.ERROR
     assert exportado.status.description is None
-    assert _PLACA not in repr(exportado.to_json())
+    assert _PLACA not in "\n".join(tudo_que_o_span_leva(exportado))
 
 
 def test_evento_que_nao_e_excecao_e_atributo_do_span_ficam_como_criados(

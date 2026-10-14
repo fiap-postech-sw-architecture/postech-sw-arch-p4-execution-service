@@ -38,6 +38,7 @@ from src.compartilhado.infraestrutura.mensageria.relay import (
     BrokerIndisponivelError,
     Relay,
 )
+from tests.conftest import valor_da_serie
 from tests.integracao.broker import EmSegundoPlano, esperar_ate
 from tests.integracao.transacao import linha_pendente
 
@@ -138,6 +139,7 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     outbox: Callable[[], list[dict[str, Any]]],
     spans: InMemorySpanExporter,
 ) -> None:
+    publicadas_antes = _publicadas("ReservaLiberada")
     with broker.canal() as canal:
         canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
     try:
@@ -151,6 +153,8 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     (linha,) = outbox()
     assert linha["status"] == "pendente"
     assert linha["ultimo_erro"] == "UnroutableError"
+    # A serie conta a confirmacao do broker: a publicacao sem rota nao entra.
+    assert _publicadas("ReservaLiberada") == publicadas_antes
     # O span da publicacao marca o erro e leva o motivo em atributo de texto fixo.
     publicacao = next(
         s for s in spans.get_finished_spans() if s.name == "publish ReservaLiberada"
@@ -282,10 +286,11 @@ def _vezes_fora_do_ar(log: io.StringIO) -> int:
 
 
 def _reconexoes() -> float:
-    valor = REGISTRY.get_sample_value(
-        "pytstop_reconexoes_ao_broker_total", {"componente": "relay"}
-    )
-    return valor or 0.0
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente="relay")
+
+
+def _publicadas(tipo: str) -> float:
+    return valor_da_serie("pytstop_mensagens_publicadas_total", tipo=tipo)
 
 
 def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
@@ -979,8 +984,7 @@ def test_metricas_do_relay_contam_publicadas_e_pendentes(
     broker_falso: type[_BrokerFalso],
 ) -> None:
     broker_falso.conexoes = 1
-    chave = {"tipo": "ReservaLiberada"}
-    antes = REGISTRY.get_sample_value("pytstop_mensagens_publicadas_total", chave) or 0
+    antes = _publicadas("ReservaLiberada")
     for _ in range(2):
         _gravar(engine, daqui_a=timedelta(hours=1))  # seguem pendentes
     relay = _relay_falso(engine, sinais)
@@ -999,8 +1003,7 @@ def test_metricas_do_relay_contam_publicadas_e_pendentes(
         _gravar(engine)
     with EmSegundoPlano(relay):
         esperar_ate(lambda: len(broker_falso.publicadas) == 3)
-    depois = REGISTRY.get_sample_value("pytstop_mensagens_publicadas_total", chave)
-    assert depois == antes + 3
+    assert _publicadas("ReservaLiberada") == antes + 3
 
 
 def test_encerramento_gracioso_tira_a_prontidao_e_mantem_o_heartbeat(

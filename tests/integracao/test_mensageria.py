@@ -18,7 +18,6 @@ import pika
 import pytest
 from opentelemetry.trace import SpanKind
 from pika.exceptions import ChannelClosedByBroker
-from prometheus_client import REGISTRY
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -54,6 +53,7 @@ from src.estoque.infraestrutura.seed import semear
 from src.estoque.interfaces.comandos import reservar_pecas
 from src.execucao.dominio.execucao import Execucao, Prioridade
 from src.execucao.infraestrutura.repository import ExecucaoSQLAlchemyRepository
+from tests.conftest import valor_da_serie
 from tests.integracao.broker import (
     TTL_DE_TESTE_MS,
     EmSegundoPlano,
@@ -81,17 +81,13 @@ VEICULO_ID = UUID("3277db7e-8283-4dd9-89e7-df3eeacb8710")
 
 
 def consumidas(tipo: str, resultado: str) -> float:
-    valor = REGISTRY.get_sample_value(
-        "pytstop_mensagens_consumidas_total", {"tipo": tipo, "resultado": resultado}
+    return valor_da_serie(
+        "pytstop_mensagens_consumidas_total", tipo=tipo, resultado=resultado
     )
-    return valor or 0.0
 
 
 def reconexoes_do_consumidor() -> float:
-    valor = REGISTRY.get_sample_value(
-        "pytstop_reconexoes_ao_broker_total", {"componente": "consumidor"}
-    )
-    return valor or 0.0
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente="consumidor")
 
 
 def _esperar_consumo(tipo: str, resultado: str, antes: float, vezes: int = 1) -> None:
