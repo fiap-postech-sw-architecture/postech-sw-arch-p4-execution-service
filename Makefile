@@ -52,7 +52,10 @@ check: lock-check lint lint-arch typecheck security test
 # consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
 # os contratos de mensageria estao na imagem (e a topologia do RabbitMQ, com a
 # senha do admin de demonstracao, nao), que o relay conectou ao broker e
-# que o consumidor assinou a execucao.comandos; que a imagem, com
+# que o consumidor assinou a execucao.comandos; que o /metrics de cada processo
+# lista, logo depois do boot e sem trafego, as series dele (os tres gauges por
+# consulta da API; as series de rotulo fechado em zero do relay e do consumidor);
+# que a imagem, com
 # ENVIRONMENT=production, recusa a senha de demonstracao do compose (o compose
 # sobe com development); e
 # derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
@@ -67,6 +70,9 @@ SMOKE_URL := http://127.0.0.1:$(SMOKE_PORT)
 # a topologia do RabbitMQ fora dela (leva a senha de demonstracao do admin).
 SMOKE_CONTRATOS := from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS, produtor, tipos_com_contrato; assert tipos_com_contrato() and produtor('ReservarPecas') == 'os'; assert not (CONTRATOS / 'rabbitmq').exists() and not (CONTRATOS / 'exemplos').exists()
 SMOKE_GUARDA := from src.compartilhado.infraestrutura.ambiente import url_de_conexao; url_de_conexao('DATABASE_URL')
+# Confere o /metrics de um processo, de dentro do container dele: a porta e os
+# padroes (regex, uma linha da saida cada) vem como argumentos.
+SMOKE_METRICAS := import re, sys, urllib.request as u; porta, *padroes = sys.argv[1:]; texto = u.urlopen(f'http://127.0.0.1:{porta}/metrics', timeout=5).read().decode(); faltam = [p for p in padroes if not re.search(p, texto, re.M)]; sys.exit(f'faltam no /metrics: {faltam}' if faltam else 0)
 SMOKE_COMPOSE := API_PORT=$(SMOKE_PORT) DB_PORT=$(SMOKE_DB_PORT) \
 	RABBITMQ_PORT=$(SMOKE_RABBITMQ_PORT) RABBITMQ_UI_PORT=$(SMOKE_RABBITMQ_UI_PORT) \
 	API_IMAGE=$(API_IMAGE) $(COMPOSE) -p pytstop-execucao-smoke
@@ -102,10 +108,25 @@ smoke:
 	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_consumers queue_name \
 		| grep -qx 'execucao.comandos' \
 		|| { echo "smoke: o consumidor nao assinou a execucao.comandos" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T api python -c "$(SMOKE_METRICAS)" 8000 \
+		'^pytstop_outbox_mais_antiga_segundos 0\.0$$' \
+		'^# TYPE pytstop_execucao_duracao_media_segundos gauge$$' \
+		'^# TYPE pytstop_pecas_em_falta gauge$$' \
+		|| { echo "smoke: o /metrics da API nao lista os gauges por consulta" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T relay python -c "$(SMOKE_METRICAS)" 9100 \
+		'^pytstop_mensagens_publicadas_total\{tipo="PecasReservadas"\} 0\.0$$' \
+		'^pytstop_reconexoes_ao_broker_total\{componente="relay"\} ' \
+		'^outbox_pendentes 0\.0$$' \
+		|| { echo "smoke: o /metrics do relay nao lista as series dele em zero" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T consumidor python -c "$(SMOKE_METRICAS)" 9100 \
+		'^pytstop_mensagens_consumidas_total\{resultado="processada",tipo="ReservarPecas"\} 0\.0$$' \
+		'^pytstop_mensagens_consumidas_total\{resultado="dlq",tipo="desconhecido"\} 0\.0$$' \
+		'^pytstop_reconexoes_ao_broker_total\{componente="consumidor"\} ' \
+		|| { echo "smoke: o /metrics do consumidor nao lista as series dele em zero" >&2; false; }; } \
 	&& { $(SMOKE_COMPOSE) exec -T -e ENVIRONMENT=production api python -c "$(SMOKE_GUARDA)" 2>&1 \
 		| grep -q 'DATABASE_URL usa a senha de demonstracao' \
 		|| { echo "smoke: com ENVIRONMENT=production a imagem aceita a senha de demonstracao" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, sem aviso de telemetria, contratos na imagem e topologia fora, relay e consumidor prontos, senha de demonstracao recusada em producao" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, sem aviso de telemetria, contratos na imagem e topologia fora, relay e consumidor prontos, series dos tres processos no /metrics, senha de demonstracao recusada em producao" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \
