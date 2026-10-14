@@ -554,36 +554,45 @@ def test_acao_do_mecanico_sai_no_trace_do_comando_que_abriu_o_passo(
     }
 
 
-def test_sku_fora_do_formato_do_billing_vira_faltante_e_nao_vai_para_a_dlq(
+def test_sku_fora_do_formato_do_billing_e_recusado_pelo_contrato_e_vai_para_a_dlq(
     broker: Broker,
     engine: Engine,
     consumidor: Callable[..., Consumidor],
     outbox: Callable[[], list[dict[str, Any]]],
+    log_capturado: io.StringIO,
 ) -> None:
-    # O contrato aceita minusculas, ponto e sublinhado; o estoque so cadastra o
-    # formato do Billing. A saga recebe a recusa e compensa, sem DLQ.
+    # O contrato so aceita o formato do Billing e o consumidor o confere antes
+    # do handler: o comando inteiro vai para a DLQ, sem reservar a outra peca e
+    # sem resposta. Quem compensa e o OS Service, pelo prazo do passo.
     _criar_item(engine, "PEC-VELA", 5)
-    ordem_id = uuid4()
     comando = envelope_de_comando(
         "ReservarPecas",
         {
-            "ordem_id": str(ordem_id),
+            "ordem_id": str(uuid4()),
             "pecas": [
                 {"sku": "pec_vela.2", "quantidade": 1},
                 {"sku": "PEC-VELA", "quantidade": 1},
             ],
         },
     )
+    antes = consumidas("ReservarPecas", "dlq")
     with EmSegundoPlano(consumidor()):
         broker.publicar_comando(comando)
-        (resposta,) = esperar_ate(outbox)
+        _esperar_consumo("ReservarPecas", "dlq", antes)
+        _, corpo = esperar_ate(lambda: broker.pegar("execucao.comandos.dlq"))
 
-    assert resposta["tipo"] == "ReservaDePecasFalhou"
-    assert resposta["dados"]["faltantes"] == [
-        {"sku": "pec_vela.2", "solicitado": 1, "disponivel": 0}
-    ]
-    assert broker.contar("execucao.comandos.dlq") == 0
+    assert json.loads(corpo) == comando
+    assert outbox() == []
+    assert [broker.contar(fila) for fila in NIVEIS_DE_RETRY] == [0] * 5
     assert _saldo(engine, "PEC-VELA") == (5, 0)
+    (rejeicao,) = [
+        json.loads(linha)
+        for linha in log_capturado.getvalue().splitlines()
+        if '"message_rejected"' in linha
+    ]
+    assert rejeicao["motivo_rejeicao"] == (
+        "dados fora do contrato em $.pecas[0].sku (pattern)"
+    )
 
 
 def test_solicitar_diagnostico_grava_o_retrato_e_a_descricao_do_comando(
