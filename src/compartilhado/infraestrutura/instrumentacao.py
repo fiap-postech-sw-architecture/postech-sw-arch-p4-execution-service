@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     import httpx
     from fastapi import FastAPI
+    from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.trace import Span
     from sqlalchemy import Engine
 
@@ -60,26 +61,27 @@ def redigir_url_da_span(span: Span, scope: Mapping[str, Any]) -> None:
         span.set_attribute("url.query", _QUERY_REDIGIDA)
 
 
-def instrumentar_api(app: FastAPI) -> None:
+def instrumentar_api(app: FastAPI, provedor: TracerProvider) -> None:
     """Um span SERVER por requisicao, com o template da rota no lugar do caminho."""
     FastAPIInstrumentor.instrument_app(
         app,
+        tracer_provider=provedor,
         server_request_hook=redigir_url_da_span,
         excluded_urls=_URLS_SEM_TRACE,
         exclude_spans=["receive", "send"],
     )
 
 
-def instrumentar_banco(engine: Engine) -> None:
+def instrumentar_banco(engine: Engine, provedor: TracerProvider) -> None:
     """Um span CLIENT por comando SQL do engine, filho do span em andamento.
 
     Sem span em andamento (poll, raspagem, ciclo ocioso) o amostrador descarta.
     O span leva o texto do comando (so com os marcadores de parametro, o engine
     esconde os valores) e nunca o texto do erro do driver.
     """
-    SQLAlchemyInstrumentor().instrument(engine=engine)
+    SQLAlchemyInstrumentor().instrument(engine=engine, tracer_provider=provedor)
 
 
-def instrumentar_cliente_http(cliente: httpx.Client) -> None:
+def instrumentar_cliente_http(cliente: httpx.Client, provedor: TracerProvider) -> None:
     """Um span CLIENT por chamada do cliente, com o ``traceparent`` na requisicao."""
-    HTTPXClientInstrumentor.instrument_client(cliente)
+    HTTPXClientInstrumentor.instrument_client(cliente, tracer_provider=provedor)

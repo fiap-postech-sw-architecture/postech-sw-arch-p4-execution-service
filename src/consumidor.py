@@ -56,9 +56,9 @@ HANDLERS: Final[Mapping[str, HandlerDeComando]] = {
 
 def main() -> None:
     configurar_logging()
-    configurar_telemetria("consumidor")
+    provedor = configurar_telemetria("consumidor")
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
-    instrumentar_banco(engine)
+    instrumentar_banco(engine, provedor)
     consumidor = Consumidor(
         engine,
         url_de_conexao("RABBITMQ_URL"),

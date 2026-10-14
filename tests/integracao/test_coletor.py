@@ -29,6 +29,7 @@ from src.estoque.dominio.reserva import Faltante, StatusReserva
 from src.estoque.infraestrutura.mapping import _faltantes_para_json
 from src.execucao.dominio.execucao import StatusExecucao
 from src.main import criar_app
+from tests.conftest import provedor_dos_testes
 from tests.integracao.proxy_do_banco import ProxyDoBanco
 
 if TYPE_CHECKING:
@@ -45,16 +46,21 @@ TODAS = {IDADE, DURACAO, FALTA}
 THREAD_DO_COLETOR = "coletor-da-api"
 
 
-@pytest.fixture(autouse=True)
-def _nenhuma_thread_do_coletor_sobra() -> Iterator[None]:
-    """A raspagem que nao voltou a tempo deixa a thread dela para tras (daemon);
-    ela precisa morrer com o socket, senao vazaria para o teste seguinte."""
-    yield
+def _esperar_a_thread_do_coletor() -> None:
+    """A raspagem devolve assim que a ultima consulta volta; a thread ainda fecha a
+    conexao. A que ficou presa num socket mudo morre quando o socket fecha."""
     limite = time.monotonic() + 10
     while any(t.name == THREAD_DO_COLETOR for t in threading.enumerate()):
         if time.monotonic() > limite:
             pytest.fail("a thread do coletor nao terminou")
         time.sleep(0.05)
+
+
+@pytest.fixture(autouse=True)
+def _nenhuma_thread_do_coletor_sobra() -> Iterator[None]:
+    """A thread que a raspagem deixa para tras nao pode vazar para o teste seguinte."""
+    yield
+    _esperar_a_thread_do_coletor()
 
 
 @pytest.fixture
@@ -524,6 +530,7 @@ def test_raspagem_nao_deixa_conexao_aberta(
     with engine.connect() as conexao:
         antes = conexao.execute(contar).scalar_one()
         _coletar(engine_de_metricas)
+        _esperar_a_thread_do_coletor()
         depois = conexao.execute(contar).scalar_one()
 
     assert (antes, depois) == (0, 0)
@@ -564,7 +571,7 @@ def api_com_dados_do_coletor(
             duracao=timedelta(seconds=600),
         )
         _reserva(conexao, StatusReserva.RECUSADA, ["PEC-A"], DIA)
-    with TestClient(criar_app()) as cliente:
+    with TestClient(criar_app(provedor_dos_testes())) as cliente:
         yield cliente
 
 
@@ -634,6 +641,6 @@ def test_coletor_sai_do_registro_com_o_app_e_o_proximo_app_registra_de_novo(
     ambiente_da_api: None,
 ) -> None:
     for _ in range(2):
-        with TestClient(criar_app()):
+        with TestClient(criar_app(provedor_dos_testes())):
             assert REGISTRY.get_sample_value(IDADE) == 0.0
         assert REGISTRY.get_sample_value(IDADE) is None

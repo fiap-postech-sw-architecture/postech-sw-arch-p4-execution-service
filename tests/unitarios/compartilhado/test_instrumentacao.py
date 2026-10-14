@@ -18,6 +18,7 @@ from src.compartilhado.infraestrutura.instrumentacao import (
 )
 from src.compartilhado.infraestrutura.mensageria.telemetria import tracer
 from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
+from tests.conftest import provedor_dos_testes
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
@@ -117,7 +118,7 @@ def _app() -> FastAPI:
     def pronto() -> str:
         return "ok"
 
-    instrumentar_api(app)
+    instrumentar_api(app, provedor_dos_testes())
     return app
 
 
@@ -187,7 +188,7 @@ def test_rota_com_metrics_no_meio_do_caminho_segue_com_trace(
     def por_ano(ano: int) -> int:
         return ano
 
-    instrumentar_api(app)
+    instrumentar_api(app, provedor_dos_testes())
 
     assert TestClient(app).get("/api/v1/metrics/2026").status_code == 200
     assert _servidor(spans).name == "GET /api/v1/metrics/{ano}"
@@ -218,7 +219,7 @@ def test_chamada_ao_billing_leva_o_traceparent_do_span_ativo(
     cliente = httpx.Client(
         base_url="http://billing.test", transport=httpx.MockTransport(billing)
     )
-    instrumentar_cliente_http(cliente)
+    instrumentar_cliente_http(cliente, provedor_dos_testes())
     validador = ValidadorDeItensBilling(
         cliente=cliente,
         breaker=CircuitBreaker("billing-teste"),

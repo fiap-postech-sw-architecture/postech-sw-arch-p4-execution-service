@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator  # noqa: TC003 - lifespan anotado em runtime
 from contextlib import asynccontextmanager
 from importlib.metadata import version
+from typing import TYPE_CHECKING
 
 import httpx
 import structlog
@@ -39,6 +40,9 @@ from src.diagnostico.interfaces.router import router as router_diagnosticos
 from src.estoque.interfaces.router import router as router_estoque
 from src.execucao.interfaces.router import router as router_execucao
 
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import TracerProvider
+
 _log = structlog.get_logger(__name__)
 
 # Timeout da unica chamada sincrona entre servicos (Execucao -> Billing).
@@ -56,13 +60,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Cria engine, validador, cliente do Billing e coletor; descarta no shutdown."""
     url_do_banco = url_de_conexao("DATABASE_URL")
     engine = criar_engine(url_do_banco)
-    instrumentar_banco(engine)
+    instrumentar_banco(engine, app.state.provedor)
     app.state.session_factory = criar_session_factory(engine)
     app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
     app.state.billing_client = httpx.Client(
         base_url=url_http_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
     )
-    instrumentar_cliente_http(app.state.billing_client)
+    instrumentar_cliente_http(app.state.billing_client, app.state.provedor)
     app.state.billing_breaker = CircuitBreaker("billing")
     # Os gauges por consulta (outbox, execucao e estoque) saem so da API, por uma
     # conexao propria, nova a cada raspagem, que nao disputa o pool das requisicoes.
@@ -75,17 +79,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         REGISTRY.unregister(coletor)
         app.state.billing_client.close()
         engine.dispose()
+        # Por ultimo: descarrega os spans do lote. So do provider que a API
+        # instalou; quem injeta o provider e dono dele.
+        if app.state.dono_do_provedor:
+            app.state.provedor.shutdown()
 
 
-def criar_app() -> FastAPI:
+def criar_app(provedor: TracerProvider | None = None) -> FastAPI:
+    """Monta a API; ``provedor`` injetado serve aos testes.
+
+    Sem ele a API instala o provider do processo (o mesmo do relay e do consumidor,
+    com o amostrador e a limpeza do texto de erro, ``mensageria/telemetria.py``) e
+    o encerra no fim do lifespan, o que descarrega os spans do lote. Quem injeta o
+    provider e dono dele.
+    """
     # Log JSON antes da primeira linha do servidor: o uvicorn importa este modulo
     # (e monta o app) antes de "Started server process"; configurado so no
     # lifespan, as linhas de boot do uvicorn saiam em texto no meio do JSON.
     configurar_logging()
-    # O provider do SDK antes do instrumentador, que o le do global: a API monta
-    # o mesmo provider do relay e do consumidor, com o amostrador e a limpeza do
-    # texto de erro (mensageria/telemetria.py).
-    configurar_telemetria("api")
+    dono_do_provedor = provedor is None
+    provedor = provedor or configurar_telemetria("api")
     application = FastAPI(
         title="PytStop Execution Service",
         version=version("pytstop-execution-service"),
@@ -99,6 +112,8 @@ def criar_app() -> FastAPI:
         # mensageria/telemetria.py, e a da API, a de instrumentacao.py.
         telemetry={"auto_configure": False},
     )
+    application.state.provedor = provedor
+    application.state.dono_do_provedor = dono_do_provedor
     application.include_router(router_saude)
     application.include_router(router_estoque)
     application.include_router(router_diagnosticos)
@@ -107,7 +122,7 @@ def criar_app() -> FastAPI:
     registrar_error_handlers(application)
     # Por ultimo: o middleware de metricas fica por fora e mede a request inteira.
     configurar_metricas(application)
-    instrumentar_api(application)
+    instrumentar_api(application, provedor)
     return application
 
 

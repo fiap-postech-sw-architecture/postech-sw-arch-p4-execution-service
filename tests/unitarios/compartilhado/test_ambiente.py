@@ -14,6 +14,7 @@ from src.compartilhado.infraestrutura.ambiente import (
     variavel_obrigatoria,
 )
 from src.main import criar_app
+from tests.conftest import provedor_dos_testes
 
 
 @pytest.mark.parametrize(
@@ -190,6 +191,6 @@ def test_api_nao_sobe_com_a_senha_de_demonstracao(
     monkeypatch.setenv("DATABASE_URL", _DEMONSTRACAO["DATABASE_URL"])
     with (
         pytest.raises(RuntimeError, match="DATABASE_URL usa a senha de demonstracao"),
-        TestClient(criar_app()),
+        TestClient(criar_app(provedor_dos_testes())),
     ):
         pass

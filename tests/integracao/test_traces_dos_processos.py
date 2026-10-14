@@ -21,6 +21,7 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import (
     contexto_atual,
     tracer,
 )
+from tests.conftest import provedor_dos_testes
 from tests.integracao.broker import EmSegundoPlano, envelope_de_comando, esperar_ate
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 def engine_instrumentado(engine: Engine) -> Engine:
     """O engine da suite com o instrumentador ligado, como no ``main`` dos processos."""
-    instrumentar_banco(engine)
+    instrumentar_banco(engine, provedor_dos_testes())
     return engine
 
 

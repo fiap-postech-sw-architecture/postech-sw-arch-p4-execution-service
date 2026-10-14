@@ -248,13 +248,17 @@ def test_provedor_com_otel_enabled_exporta_por_otlp(
     assert atributos["pytstop.processo"] == "consumidor"
 
 
-def test_configurar_telemetria_instala_o_provider_do_processo(
+def test_configurar_telemetria_instala_e_devolve_o_provider_do_processo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instalados: list[object] = []
     monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
-    telemetria.configurar_telemetria("relay")
+
+    devolvido = telemetria.configurar_telemetria("relay")
+
+    # Quem instala e dono do provider: devolve o mesmo que o global recebeu.
     (provedor,) = instalados
+    assert devolvido is provedor
     assert isinstance(provedor, TracerProvider)
     assert provedor.resource.attributes["pytstop.processo"] == "relay"
 
@@ -960,10 +964,15 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     monkeypatch.setattr(modulo, classe, _ProcessoFalso)
     monkeypatch.setattr(modulo, "criar_engine", lambda _url: _EngineFalsa())
     instrumentados: list[object] = []
-    monkeypatch.setattr(modulo, "instrumentar_banco", instrumentados.append)
+    provedor = TracerProvider(shutdown_on_exit=False)
+    monkeypatch.setattr(
+        modulo,
+        "instrumentar_banco",
+        lambda engine, provedor_: instrumentados.append((engine, provedor_)),
+    )
     monkeypatch.setattr(modulo, "parada_por_sinal", lambda: parado)
     monkeypatch.setattr(modulo, "configurar_logging", lambda: None)
-    monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: None)
+    monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: provedor)
     monkeypatch.setattr(modulo, "servir_metricas", lambda: None)
 
     modulo.main()
@@ -974,8 +983,9 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     assert sinais._pronto.name == f"{nome}-pronto"
     assert processo_.parar is parado
     assert _EngineFalsa.disposta
-    # O mesmo engine do processo: sem isso nenhuma consulta dele viraria span.
-    assert instrumentados == [processo_.args[0]]
+    # O mesmo engine do processo, com o provider que o processo instalou: sem isso
+    # nenhuma consulta dele viraria span (ou iria para outro provider).
+    assert instrumentados == [(processo_.args[0], provedor)]
 
 
 # --- laco do consumidor (sem broker) ------------------------------------------

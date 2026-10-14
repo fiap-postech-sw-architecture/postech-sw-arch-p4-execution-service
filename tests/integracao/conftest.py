@@ -23,6 +23,7 @@ from src.compartilhado.infraestrutura.mensageria.processo import (
 from src.compartilhado.infraestrutura.mensageria.relay import Relay
 from src.consumidor import HANDLERS
 from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
+from tests.conftest import provedor_dos_testes
 from tests.integracao.broker import Broker, subir_broker
 
 if TYPE_CHECKING:
@@ -149,7 +150,7 @@ def api(
         "src.diagnostico.interfaces.dependencies.ValidadorDeItensBilling",
         functools.partial(ValidadorDeItensBilling, dormir=lambda _segundos: None),
     )
-    with TestClient(criar_app()) as cliente:
+    with TestClient(criar_app(provedor_dos_testes())) as cliente:
         yield cliente
 
 

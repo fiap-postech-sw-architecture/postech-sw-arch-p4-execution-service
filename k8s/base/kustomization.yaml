@@ -51,6 +51,10 @@ configMapGenerator:
       - OTEL_ENABLED=true
       - OTEL_SERVICE_NAME=execution-service
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger.pytstop-plataforma.svc.cluster.local:4317
+      # Prazo de cada envio ao Jaeger: sem eles o SDK espera 30 s por lote, e com o
+      # Jaeger fora do ar o pod leva todo o terminationGracePeriodSeconds para sair.
+      - OTEL_BSP_EXPORT_TIMEOUT=2000
+      - OTEL_EXPORTER_OTLP_TIMEOUT=2
       - RUN_MIGRATIONS_ON_STARTUP=false
       - RUN_SEED_ON_STARTUP=false
   # Script de init do PostgreSQL com os papeis do banco (banco.yaml).

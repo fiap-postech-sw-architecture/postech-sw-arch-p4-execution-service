@@ -18,6 +18,7 @@ import pytest
 import uvicorn
 
 from src.main import criar_app
+from tests.conftest import provedor_dos_testes
 
 RAIZ = Path(__file__).resolve().parents[2]
 
@@ -70,7 +71,7 @@ def test_uvicorn_com_o_prefixo_serve_o_swagger_sob_ele_e_as_sondas_sem_ele(
 ) -> None:
     servidor = uvicorn.Server(
         uvicorn.Config(
-            criar_app(),
+            criar_app(provedor_dos_testes()),
             host="127.0.0.1",
             port=0,
             root_path=prefixo,

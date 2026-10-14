@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from opentelemetry.context import Context
+    from opentelemetry.sdk.trace import Span
     from opentelemetry.trace import Link, TraceState
     from opentelemetry.util.types import Attributes
 
@@ -129,17 +130,31 @@ class _SemTextoDeErro(SpanProcessor):
     o status de erro perde a descricao: o instrumentador do SQLAlchemy a preenche
     com o texto do driver, o do FastAPI e o ``with`` do SDK, com o da excecao.
 
-    Primeiro processador do provider: roda antes de qualquer exportador, sobre a
-    copia do span que todos recebem. O ``ReadableSpan`` nao tem setter, entao o
-    processador troca os atributos protegidos ``_status`` e ``_events`` da copia
-    (nao os do span vivo, que ja terminou); os testes de cada regra reprovam se o
-    SDK mudar isso.
+    Recebe o processador que exporta e o chama so depois de limpar o span, entao
+    a ordem nao depende de quem monta o provider: nenhum exportador alcanca o
+    span antes da limpeza. O ``ReadableSpan`` nao tem setter, entao o processador
+    troca os atributos protegidos ``_status`` e ``_events`` da copia que todos os
+    processadores recebem (o span vivo ja terminou); os testes de cada regra
+    reprovam se o SDK mudar isso.
     """
+
+    def __init__(self, exportador: SpanProcessor) -> None:
+        self._exportador = exportador
+
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        self._exportador.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
         if span.status.status_code is StatusCode.ERROR:
             span._status = Status(StatusCode.ERROR)
         span._events = tuple(_sem_texto_de_excecao(e) for e in span.events)
+        self._exportador.on_end(span)
+
+    def shutdown(self) -> None:
+        self._exportador.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._exportador.force_flush(timeout_millis)
 
 
 def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvider:
@@ -147,6 +162,7 @@ def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvi
 
     ``pytstop.processo`` (``api``, ``relay`` ou ``consumidor``) vai no
     ``Resource``: os spans dos tres processos saem com o mesmo ``service.name``.
+    O exportador entra por dentro do ``_SemTextoDeErro``, nunca ao lado dele.
     """
     provedor = TracerProvider(
         sampler=ParentBased(root=_RaizSemClienteOrfao()),
@@ -158,7 +174,8 @@ def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvi
             }
         ),
     )
-    provedor.add_span_processor(_SemTextoDeErro())
+    # Sem exportacao, o SpanProcessor base (que nao faz nada) fecha a cadeia.
+    exportador: SpanProcessor = SpanProcessor()
     if ambiente.get("OTEL_ENABLED", "").strip().lower() in _VERDADEIROS:
         # So aqui o gRPC entra no processo.
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -167,13 +184,21 @@ def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvi
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         endpoint = ambiente.get("OTEL_EXPORTER_OTLP_ENDPOINT", _ENDPOINT_PADRAO)
-        exportador = OTLPSpanExporter(
-            endpoint=endpoint, insecure=endpoint.startswith("http://")
+        exportador = BatchSpanProcessor(
+            OTLPSpanExporter(endpoint=endpoint, insecure=endpoint.startswith("http://"))
         )
-        provedor.add_span_processor(BatchSpanProcessor(exportador))
+    provedor.add_span_processor(_SemTextoDeErro(exportador))
     return provedor
 
 
-def configurar_telemetria(processo: str) -> None:
-    """Instala o provider do processo (o SDK descarrega os spans na saida)."""
-    trace.set_tracer_provider(criar_provedor(os.environ, processo=processo))
+def configurar_telemetria(processo: str) -> TracerProvider:
+    """Instala o provider do processo e o devolve: quem o instala o encerra.
+
+    O ``shutdown`` descarrega os spans que esperam no lote. O SDK o registra em
+    ``atexit``, que nao roda se o processo morrer por sinal: o uvicorn re-levanta
+    o SIGTERM depois do desligamento gracioso, e fora do PID 1 (o container usa
+    ``exec``) isso mata o processo. Por isso a API o chama no fim do lifespan.
+    """
+    provedor = criar_provedor(os.environ, processo=processo)
+    trace.set_tracer_provider(provedor)
+    return provedor

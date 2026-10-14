@@ -10,8 +10,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc import trace_exporter
+from opentelemetry.sdk.trace import (
+    ReadableSpan,
+    SpanProcessor,
+    TracerProvider,
+)
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -27,6 +32,8 @@ from opentelemetry.trace import (
 from src.compartilhado.infraestrutura.mensageria import telemetria
 
 if TYPE_CHECKING:
+    from opentelemetry.context import Context
+    from opentelemetry.sdk.trace import Span
     from opentelemetry.trace import Tracer
 
 _PLACA = "ABC1D23"
@@ -203,3 +210,102 @@ def test_span_sem_erro_sai_como_foi_criado(provedor: _Provedor) -> None:
     (exportado,) = provedor.exportados.get_finished_spans()
     assert exportado.status.status_code is StatusCode.OK
     assert exportado.events == ()
+
+
+# --- o exportador so alcanca o span depois da limpeza --------------------------------
+
+
+class _Seguinte(SpanProcessor):
+    """O que vem depois do ``_SemTextoDeErro``: guarda o span COMO ele chegou."""
+
+    def __init__(self) -> None:
+        self.chamadas: list[object] = []
+        self.recebidos: list[tuple[str | None, list[dict[str, object]]]] = []
+
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        self.chamadas.append("on_start")
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self.chamadas.append("on_end")
+        self.recebidos.append(
+            (span.status.description, [dict(e.attributes or {}) for e in span.events])
+        )
+
+    def shutdown(self) -> None:
+        self.chamadas.append("shutdown")
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        self.chamadas.append(("force_flush", timeout_millis))
+        return True
+
+
+def test_o_que_vem_depois_recebe_o_span_ja_sem_o_texto_de_erro() -> None:
+    """A garantia central: o processador limpa e SO ENTAO chama o seguinte, em vez
+    de depender de a lista do provider o por antes do exportador."""
+    seguinte = _Seguinte()
+    provedor = TracerProvider()
+    provedor.add_span_processor(telemetria._SemTextoDeErro(seguinte))
+
+    with provedor.get_tracer("t").start_as_current_span("INSERT") as span:
+        erro = _erro_de_driver()
+        span.record_exception(erro)
+        span.set_status(StatusCode.ERROR, str(erro))
+
+    assert seguinte.recebidos == [
+        (None, [{"exception.type": "RuntimeError", "exception.escaped": "False"}])
+    ]
+
+
+def test_o_processador_repassa_inicio_flush_e_encerramento() -> None:
+    seguinte = _Seguinte()
+    provedor = TracerProvider()
+    provedor.add_span_processor(telemetria._SemTextoDeErro(seguinte))
+
+    with provedor.get_tracer("t").start_as_current_span("x"):
+        pass
+    provedor.force_flush(1234)
+    provedor.shutdown()
+
+    assert seguinte.chamadas[:2] == ["on_start", "on_end"]
+    ((nome, prazo_ms),) = [c for c in seguinte.chamadas if isinstance(c, tuple)]
+    assert (nome, 0 < prazo_ms <= 1234) == ("force_flush", True)
+    assert seguinte.chamadas[-1] == "shutdown"
+
+
+class _ExportadorEmMemoria(InMemorySpanExporter):
+    """No lugar do ``OTLPSpanExporter``: guarda o que o lote exportou."""
+
+    criados: list[_ExportadorEmMemoria] = []  # noqa: RUF012 - estado do teste
+
+    def __init__(self, **_opcoes: object) -> None:
+        super().__init__()
+        type(self).criados.append(self)
+
+
+def test_com_exportacao_ligada_o_exportador_fica_dentro_do_processador_que_limpa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_ExportadorEmMemoria, "criados", [])
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", _ExportadorEmMemoria)
+
+    provedor = telemetria.criar_provedor({"OTEL_ENABLED": "true"}, processo="api")
+
+    # Um processador so no provider, e o exportador nao e visivel de fora dele.
+    (limpeza,) = provedor._active_span_processor._span_processors
+    assert isinstance(limpeza, telemetria._SemTextoDeErro)
+    assert isinstance(limpeza._exportador, BatchSpanProcessor)
+    with provedor.get_tracer("t").start_as_current_span("INSERT") as span:
+        span.set_status(StatusCode.ERROR, f"DETAIL: {_PLACA}")
+    provedor.force_flush()
+    (exportador,) = _ExportadorEmMemoria.criados
+    (exportado,) = exportador.get_finished_spans()
+    assert exportado.status.description is None
+    provedor.shutdown()
+
+
+def test_sem_exportacao_o_processador_nao_tem_exportador_por_dentro() -> None:
+    provedor = telemetria.criar_provedor({}, processo="api")
+
+    (limpeza,) = provedor._active_span_processor._span_processors
+    assert isinstance(limpeza, telemetria._SemTextoDeErro)
+    assert type(limpeza._exportador) is SpanProcessor

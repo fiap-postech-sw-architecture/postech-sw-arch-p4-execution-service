@@ -41,6 +41,7 @@ from src.compartilhado.infraestrutura.database import (
 )
 from src.estoque.infraestrutura.seed import ITENS_DEMO, semear
 from src.main import criar_app
+from tests.conftest import provedor_dos_testes
 from tests.integracao.conftest import BILLING_URL, config_alembic
 from tests.manifestos import objeto
 
@@ -206,7 +207,7 @@ def test_api_sobe_com_o_papel_da_aplicacao_e_le_e_altera_o_estoque(
     monkeypatch.setenv("JWKS_URL", jwks_url)
     monkeypatch.setenv("BILLING_URL", BILLING_URL)
     admin = {"Authorization": f"Bearer {emitir_token('admin')}"}
-    with TestClient(criar_app()) as api:
+    with TestClient(criar_app(provedor_dos_testes())) as api:
         assert api.get("/api/v1/saude/pronto").status_code == 200
         estoque = api.get("/api/v1/estoque", headers=admin)
         ajuste = api.patch(

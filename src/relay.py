@@ -27,9 +27,9 @@ _log = structlog.get_logger(__name__)
 
 def main() -> None:
     configurar_logging()
-    configurar_telemetria("relay")
+    provedor = configurar_telemetria("relay")
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
-    instrumentar_banco(engine)
+    instrumentar_banco(engine, provedor)
     relay = Relay(
         engine,
         url_de_conexao("RABBITMQ_URL"),

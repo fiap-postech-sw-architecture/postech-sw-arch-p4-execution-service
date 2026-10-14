@@ -30,6 +30,8 @@ from src.compartilhado.infraestrutura.mensageria.telemetria import criar_provedo
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+    from opentelemetry.sdk.trace import TracerProvider
+
 # Colima (macOS): o socket do Docker nao fica em /var/run/docker.sock. Ajusta o
 # ambiente antes de o testcontainers ler DOCKER_HOST, para `uv run pytest` puro
 # funcionar; no CI (ubuntu) e no Docker Desktop nada muda.
@@ -48,6 +50,14 @@ _SPANS = InMemorySpanExporter()
 _PROVEDOR = criar_provedor({}, processo="testes")
 _PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
 trace.set_tracer_provider(_PROVEDOR)
+
+
+def provedor_dos_testes() -> TracerProvider:
+    """O provider de producao da sessao (exportador em memoria), para
+    ``criar_app(provedor=...)``: o app dos testes usa o dos testes, nao instala
+    outro (nem deixa um exportador de sobra com ``OTEL_ENABLED`` no ambiente)."""
+    return _PROVEDOR
+
 
 KID = "chave-de-teste"
 EMISSOR = "pytstop-os-service"
@@ -188,6 +198,20 @@ def spans() -> InMemorySpanExporter:
     """Spans terminados durante o teste."""
     _SPANS.clear()
     return _SPANS
+
+
+@pytest.fixture(autouse=True)
+def _telemetria_hermetica(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nenhum teste instala um provider global por conta propria: ``criar_app``
+    sem ``provedor=`` instalaria o do processo (e um exportador, com
+    ``OTEL_ENABLED`` no ambiente). O teste que quer exercitar esse caminho troca o
+    ``configurar_telemetria`` por um espiao."""
+
+    def sem_provider_global(_processo: str) -> TracerProvider:
+        msg = "em teste, passe provedor= a criar_app (provedor_dos_testes())"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("src.main.configurar_telemetria", sem_provider_global)
 
 
 @pytest.fixture(autouse=True)

@@ -360,7 +360,16 @@ def test_o_configmap_liga_a_guarda_de_producao_e_o_prefixo_da_borda(
     assert dados["METRICS_PORT"] == "9100"
     # Sem a exportacao ligada, a saga do servico some do Jaeger.
     assert dados["OTEL_ENABLED"] == "true"
+    # Com o Jaeger fora e a fila cheia o SDK esperaria 30 s por lote e o pod levaria
+    # o grace period inteiro para sair: cada envio tem o prazo curto.
+    assert dados["OTEL_BSP_EXPORT_TIMEOUT"] == "2000"
+    assert dados["OTEL_EXPORTER_OTLP_TIMEOUT"] == "2"
     assert "TRUSTED_PROXIES" not in dados  # o entrypoint usa --no-proxy-headers
+
+
+# Variaveis do ConfigMap que o codigo do servico nao le: o SDK do OpenTelemetry as le
+# do ambiente (prazo do lote e de cada envio OTLP).
+LIDAS_PELO_SDK = {"OTEL_BSP_EXPORT_TIMEOUT", "OTEL_EXPORTER_OTLP_TIMEOUT"}
 
 
 def test_toda_variavel_do_configmap_e_lida_pelo_codigo(overlay: str) -> None:
@@ -371,7 +380,9 @@ def test_toda_variavel_do_configmap_e_lida_pelo_codigo(overlay: str) -> None:
     sem_leitor = [
         variavel
         for variavel in dados
-        if f'"{variavel}"' not in codigo and "${" + variavel not in entrypoint
+        if f'"{variavel}"' not in codigo
+        and "${" + variavel not in entrypoint
+        and variavel not in LIDAS_PELO_SDK
     ]
 
     assert sem_leitor == []
