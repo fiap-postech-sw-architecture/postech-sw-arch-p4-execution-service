@@ -15,7 +15,7 @@ from src.estoque.aplicacao.events import (
 )
 from src.estoque.dominio.exceptions import ItemEstoqueNaoEncontradoException
 from src.estoque.dominio.item_estoque import ItemEstoque
-from src.estoque.dominio.reserva import Faltante, Reserva, StatusReserva
+from src.estoque.dominio.reserva import Reserva, StatusReserva
 from src.estoque.dominio.services import (
     calcular_faltantes,
     consumir,
@@ -180,17 +180,8 @@ class ReservarPecas:
         self._uow = uow
 
     @releitura_em_corrida
-    def executar(
-        self,
-        ordem_id: UUID,
-        pecas: Sequence[ItemReserva],
-        fora_do_catalogo: Sequence[Faltante] = (),
-    ) -> Reserva:
-        """Devolve a decisao da ordem: reserva ATIVA, RECUSADA ou ja existente.
-
-        ``fora_do_catalogo``: pecas com codigo fora do formato do Billing, que o
-        contrato aceita mas nenhum item do estoque tem; faltam inteiras.
-        """
+    def executar(self, ordem_id: UUID, pecas: Sequence[ItemReserva]) -> Reserva:
+        """Devolve a decisao da ordem: reserva ATIVA, RECUSADA ou ja existente."""
         agora = datetime.now(UTC)
         # Valida o comando (sku repetido, quantidade) antes de travar linhas.
         nova = Reserva.criar(ordem_id=ordem_id, itens=pecas, agora=agora)
@@ -200,7 +191,7 @@ class ReservarPecas:
             if existente is not None:
                 self._responder_de_novo(existente)
                 return existente
-            faltantes = [*fora_do_catalogo, *calcular_faltantes(nova.itens, itens)]
+            faltantes = calcular_faltantes(nova.itens, itens)
             if faltantes:
                 recusada = Reserva.recusar(
                     ordem_id=ordem_id,
