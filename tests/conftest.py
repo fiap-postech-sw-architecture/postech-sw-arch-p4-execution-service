@@ -25,7 +25,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
-from src.compartilhado.infraestrutura.mensageria.telemetria import criar_provedor
+from src.compartilhado.infraestrutura.mensageria.telemetria import (
+    criar_provedor,
+    instalar_propagador,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -50,6 +53,7 @@ _SPANS = InMemorySpanExporter()
 _PROVEDOR = criar_provedor({}, processo="testes")
 _PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
 trace.set_tracer_provider(_PROVEDOR)
+instalar_propagador()
 
 
 def provedor_dos_testes() -> TracerProvider:

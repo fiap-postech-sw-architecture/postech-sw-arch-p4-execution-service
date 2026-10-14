@@ -23,6 +23,8 @@ import os
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry import trace
+from opentelemetry.propagate import set_global_textmap
+from opentelemetry.propagators.textmap import CarrierT, Getter, default_getter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.sampling import (
@@ -47,13 +49,54 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Link, TraceState
     from opentelemetry.util.types import Attributes
 
-# So traceparent/tracestate: o que o envelope do contrato carrega (sem baggage).
-_PROPAGADOR: Final = TraceContextTextMapPropagator()
 _TRACESTATE_MAXIMO: Final = 512
+_TRACESTATE: Final = "tracestate"
 _VERDADEIROS: Final = frozenset({"true", "1"})
 # Mesmos padroes do compose da plataforma (Jaeger por OTLP/gRPC).
 _ENDPOINT_PADRAO: Final = "http://jaeger:4317"
 _SERVICO_PADRAO: Final = "execution-service"
+
+
+class _SemTracestateLongo(Getter[CarrierT]):
+    """Esconde do propagador o ``tracestate`` acima do teto do W3C (512 caracteres)."""
+
+    def __init__(self, getter: Getter[CarrierT]) -> None:
+        self._getter = getter
+
+    def get(self, carrier: CarrierT, key: str) -> list[str] | None:
+        valores = self._getter.get(carrier, key)
+        if (
+            key == _TRACESTATE
+            and valores
+            and len(",".join(valores)) > _TRACESTATE_MAXIMO
+        ):
+            return None
+        return valores
+
+    def keys(self, carrier: CarrierT) -> list[str]:
+        return self._getter.keys(carrier)
+
+
+class _TraceContext(TraceContextTextMapPropagator):
+    """``traceparent`` e ``tracestate``, o que o ADR-043 propaga: sem ``baggage``.
+
+    O ``tracestate`` acima de 512 caracteres e descartado na leitura, venha do
+    cabecalho HTTP (o instrumentador do FastAPI le o cabecalho sem passar por
+    ``contexto_de``) ou dos headers AMQP e das colunas da outbox: o valor vem de
+    fora e seria regravado na outbox, em cada copia de retry e na chamada ao
+    Billing. O ``traceparent`` segue valendo.
+    """
+
+    def extract(
+        self,
+        carrier: CarrierT,
+        context: Context | None = None,
+        getter: Getter[CarrierT] = default_getter,
+    ) -> Context:
+        return super().extract(carrier, context, _SemTracestateLongo(getter))
+
+
+_PROPAGADOR: Final = _TraceContext()
 
 # ProxyTracer: vale o provider instalado depois (configurar_telemetria ou testes).
 tracer = trace.get_tracer("pytstop.mensageria")
@@ -67,16 +110,9 @@ def contexto_atual() -> dict[str, str]:
 
 
 def contexto_de(portador: Mapping[str, object]) -> Context:
-    """Contexto W3C lido de headers AMQP ou das colunas da outbox.
-
-    ``tracestate`` acima de 512 caracteres (o que o W3C manda propagar) e
-    descartado: viria do publicador para a outbox e para o proximo header.
-    """
+    """Contexto W3C lido de headers AMQP ou das colunas da outbox."""
     textos = {
-        chave: valor
-        for chave, valor in portador.items()
-        if isinstance(valor, str)
-        and not (chave == "tracestate" and len(valor) > _TRACESTATE_MAXIMO)
+        chave: valor for chave, valor in portador.items() if isinstance(valor, str)
     }
     return _PROPAGADOR.extract(textos)
 
@@ -191,14 +227,25 @@ def criar_provedor(ambiente: Mapping[str, str], *, processo: str) -> TracerProvi
     return provedor
 
 
-def configurar_telemetria(processo: str) -> TracerProvider:
-    """Instala o provider do processo e o devolve: quem o instala o encerra.
+def instalar_propagador() -> None:
+    """So ``traceparent`` e ``tracestate`` entram e saem do processo.
 
-    O ``shutdown`` descarrega os spans que esperam no lote. O SDK o registra em
-    ``atexit``, que nao roda se o processo morrer por sinal: o uvicorn re-levanta
-    o SIGTERM depois do desligamento gracioso, e fora do PID 1 (o container usa
-    ``exec``) isso mata o processo. Por isso a API o chama no fim do lifespan.
+    O padrao do SDK soma o ``baggage``, que a API aceitaria do chamador e o httpx
+    repassaria ao Billing; o ``tracestate`` longo cai na leitura (``_TraceContext``).
+    """
+    set_global_textmap(_PROPAGADOR)
+
+
+def configurar_telemetria(processo: str) -> TracerProvider:
+    """Instala o provider e o propagador do processo; devolve o provider.
+
+    Quem instala o provider o encerra. O ``shutdown`` descarrega os spans que
+    esperam no lote. O SDK o registra em ``atexit``, que nao roda se o processo
+    morrer por sinal: o uvicorn re-levanta o SIGTERM depois do desligamento
+    gracioso, e fora do PID 1 (o container usa ``exec``) isso mata o processo.
+    Por isso a API o chama no fim do lifespan.
     """
     provedor = criar_provedor(os.environ, processo=processo)
     trace.set_tracer_provider(provedor)
+    instalar_propagador()
     return provedor

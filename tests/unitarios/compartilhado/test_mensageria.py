@@ -253,10 +253,15 @@ def test_configurar_telemetria_instala_e_devolve_o_provider_do_processo(
 ) -> None:
     instalados: list[object] = []
     monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
+    propagadores: list[object] = []
 
+    monkeypatch.setattr(telemetria, "set_global_textmap", propagadores.append)
     devolvido = telemetria.configurar_telemetria("relay")
 
     # Quem instala e dono do provider: devolve o mesmo que o global recebeu.
+    # So traceparent e tracestate: o padrao do SDK soma o baggage do chamador.
+    (propagador,) = propagadores
+    assert propagador.fields == {"traceparent", "tracestate"}
     (provedor,) = instalados
     assert devolvido is provedor
     assert isinstance(provedor, TracerProvider)
