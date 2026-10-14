@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.instrumentacao import (
@@ -104,6 +104,11 @@ def _app() -> FastAPI:
     def decisao(token: str) -> dict[str, str]:
         return {"token": token}
 
+    @app.get("/explode/{placa}")
+    def explode(placa: str) -> None:
+        msg = f"defeito com a placa {placa}"
+        raise RuntimeError(msg)
+
     @app.get("/metrics")
     def metricas() -> str:
         return "ok"
@@ -146,6 +151,21 @@ def test_requisicao_sem_rota_casada_nao_leva_o_caminho_no_span(
     servidor = _servidor(spans)
     assert dict(servidor.attributes or {})["url.path"] == "nao_roteada"
     assert SEGREDO not in repr(servidor.to_json())
+
+
+def test_erro_nao_tratado_marca_o_span_sem_o_texto_da_excecao(
+    spans: InMemorySpanExporter,
+) -> None:
+    # O instrumentador do FastAPI grava a excecao e "Tipo: mensagem" no span.
+    resposta = TestClient(_app(), raise_server_exceptions=False).get("/explode/ABC1D23")
+
+    assert resposta.status_code == 500
+    servidor = _servidor(spans)
+    assert servidor.status.status_code is StatusCode.ERROR
+    assert servidor.status.description is None
+    (evento,) = [e for e in servidor.events if e.name == "exception"]
+    assert dict(evento.attributes or {})["exception.type"] == "RuntimeError"
+    assert "ABC1D23" not in repr(servidor.to_json())
 
 
 @pytest.mark.parametrize("caminho", ["/metrics", "/api/v1/saude/pronto"])
