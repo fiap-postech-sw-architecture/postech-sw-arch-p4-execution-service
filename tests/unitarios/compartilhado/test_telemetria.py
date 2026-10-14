@@ -204,6 +204,24 @@ def test_excecao_que_escapa_do_span_nao_leva_texto(
     assert _PLACA not in "\n".join(tudo_que_o_span_leva(exportado))
 
 
+def test_excecao_registrada_sem_status_de_erro_tambem_perde_o_texto(
+    provedor: _Provedor,
+) -> None:
+    # O ``record_exception`` solto (um handler que registra e segue) deixa o
+    # status em UNSET: a limpeza dos eventos nao pode depender do status de erro.
+    with provedor.tracer().start_as_current_span("GET /x") as span:
+        span.record_exception(_erro_de_driver())
+
+    (exportado,) = provedor.exportados.get_finished_spans()
+    assert exportado.status.status_code is StatusCode.UNSET
+    (evento,) = exportado.events
+    assert dict(evento.attributes or {}) == {
+        "exception.type": "RuntimeError",
+        "exception.escaped": "False",
+    }
+    assert _PLACA not in "\n".join(tudo_que_o_span_leva(exportado))
+
+
 def test_evento_que_nao_e_excecao_e_atributo_do_span_ficam_como_criados(
     provedor: _Provedor,
 ) -> None:
