@@ -35,12 +35,17 @@ def test_api_nao_deixa_o_fastapi_montar_o_export_otlp_na_partida(
     logger = logging.getLogger("fastapi")
     coletor = Coletor(level=logging.WARNING)
     logger.addHandler(coletor)
+    app = criar_app()
     try:
         # O engine e os clientes so conectam no primeiro uso: o lifespan sobe
         # sem banco nem OS Service.
-        with TestClient(criar_app()):
+        with TestClient(app):
             pass
     finally:
         logger.removeHandler(coletor)
 
+    # O aviso so sai sem o extra ``fastapi[opentelemetry]``; com ele instalado o
+    # FastAPI montaria os exportadores sem avisar. O estado e a causa: a opcao,
+    # que o FastAPI guarda em ``_telemetry`` (0.142), fica desligada.
+    assert app._telemetry["auto_configure"] is False
     assert avisos == []
