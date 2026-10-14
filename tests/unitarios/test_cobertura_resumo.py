@@ -13,7 +13,8 @@ if TYPE_CHECKING:
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "cobertura_resumo.py"
 _XML = """<?xml version="1.0" ?>
-<coverage branch-rate="0.5" line-rate="0.75">
+<coverage branch-rate="0.5" line-rate="0.75" lines-valid="6" lines-covered="4"
+          branches-valid="4" branches-covered="2">
   <sources><source>/repo/src</source></sources>
   <packages><package name="x"><classes>
     <class filename="estoque/dominio/sku.py">
@@ -48,7 +49,9 @@ def test_agrupa_por_contexto_e_camada_com_total(
 
     linhas = script.resumir(xml).splitlines()
 
-    assert linhas[0] == "### Cobertura de testes: 66.7% de linhas, 50.0% de ramos"
+    # O gate (fail_under com branch = True) soma linhas e ramos: (4 + 2) / (6 + 4).
+    assert linhas[0] == "### Cobertura de testes: 60.0% no gate (linhas e ramos)"
+    assert linhas[2] == "66.7% de linhas e 50.0% de ramos."
     assert "| `src` | 2 | 1 | 50.0% |" in linhas
     assert "| `src/estoque/dominio` | 4 | 3 | 75.0% |" in linhas
     assert linhas[-1] == "| **total** | 6 | 4 | 66.7% |"
@@ -74,4 +77,4 @@ def test_main_escreve_o_resumo(
     xml = tmp_path / "coverage.xml"
     xml.write_text(_XML)
     assert script.main(["prog", str(xml)]) == 0
-    assert capsys.readouterr().out.startswith("### Cobertura de testes: 66.7%")
+    assert capsys.readouterr().out.startswith("### Cobertura de testes: 60.0% no gate")

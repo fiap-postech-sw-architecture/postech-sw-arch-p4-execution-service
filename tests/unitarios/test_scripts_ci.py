@@ -1,6 +1,7 @@
 """Scripts do CI (``scripts/ci/``) e a excecao do trivy (KSV-0109): a conferencia
-que a estreita ao ConfigMap do ``papeis.sql`` e o relatorio das imagens de
-terceiros, que nunca reprova o job."""
+que a estreita ao ConfigMap do ``papeis.sql``, o relatorio das imagens de
+terceiros, que nunca reprova o job, o registro da saida do pip-audit e do trivy
+no summary e os nomes das variaveis do ``make kind-deploy``."""
 
 from __future__ import annotations
 
@@ -12,12 +13,14 @@ import uuid
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.manifestos import renderizar
 
 RAIZ = Path(__file__).resolve().parents[2]
 CONFERENCIA = RAIZ / "scripts" / "ci" / "confere-senhas-do-script.sh"
 RELATORIO_TERCEIROS = RAIZ / "scripts" / "ci" / "relatorio-trivy-terceiros.sh"
+REGISTRA_NO_SUMMARY = RAIZ / "scripts" / "ci" / "registra-no-summary.sh"
 
 
 def _conferir(arquivo: Path) -> subprocess.CompletedProcess[str]:
@@ -376,3 +379,77 @@ def test_o_relatorio_varre_o_postgres_e_o_exporter_do_render_real(
         "postgres:16.15",
         "prometheuscommunity/postgres-exporter:v0.20.1",
     ]
+
+
+def _registrar(
+    tmp_path: Path, *comando: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    resumo = tmp_path / "resumo.md"
+    resultado = subprocess.run(  # noqa: S603 - o script do proprio repositorio
+        ["/bin/bash", str(REGISTRA_NO_SUMMARY), "pip-audit", *comando],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+        env={**os.environ, "GITHUB_STEP_SUMMARY": str(resumo)},
+    )
+    return resultado, resumo.read_text() if resumo.exists() else ""
+
+
+def test_comando_que_passa_vai_para_o_log_e_para_o_summary(tmp_path: Path) -> None:
+    resultado, resumo = _registrar(tmp_path, "echo", "No known vulnerabilities found")
+
+    assert resultado.returncode == 0
+    assert resultado.stdout == "No known vulnerabilities found\n"
+    assert resumo == (
+        "### pip-audit: sem achado\n```text\nNo known vulnerabilities found\n```\n"
+    )
+
+
+def test_comando_que_reprova_registra_a_saida_e_mantem_o_codigo(
+    tmp_path: Path,
+) -> None:
+    resultado, resumo = _registrar(
+        tmp_path, "/bin/sh", "-c", "echo achado-no-stdout; echo erro >&2; exit 3"
+    )
+
+    assert resultado.returncode == 3
+    assert "achado-no-stdout" in resultado.stdout
+    assert resumo.startswith("### pip-audit: reprovou (codigo 3)\n```text\n")
+    assert "achado-no-stdout" in resumo
+    assert "erro" in resumo
+
+
+def test_comando_inexistente_reprova_e_aparece_no_summary(tmp_path: Path) -> None:
+    resultado, resumo = _registrar(tmp_path, "comando-que-nao-existe-aqui")
+
+    assert resultado.returncode == 127
+    assert "reprovou (codigo 127)" in resumo
+
+
+def test_sem_comando_o_script_recusa(tmp_path: Path) -> None:
+    resultado, resumo = _registrar(tmp_path)
+
+    assert resultado.returncode == 64
+    assert "uso:" in resultado.stderr
+    assert resumo == ""
+
+
+@pytest.mark.parametrize(
+    ("job", "ferramenta"),
+    [("pip-audit", "uvx pip-audit"), ("trivy", "trivy image")],
+)
+def test_o_security_yml_registra_o_pip_audit_e_o_trivy_no_summary(
+    job: str, ferramenta: str
+) -> None:
+    fluxo = yaml.safe_load(
+        (RAIZ / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
+    )
+    comandos = [
+        " ".join(passo["run"].split())
+        for passo in fluxo["jobs"][job]["steps"]
+        if ferramenta in passo.get("run", "")
+    ]
+
+    assert len(comandos) == 1
+    assert comandos[0].startswith("scripts/ci/registra-no-summary.sh ")
