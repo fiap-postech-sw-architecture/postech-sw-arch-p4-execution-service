@@ -26,6 +26,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from prometheus_client import REGISTRY
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
+from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
 from src.compartilhado.infraestrutura.mensageria.telemetria import (
     criar_provedor,
     instalar_propagador,
@@ -230,6 +231,21 @@ def _telemetria_hermetica() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as isolado:
         isolado.setattr("src.main.configurar_telemetria", sem_provider_global)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _gauges_do_relay_sem_a_funcao_de_outro_teste() -> Iterator[None]:
+    """Devolve a zero as gauges ``outbox_pendentes`` e ``outbox_dead`` depois do teste.
+
+    Elas sao do modulo, e cada ``Relay`` aponta a funcao delas para o proprio banco:
+    a do ultimo teste que criou um ficaria valendo no ``/metrics`` de todo teste
+    seguinte, esperando um lock de outra tabela travada (5 s cada) dentro do
+    ``generate_latest``, fora de qualquer prazo do coletor. O resultado dependia da
+    ordem em que a suite rodava.
+    """
+    yield
+    modulo_relay._PENDENTES.set_function(lambda: 0.0)
+    modulo_relay._DEAD.set_function(lambda: 0.0)
 
 
 @pytest.fixture(autouse=True)
