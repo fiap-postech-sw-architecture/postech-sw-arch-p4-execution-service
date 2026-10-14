@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import yaml
 
 from tests.manifestos import OVERLAYS, RAIZ, objeto, renderizar
 
@@ -370,6 +371,18 @@ def test_o_configmap_liga_a_guarda_de_producao_e_o_prefixo_da_borda(
 # Variaveis do ConfigMap que o codigo do servico nao le: o SDK do OpenTelemetry as le
 # do ambiente (prazo do lote e de cada envio OTLP).
 LIDAS_PELO_SDK = {"OTEL_BSP_EXPORT_TIMEOUT", "OTEL_EXPORTER_OTLP_TIMEOUT"}
+
+
+def test_o_compose_fixa_os_mesmos_prazos_do_exportador_do_configmap(
+    overlay: str,
+) -> None:
+    configmap = objeto(overlay, "ConfigMap", "execution-service")["data"]
+    compose = yaml.safe_load((RAIZ / "docker-compose.yml").read_text())
+
+    for servico in ("api", "relay", "consumidor"):
+        ambiente = compose["services"][servico]["environment"]
+        for variavel in LIDAS_PELO_SDK:
+            assert ambiente[variavel] == configmap[variavel]
 
 
 def test_toda_variavel_do_configmap_e_lida_pelo_codigo(overlay: str) -> None:
