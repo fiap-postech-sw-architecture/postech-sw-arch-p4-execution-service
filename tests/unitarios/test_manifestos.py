@@ -38,6 +38,22 @@ _MENSAGERIA = [
     ("execution-service-consumidor", "consumidor"),
 ]
 _APLICACAO = [("execution-service-api", "api"), *_MENSAGERIA]
+# (CPU pedida, CPU limite, memoria pedida, memoria limite) de cada container,
+# por "pod/container". A memoria e a do orcamento do ADR-042; o initContainer
+# que espera a migracao tem o teto do relay.
+_RECURSOS_DO_PROCESSO = ("50m", "250m", "128Mi", "256Mi")
+RECURSOS = {
+    "execution-service-api/aguarda-migracao": _RECURSOS_DO_PROCESSO,
+    "execution-service-api/api": ("100m", "500m", "256Mi", "512Mi"),
+    "execution-service-relay/aguarda-migracao": _RECURSOS_DO_PROCESSO,
+    "execution-service-relay/relay": _RECURSOS_DO_PROCESSO,
+    "execution-service-consumidor/aguarda-migracao": _RECURSOS_DO_PROCESSO,
+    "execution-service-consumidor/consumidor": _RECURSOS_DO_PROCESSO,
+    "execucao-postgres/postgres": ("100m", "500m", "128Mi", "512Mi"),
+    "execucao-postgres/exporter": ("10m", "100m", "32Mi", "64Mi"),
+    "execucao-migracao/aguarda-postgres": ("10m", "100m", "32Mi", "64Mi"),
+    "execucao-migracao/migracao": ("50m", "500m", "128Mi", "256Mi"),
+}
 PROCESSOS_DA_MENSAGERIA = [pytest.param(*p, id=p[1]) for p in _MENSAGERIA]
 PROCESSOS_DA_APLICACAO = [pytest.param(*p, id=p[1]) for p in _APLICACAO]
 
@@ -287,6 +303,21 @@ def test_banco_com_volume_do_overlay(overlay: str) -> None:
     assert statefulset["spec"]["replicas"] == 1
 
 
+def test_cada_container_tem_os_recursos_da_tabela_do_servico(overlay: str) -> None:
+    atuais = {
+        f"{nome}/{container['name']}": (
+            container["resources"]["requests"]["cpu"],
+            container["resources"]["limits"]["cpu"],
+            container["resources"]["requests"]["memory"],
+            container["resources"]["limits"]["memory"],
+        )
+        for nome, pod in _pods(overlay)
+        for container in _containers(pod)
+    }
+
+    assert atuais == RECURSOS
+
+
 # --- configuracao ----------------------------------------------------------------
 
 
@@ -327,6 +358,8 @@ def test_o_configmap_liga_a_guarda_de_producao_e_o_prefixo_da_borda(
     assert dados["RUN_MIGRATIONS_ON_STARTUP"] == dados["RUN_SEED_ON_STARTUP"] == "false"
     assert prefixos == {dados["ROOT_PATH"]} == {"/execucao"}
     assert dados["METRICS_PORT"] == "9100"
+    # Sem a exportacao ligada, a saga do servico some do Jaeger.
+    assert dados["OTEL_ENABLED"] == "true"
     assert "TRUSTED_PROXIES" not in dados  # o entrypoint usa --no-proxy-headers
 
 
@@ -410,6 +443,10 @@ def test_replicas_hpa_e_encerramento_gracioso(overlay: str) -> None:
         "type": "Utilization",
         "averageUtilization": 70,
     }
+    # A API fica nos 30 s que o Kubernetes da quando o manifesto nao diz nada.
+    assert (
+        api["spec"]["template"]["spec"].get("terminationGracePeriodSeconds", 30) == 30
+    )
     # Relay e consumidor: uma replica, e 45 s para terminar o lote em curso.
     for deployment in ("execution-service-relay", "execution-service-consumidor"):
         documento = objeto(overlay, "Deployment", deployment)
@@ -498,6 +535,25 @@ def test_entrada_negada_a_todo_pod_e_liberada_so_no_previsto(overlay: str) -> No
     assert all(
         politica.get("policyTypes") == ["Ingress"] for politica in politicas.values()
     )
+
+
+def test_admin_e_metricas_so_saem_pelo_ingress_com_o_plugin_de_bloqueio(
+    overlay: str,
+) -> None:
+    bloqueio = objeto(overlay, "Ingress", "execution-service-fora-da-borda")
+    publicado = objeto(overlay, "Ingress", "execution-service-borda")
+
+    # O caminho mais longo vence: /admin e /metrics casam o Ingress do bloqueio,
+    # que so e bloqueio com o plugin; sem ele, sairiam pelo Kong.
+    assert bloqueio["metadata"]["annotations"] == {
+        "konghq.com/plugins": "fora-da-borda"
+    }
+    assert [
+        caminho["path"]
+        for regra in bloqueio["spec"]["rules"]
+        for caminho in regra["http"]["paths"]
+    ] == ["/execucao/api/v1/admin", "/execucao/metrics"]
+    assert "konghq.com/plugins" not in publicado["metadata"]["annotations"]
 
 
 def _casa(seletor: dict[str, Any], rotulos: dict[str, str]) -> bool:
