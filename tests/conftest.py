@@ -18,13 +18,13 @@ import structlog
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
+from src.compartilhado.infraestrutura.mensageria.telemetria import criar_provedor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -40,9 +40,11 @@ if "DOCKER_HOST" not in os.environ and _SOCKET_COLIMA.exists():
     )
 
 # Provider global do SDK com exportador em memoria, instalado uma vez (o OTel
-# so aceita um por processo): os testes leem os spans de relay e consumidor.
+# so aceita um por processo): os testes leem os spans dos tres processos. E o
+# provider de producao (amostrador e limpeza do texto de erro), sem exportacao
+# OTLP: os testes veem o que iria para o Jaeger.
 _SPANS = InMemorySpanExporter()
-_PROVEDOR = TracerProvider()
+_PROVEDOR = criar_provedor({}, processo="testes")
 _PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
 trace.set_tracer_provider(_PROVEDOR)
 

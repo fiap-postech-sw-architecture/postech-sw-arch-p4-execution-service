@@ -259,14 +259,16 @@ def test_configurar_telemetria_instala_o_provider_do_processo(
     assert provedor.resource.attributes["pytstop.processo"] == "relay"
 
 
-def test_contexto_de_trace_nao_carrega_o_sdk_nem_o_grpc() -> None:
-    # A UoW da API importa a telemetria: o SDK e o exportador so carregam no
-    # relay e no consumidor (criar_provedor).
+def test_grpc_so_carrega_com_a_exportacao_ligada() -> None:
+    # Os tres processos montam o provider do SDK, mas o gRPC do exportador OTLP
+    # so entra com OTEL_ENABLED=true (criar_provedor).
     codigo = (
         "import sys\n"
-        "import src.compartilhado.infraestrutura.unit_of_work\n"
+        "from src.compartilhado.infraestrutura.mensageria.telemetria import "
+        "criar_provedor\n"
+        "criar_provedor({}, processo='api')\n"
         "carregados = [m for m in sys.modules if m.startswith(('grpc', "
-        "'opentelemetry.sdk', 'opentelemetry.exporter'))]\n"
+        "'opentelemetry.exporter'))]\n"
         "assert carregados == [], carregados\n"
     )
     subprocess.run([sys.executable, "-c", codigo], check=True, cwd=RAIZ)  # noqa: S603 - comando fixo do teste
