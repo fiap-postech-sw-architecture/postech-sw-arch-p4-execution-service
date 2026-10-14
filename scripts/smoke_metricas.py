@@ -54,20 +54,20 @@ FAMILIAS = {
     "api": (
         ("http_request_duration_seconds", "histogram"),
         ("pytstop_circuit_breaker_aberto", "gauge"),
-        ("pytstop_jwks_falhas", "counter"),
+        ("pytstop_jwks_falhas_total", "counter"),
         ("pytstop_outbox_mais_antiga_segundos", "gauge"),
         ("pytstop_execucao_duracao_media_segundos", "gauge"),
         ("pytstop_pecas_em_falta", "gauge"),
     ),
     "relay": (
-        ("pytstop_mensagens_publicadas", "counter"),
-        ("pytstop_reconexoes_ao_broker", "counter"),
+        ("pytstop_mensagens_publicadas_total", "counter"),
+        ("pytstop_reconexoes_ao_broker_total", "counter"),
         ("outbox_pendentes", "gauge"),
         ("outbox_dead", "gauge"),
     ),
     "consumidor": (
-        ("pytstop_mensagens_consumidas", "counter"),
-        ("pytstop_reconexoes_ao_broker", "counter"),
+        ("pytstop_mensagens_consumidas_total", "counter"),
+        ("pytstop_reconexoes_ao_broker_total", "counter"),
     ),
 }
 

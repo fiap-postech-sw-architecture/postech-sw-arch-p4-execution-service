@@ -65,18 +65,22 @@ print(generate_latest().decode())
 """
 
 
-def _metricas_do_boot(codigo: str) -> dict[str, float]:
-    """O ``/metrics`` do processo recem-subido: serie (nome e rotulos) e valor."""
-    saida = subprocess.run(  # noqa: S603 - comando fixo do teste
+def _saida_do_boot(codigo: str) -> str:
+    """O ``/metrics`` do processo recem-subido, como o Prometheus o le."""
+    return subprocess.run(  # noqa: S603 - comando fixo do teste
         [sys.executable, "-c", codigo],
         check=True,
         capture_output=True,
         text=True,
         cwd=RAIZ,
     ).stdout
+
+
+def _metricas_do_boot(codigo: str) -> dict[str, float]:
+    """O ``/metrics`` do processo recem-subido: serie (nome e rotulos) e valor."""
     series = (
         linha.rsplit(" ", 1)
-        for linha in saida.splitlines()
+        for linha in _saida_do_boot(codigo).splitlines()
         if linha and not linha.startswith("#")
     )
     return {serie: float(valor) for serie, valor in series}

@@ -22,7 +22,7 @@ from src.consumidor import HANDLERS
 from tests.unitarios.test_preinicializacao_das_metricas import (
     _BOOT_DO_CONSUMIDOR,
     _BOOT_DO_RELAY,
-    _metricas_do_boot,
+    _saida_do_boot,
 )
 
 if TYPE_CHECKING:
@@ -63,25 +63,20 @@ def test_cada_processo_tem_o_conjunto_completo() -> None:
     assert set(smoke.FAMILIAS) == set(smoke.SERIES) == {"api", "relay", "consumidor"}
 
 
-def _linhas_do_boot(codigo: str) -> list[str]:
-    return [f"{serie} {valor}" for serie, valor in _metricas_do_boot(codigo).items()]
-
-
 def test_o_consumidor_recem_subido_tem_tudo_o_que_o_smoke_pede() -> None:
-    linhas = _linhas_do_boot(_BOOT_DO_CONSUMIDOR)
-    # O `# TYPE` nao entra em `_metricas_do_boot`: as series bastam aqui.
-    _sem_familia, sem_serie = smoke.faltas("consumidor", linhas)
+    linhas = _saida_do_boot(_BOOT_DO_CONSUMIDOR).splitlines()
 
-    assert sem_serie == []
+    assert smoke.faltas("consumidor", linhas) == ([], [])
 
 
-def test_o_relay_recem_subido_tem_as_series_do_smoke_menos_as_gauges_do_banco() -> None:
-    linhas = _linhas_do_boot(_BOOT_DO_RELAY)
+def test_o_relay_recem_subido_tem_o_que_o_smoke_pede_menos_as_gauges_do_banco() -> None:
+    linhas = _saida_do_boot(_BOOT_DO_RELAY).splitlines()
 
-    _sem_familia, sem_serie = smoke.faltas("relay", linhas)
+    sem_familia, sem_serie = smoke.faltas("relay", linhas)
 
     # outbox_pendentes e outbox_dead sao lidas no banco a cada raspagem: sem banco
     # (o do boot falso) saem como NaN, e o `make smoke` as confere com banco.
+    assert sem_familia == []
     assert sem_serie == ["outbox_pendentes 0.0", "outbox_dead 0.0"]
 
 
