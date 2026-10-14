@@ -15,26 +15,32 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import baggage, trace
 from opentelemetry.propagators.textmap import Getter
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.trace import SpanKind, StatusCode
+from sqlalchemy import create_engine, text
 
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.instrumentacao import (
     instrumentar_api,
+    instrumentar_banco,
     instrumentar_cliente_http,
     trocar_url_pelo_template,
 )
 from src.compartilhado.infraestrutura.mensageria import telemetria
-from src.compartilhado.infraestrutura.mensageria.telemetria import tracer
+from src.compartilhado.infraestrutura.mensageria.telemetria import (
+    criar_provedor,
+    tracer,
+)
 from src.diagnostico.infraestrutura.validador_billing import ValidadorDeItensBilling
 from tests.conftest import provedor_dos_testes
 from tests.spans import tudo_que_o_span_leva, tudo_que_os_spans_levam
 from tests.unitarios.compartilhado.hook_nos_modos import CANARIO
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk.trace import ReadableSpan
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-        InMemorySpanExporter,
-    )
+    from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 
 RAIZ = Path(__file__).resolve().parents[3]
 TEMPLATE = "/api/v1/execucoes/{ordem_id}/inicio"
@@ -473,6 +479,56 @@ def test_o_teto_do_tracestate_e_sobre_a_soma_das_linhas_do_cabecalho() -> None:
     assert len(b) == 256
     assert lido([a, b]) == f"{a},{b}"
     assert lido([a, b + "z"]) == ""
+
+
+# --- o provider que o processo instalou --------------------------------------------
+
+
+def _provedor_proprio() -> tuple[TracerProvider, InMemorySpanExporter]:
+    """Um provider de producao que nao e o global dos testes, com o seu exportador."""
+    exportados = InMemorySpanExporter()
+    provedor = criar_provedor({}, processo="teste")
+    provedor.add_span_processor(SimpleSpanProcessor(exportados))
+    return provedor, exportados
+
+
+def test_banco_instrumentado_exporta_pelo_provider_recebido(
+    spans: InMemorySpanExporter,
+) -> None:
+    provedor, exportados = _provedor_proprio()
+    engine = create_engine("sqlite://")
+    instrumentar_banco(engine, provedor)
+
+    with (
+        provedor.get_tracer("t").start_as_current_span("req", kind=SpanKind.SERVER),
+        engine.connect() as conexao,
+    ):
+        conexao.execute(text("SELECT 1"))
+
+    consultas = [
+        s for s in exportados.get_finished_spans() if s.kind is SpanKind.CLIENT
+    ]
+    assert any(
+        (s.attributes or {}).get("db.statement") == "SELECT 1" for s in consultas
+    )
+    assert spans.get_finished_spans() == ()
+
+
+def test_cliente_http_instrumentado_exporta_pelo_provider_recebido(
+    spans: InMemorySpanExporter,
+) -> None:
+    provedor, exportados = _provedor_proprio()
+    cliente = httpx.Client(
+        base_url="http://billing.test",
+        transport=httpx.MockTransport(lambda _requisicao: httpx.Response(200)),
+    )
+    instrumentar_cliente_http(cliente, provedor)
+
+    with provedor.get_tracer("t").start_as_current_span("passo"):
+        cliente.get("/precos")
+
+    assert [s.kind for s in exportados.get_finished_spans()].count(SpanKind.CLIENT) == 1
+    assert spans.get_finished_spans() == ()
 
 
 # --- httpx -----------------------------------------------------------------------
