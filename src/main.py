@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator  # noqa: TC003 - lifespan anotado em runtime
 from contextlib import asynccontextmanager
+from functools import partial
 from importlib.metadata import version
 from typing import TYPE_CHECKING
 
@@ -17,8 +18,8 @@ from src.compartilhado.infraestrutura.ambiente import (
 )
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.database import (
+    abrir_conexao_de_metricas,
     criar_engine,
-    criar_engine_de_metricas,
     criar_session_factory,
 )
 from src.compartilhado.infraestrutura.instrumentacao import (
@@ -70,7 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.billing_breaker = CircuitBreaker("billing")
     # As gauges do coletor (outbox, execucao e estoque) saem so da API, por uma
     # conexao propria, nova a cada raspagem, que nao disputa o pool das requisicoes.
-    coletor = ColetorDaApi(criar_engine_de_metricas(url_do_banco))
+    coletor = ColetorDaApi(partial(abrir_conexao_de_metricas, engine))
     REGISTRY.register(coletor)
     _log.info("execution_service_started")
     try:

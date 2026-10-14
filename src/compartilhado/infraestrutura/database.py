@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import MetaData, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import registry, sessionmaker
-from sqlalchemy.pool import NullPool
 
 from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
 from src.compartilhado.infraestrutura.ambiente import inteiro_opcional
@@ -45,8 +44,13 @@ _SOCKET_SEM_RESPOSTA: Final = {
     "keepalives_count": 3,
     "tcp_user_timeout": 10_000,
 }
-# Conexao da raspagem do /metrics: o banco que nao atende em 1 s nao entra nela.
+# Conexao da raspagem do /metrics: o banco que nao atende em 1 s nao entra nela, e
+# cada consulta tem 2 s no servidor (o statement_timeout corta tambem a espera
+# por um lock).
 _CONNECT_TIMEOUT_DAS_METRICAS_S: Final = 1
+_STATEMENT_TIMEOUT_DAS_METRICAS_MS: Final = 2000
+# Aparece no pg_stat_activity: quem olha o banco acha a raspagem.
+_APPLICATION_NAME_DAS_METRICAS: Final = "pytstop-execucao-metricas"
 
 
 def criar_engine(url: str) -> Engine:
@@ -77,26 +81,34 @@ def criar_engine(url: str) -> Engine:
     )
 
 
-def criar_engine_de_metricas(url: str) -> Engine:
-    """Engine so das consultas do ``/metrics``: sem pool, uma conexao por raspagem.
+def parametros_de_metricas() -> dict[str, int | str]:
+    """Parametros de conexao da raspagem do ``/metrics``, alem dos da URL.
 
-    A raspagem nao disputa conexao com o trafego (com o pool cheio ela ficaria
-    sem metrica justo quando mais importa). Sem pool nao ha conexao aberta entre
-    duas raspagens que possa calar (o banco que para de responder sem fechar o
-    socket) e prender a seguinte, nem fila por conexao entre raspagens
-    simultaneas. A conexao nova espera 1 s no maximo (``connect_timeout``), contra
-    os 3 s do pool da API: o prazo de uma raspagem inteira e de 5 s.
+    Os do socket sem resposta (keepalive e ``tcp_user_timeout``), a conexao em
+    1 s, e o ``statement_timeout`` de 2 s nas opcoes do servidor.
     """
-    return create_engine(
-        url,
-        hide_parameters=True,
-        poolclass=NullPool,
-        connect_args={
-            **argumentos_de_conexao(),
-            "connect_timeout": _CONNECT_TIMEOUT_DAS_METRICAS_S,
-            # Aparece no pg_stat_activity: quem olha o banco acha a raspagem.
-            "application_name": "pytstop-execucao-metricas",
-        },
+    return {
+        **argumentos_de_conexao(),
+        "connect_timeout": _CONNECT_TIMEOUT_DAS_METRICAS_S,
+        "application_name": _APPLICATION_NAME_DAS_METRICAS,
+        "options": f"-c statement_timeout={_STATEMENT_TIMEOUT_DAS_METRICAS_MS}",
+    }
+
+
+def abrir_conexao_de_metricas(engine: Engine) -> Any:  # noqa: ANN401 - conexao crua do driver
+    """Conexao crua do driver para uma raspagem do ``/metrics``.
+
+    Nem o pool nem o engine entram: o engine so empresta a URL e o dialeto. Uma
+    conexao do pool dispara os hooks de primeira conexao do engine (o ``on_connect``
+    do psycopg2 e o ``initialize`` do dialeto), que consultam o banco sob um mutex
+    do proprio engine: se a primeira conexao calasse ali, toda raspagem seguinte
+    esperaria no mutex, mesmo com o banco de volta. Sem pool a raspagem tambem nao
+    disputa conexao com o trafego (com o pool cheio ela ficaria sem metrica justo
+    quando mais importa) e nada fica aberto entre duas raspagens.
+    """
+    argumentos, parametros = engine.dialect.create_connect_args(engine.url)
+    return engine.dialect.loaded_dbapi.connect(
+        *argumentos, **{**parametros, **parametros_de_metricas()}
     )
 
 

@@ -20,21 +20,29 @@ outbox de proposito: e leitura, sem repositorio. O formato que ele espera
 os mapeamentos desses contextos gravam, e os testes gravam as linhas por eles;
 os status e o tipo do item vem dos enums dos contextos, como parametro.
 
-Tempo da raspagem. As tres consultas rodam em sequencia, numa conexao so aberta
-a cada raspagem (``criar_engine_de_metricas``: sem pool, ate 1 s para conectar),
-cada uma na propria transacao e com ``statement_timeout`` de 2 s (que corta
-tambem a espera por lock). Elas correm numa thread a parte, e ``collect`` espera
-por elas no maximo ``PRAZO_DA_RASPAGEM_S`` no total. O prazo existe porque o
-timeout do banco nao cobre tudo: com o socket aberto e o banco calado (o outro
-lado da rede ou o processo parado, sem fechar a conexao) nenhum timeout do
-driver dispara, e a raspagem esperaria para sempre. Passado o prazo o que nao
-voltou fica de fora. A gauge sem resposta, qualquer que seja o motivo (banco
-fora, tabela travada, prazo esgotado), sai ausente da raspagem, nunca em zero,
-e o resto do ``/metrics`` segue.
+Tempo da raspagem. Cada raspagem abre uma conexao crua do driver
+(``abrir_conexao_de_metricas``: sem pool nem engine, ate 1 s para conectar, com o
+``statement_timeout`` de 2 s nas opcoes, que corta tambem a espera por lock) e
+roda as tres consultas nela, em sequencia e em autocommit, cada uma independente
+das outras. Elas correm numa thread a parte, e ``collect`` espera por elas no
+maximo ``PRAZO_DA_RASPAGEM_S`` no total. O prazo existe porque o timeout do banco
+nao cobre tudo: com o socket aberto e o banco calado (o outro lado da rede ou o
+processo parado, sem fechar a conexao) nenhum timeout do driver dispara, e a
+raspagem esperaria para sempre. Passado o prazo o que nao voltou fica de fora, e
+o coletor derruba o socket da conexao que a thread ainda usa: a leitura que nao
+voltava acorda com fim de conexao, a thread sai e o servidor ve a conexao
+fechar, entao nada fica preso depois da raspagem. Fica de fora do alcance do
+prazo so a resolucao do nome do banco, que o driver faz sem prazo. A gauge sem
+resposta, qualquer que seja o motivo (banco fora, tabela travada, prazo
+esgotado), sai ausente da raspagem, nunca em zero, e o resto do ``/metrics``
+segue.
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
+import socket
 import threading
 import time
 from concurrent.futures import Future
@@ -43,7 +51,6 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import structlog
 from prometheus_client.core import GaugeMetricFamily
-from sqlalchemy import text
 
 from src.diagnostico.dominio.diagnostico import TipoItem
 from src.estoque.dominio.reserva import StatusReserva
@@ -51,8 +58,6 @@ from src.execucao.dominio.execucao import StatusExecucao
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
-
-    from sqlalchemy import Engine, Row, TextClause
 
 _log = structlog.get_logger(__name__)
 
@@ -62,7 +67,7 @@ _DIAS: Final = JANELA_DE_NEGOCIO.days
 # (o `scrape_timeout` padrao): a folga fica para o resto do /metrics.
 PRAZO_DA_RASPAGEM_S: Final = 5.0
 
-_IDADE_DA_OUTBOX: Final = text(
+_IDADE_DA_OUTBOX: Final = (
     "SELECT COALESCE(EXTRACT(EPOCH FROM clock_timestamp() - min(criado_em)), 0) "
     "FROM outbox WHERE status = 'pendente'"
 )
@@ -70,27 +75,25 @@ _IDADE_DA_OUTBOX: Final = text(
 # execucao de um diagnostico que lista o mesmo servico em dois itens. As linhas
 # sem o que a gauge precisa (execucao sem inicio, item sem codigo) ficam de fora:
 # uma so nao pode derrubar a familia inteira.
-_DURACAO_POR_SERVICO: Final = text(
+_DURACAO_POR_SERVICO: Final = (
     "SELECT s.codigo, avg(EXTRACT(EPOCH FROM e.finalizada_em - e.iniciada_em)) "
     "FROM execucoes e JOIN diagnosticos d ON d.ordem_id = e.ordem_id "
     "CROSS JOIN LATERAL ("
     "SELECT DISTINCT item ->> 'codigo' AS codigo "
     "FROM jsonb_array_elements(d.itens) AS item "
-    "WHERE item ->> 'tipo' = :servico AND item ->> 'codigo' IS NOT NULL"
+    "WHERE item ->> 'tipo' = %(servico)s AND item ->> 'codigo' IS NOT NULL"
     ") s "
-    "WHERE e.status = :finalizada AND e.iniciada_em IS NOT NULL "
-    "AND e.finalizada_em >= now() - :janela "
+    "WHERE e.status = %(finalizada)s AND e.iniciada_em IS NOT NULL "
+    "AND e.finalizada_em >= now() - %(janela)s "
     "GROUP BY s.codigo"
 )
-_FALTA_POR_SKU: Final = text(
+_FALTA_POR_SKU: Final = (
     "SELECT falta ->> 'sku', count(*) FROM reservas r "
     "CROSS JOIN LATERAL jsonb_array_elements(r.faltantes) AS falta "
-    "WHERE r.status = :recusada AND r.criada_em >= now() - :janela "
+    "WHERE r.status = %(recusada)s AND r.criada_em >= now() - %(janela)s "
     "AND falta ->> 'sku' IS NOT NULL "
     "GROUP BY falta ->> 'sku'"
 )
-# O statement_timeout tambem corta a espera por um lock.
-_PRAZO_DA_CONSULTA: Final = text("SET LOCAL statement_timeout = '2s'")
 
 
 def _idade_da_outbox() -> GaugeMetricFamily:
@@ -117,20 +120,20 @@ def _pecas_em_falta() -> GaugeMetricFamily:
     )
 
 
-def _montar_idade(linhas: Sequence[Row[Any]]) -> GaugeMetricFamily:
+def _montar_idade(linhas: Sequence[tuple[Any, ...]]) -> GaugeMetricFamily:
     familia = _idade_da_outbox()
     familia.add_metric([], float(linhas[0][0]))
     return familia
 
 
-def _montar_duracao(linhas: Sequence[Row[Any]]) -> GaugeMetricFamily:
+def _montar_duracao(linhas: Sequence[tuple[Any, ...]]) -> GaugeMetricFamily:
     familia = _duracao_media()
     for servico, media in linhas:
         familia.add_metric([servico], float(media))
     return familia
 
 
-def _montar_falta(linhas: Sequence[Row[Any]]) -> GaugeMetricFamily:
+def _montar_falta(linhas: Sequence[tuple[Any, ...]]) -> GaugeMetricFamily:
     familia = _pecas_em_falta()
     for sku, reservas in linhas:
         familia.add_metric([sku], float(reservas))
@@ -139,9 +142,9 @@ def _montar_falta(linhas: Sequence[Row[Any]]) -> GaugeMetricFamily:
 
 class _Gauge(NamedTuple):
     nome: str
-    consulta: TextClause
+    consulta: str
     parametros: Mapping[str, object]
-    montar: Callable[[Sequence[Row[Any]]], GaugeMetricFamily]
+    montar: Callable[[Sequence[tuple[Any, ...]]], GaugeMetricFamily]
 
 
 _GAUGES: Final = (
@@ -165,11 +168,78 @@ _GAUGES: Final = (
 )
 
 
+def _derrubar(fd: int) -> None:
+    """Fecha o socket de uma conexao que outra thread usa, sem soltar o descritor.
+
+    ``shutdown`` num descritor duplicado acorda a leitura que nao volta com fim de
+    conexao: a thread da raspagem sai com erro, o driver fecha o resto e o
+    servidor ve a conexao terminar.
+    """
+    try:
+        duplicado = os.dup(fd)
+    except OSError:
+        return
+    try:
+        irmao = socket.socket(fileno=duplicado)
+    except OSError:  # nao e socket: o duplicado ainda e nosso
+        os.close(duplicado)
+        return
+    with irmao, contextlib.suppress(OSError):
+        irmao.shutdown(socket.SHUT_RDWR)
+
+
+class _Raspagem:
+    """O descritor da conexao em uso numa raspagem, que a thread dela e quem espera
+    por ela dividem.
+
+    O trinco garante que ``encerrar`` so derruba um descritor que a thread ainda
+    nao largou (``largar`` roda antes de ela fechar a conexao): sem isso o numero
+    poderia ja ser de outro socket.
+    """
+
+    def __init__(self) -> None:
+        self._trinco = threading.Lock()
+        self._fd: int | None = None
+        self._encerrada = False
+
+    def usar(self, conexao: Any) -> bool:  # noqa: ANN401 - conexao crua do driver
+        """Registra a conexao recem-aberta; ``False`` se o prazo ja passou."""
+        with self._trinco:
+            if self._encerrada:
+                return False
+            self._fd = conexao.fileno()
+            return True
+
+    def largar(self) -> None:
+        """A thread vai fechar a conexao: o descritor deixa de ser dela."""
+        with self._trinco:
+            self._fd = None
+
+    def encerrar(self) -> None:
+        """O prazo passou: derruba o socket da conexao que a thread ainda usa."""
+        with self._trinco:
+            self._encerrada = True
+            if self._fd is not None:
+                _derrubar(self._fd)
+
+
+def _falhar(
+    futuros: Mapping[str, Future[list[tuple[Any, ...]]]], exc: Exception
+) -> None:
+    for futuro in futuros.values():
+        futuro.set_exception(exc)
+
+
 class ColetorDaApi:
     """As tres gauges do coletor, calculadas a cada raspagem do ``/metrics``."""
 
-    def __init__(self, engine: Engine, *, prazo_s: float = PRAZO_DA_RASPAGEM_S) -> None:
-        self._engine = engine
+    def __init__(
+        self,
+        abrir_conexao: Callable[[], Any],
+        *,
+        prazo_s: float = PRAZO_DA_RASPAGEM_S,
+    ) -> None:
+        self._abrir_conexao = abrir_conexao
         self._prazo_s = prazo_s
 
     def describe(self) -> Iterator[GaugeMetricFamily]:
@@ -186,45 +256,77 @@ class ColetorDaApi:
         tempo fica de fora (e vai para o log com a classe do erro, que no prazo
         esgotado e ``TimeoutError``), nunca em zero. Nada sobe para quem
         raspa: uma falha do coletor, na consulta ou na montagem da familia, nao
-        derruba o ``/metrics``. A thread que ficou presa num banco calado e
-        daemon e morre com o socket (``tcp_user_timeout``) ou com o processo.
+        derruba o ``/metrics``. Se alguma consulta ficou sem resposta, o socket
+        da conexao dela e derrubado ao fim (ver o docstring do modulo), e a
+        thread, daemon, sai logo depois.
         """
         limite = time.monotonic() + self._prazo_s
-        futuros: dict[str, Future[Sequence[Row[Any]]]] = {
+        futuros: dict[str, Future[list[tuple[Any, ...]]]] = {
             gauge.nome: Future() for gauge in _GAUGES
         }
+        raspagem = _Raspagem()
         threading.Thread(
-            target=self._consultar, args=(futuros,), name="coletor-da-api", daemon=True
+            target=self._consultar,
+            args=(raspagem, futuros),
+            name="coletor-da-api",
+            daemon=True,
         ).start()
-        for gauge in _GAUGES:
-            try:
-                linhas = futuros[gauge.nome].result(
-                    timeout=max(0.0, limite - time.monotonic())
-                )
-                familia = gauge.montar(linhas)
-            except Exception as exc:  # noqa: BLE001 - a raspagem nunca cai pelo coletor
-                _log.warning(
-                    "api_gauge_unavailable",
-                    gauge=gauge.nome,
-                    error=type(exc).__name__,
-                )
-            else:
-                yield familia
-
-    def _consultar(self, futuros: Mapping[str, Future[Sequence[Row[Any]]]]) -> None:
-        """Corpo da thread da raspagem: uma conexao, uma transacao por consulta."""
         try:
-            conexao = self._engine.connect()
-        except Exception as exc:  # noqa: BLE001 - o motivo vai para cada gauge
-            for futuro in futuros.values():
-                futuro.set_exception(exc)
-            return
-        with conexao:
             for gauge in _GAUGES:
                 try:
-                    with conexao.begin():
-                        conexao.execute(_PRAZO_DA_CONSULTA)
-                        linhas = conexao.execute(gauge.consulta, gauge.parametros).all()
+                    linhas = futuros[gauge.nome].result(
+                        timeout=max(0.0, limite - time.monotonic())
+                    )
+                    familia = gauge.montar(linhas)
+                except Exception as exc:  # noqa: BLE001 - a raspagem nunca cai pelo coletor
+                    _log.warning(
+                        "api_gauge_unavailable",
+                        gauge=gauge.nome,
+                        error=type(exc).__name__,
+                    )
+                else:
+                    yield familia
+        finally:
+            if not all(futuro.done() for futuro in futuros.values()):
+                raspagem.encerrar()
+
+    def _consultar(
+        self,
+        raspagem: _Raspagem,
+        futuros: Mapping[str, Future[list[tuple[Any, ...]]]],
+    ) -> None:
+        """Corpo da thread da raspagem: uma conexao, as tres consultas."""
+        try:
+            conexao = self._abrir_conexao()
+        except Exception as exc:  # noqa: BLE001 - o motivo vai para cada gauge
+            _falhar(futuros, exc)
+            return
+        try:
+            # Prazo ja passado durante o connect: ninguem espera mais por isto.
+            if raspagem.usar(conexao):
+                self._rodar(conexao, futuros)
+        finally:
+            raspagem.largar()
+            conexao.close()
+
+    @staticmethod
+    def _rodar(
+        conexao: Any,  # noqa: ANN401 - conexao crua do driver
+        futuros: Mapping[str, Future[list[tuple[Any, ...]]]],
+    ) -> None:
+        # Autocommit: cada consulta e a sua transacao, e a que falha nao estraga
+        # a seguinte; o statement_timeout ja veio nas opcoes da conexao.
+        try:
+            conexao.autocommit = True
+            cursor = conexao.cursor()
+        except Exception as exc:  # noqa: BLE001 - o motivo vai para cada gauge
+            _falhar(futuros, exc)
+            return
+        with cursor:
+            for gauge in _GAUGES:
+                try:
+                    cursor.execute(gauge.consulta, gauge.parametros)
+                    linhas = cursor.fetchall()
                 except Exception as exc:  # noqa: BLE001 - so esta gauge fica ausente
                     futuros[gauge.nome].set_exception(exc)
                 else:

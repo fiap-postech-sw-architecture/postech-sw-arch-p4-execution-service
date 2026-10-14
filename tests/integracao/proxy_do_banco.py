@@ -3,9 +3,11 @@
 O PostgreSQL de teste responde sempre; o que um incidente faz e o banco calar com
 a conexao aberta (o outro lado da rede some, o processo para) ou atender devagar.
 O proxy repassa os bytes entre o cliente e o banco e, a pedido, os descarta
-(``calar`` para todas as conexoes, ``calar_abertas`` so para as que ja existem)
-ou os atrasa (``atrasar``) sem fechar nenhum socket: o cliente fica esperando
-uma resposta que nao vem, como no incidente.
+(``calar`` para todas as conexoes, ``calar_abertas`` so para as que ja existem,
+``calar_no_comando`` a partir do n-esimo comando SQL de cada conexao) ou os atrasa
+(``atrasar``) sem fechar nenhum socket: o cliente fica esperando uma resposta que
+nao vem, como no incidente. Quem fecha o socket e o cliente, e ``abertas`` conta as
+conexoes que o proxy ainda segura.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ class ProxyDoBanco:
         self._destino = destino
         self._calado = threading.Event()
         self._atraso_s = 0.0
+        self._calar_no_comando: int | None = None
+        self._vivas = 0
         self._sockets: list[socket.socket] = []
         # Um sinal por conexao: ``calar_abertas`` cala as que existem e deixa as novas.
         self._calados_por_conexao: list[threading.Event] = []
@@ -59,6 +63,22 @@ class ProxyDoBanco:
             conexoes = list(self._calados_por_conexao)
         for calada in conexoes:
             calada.set()
+
+    def calar_no_comando(self, numero: int | None) -> None:
+        """Cada conexao passa a calar no ``numero``-esimo comando SQL do cliente.
+
+        O handshake e os comandos anteriores passam inteiros; o comando que calou
+        e os seguintes nao chegam ao banco. ``None`` desfaz: as conexoes novas
+        passam (o banco voltou). Os comandos sao as mensagens ``Query`` do
+        protocolo (o primeiro byte e ``Q``); o handshake nao comeca assim.
+        """
+        self._calar_no_comando = numero
+
+    @property
+    def abertas(self) -> int:
+        """Quantas conexoes o proxy ainda segura (o cliente nao fechou o socket)."""
+        with self._trava:
+            return self._vivas
 
     def atrasar(self, segundos: float) -> None:
         """Cada trecho repassado espera ``segundos`` antes de seguir."""
@@ -101,7 +121,9 @@ class ProxyDoBanco:
         with self._trava:
             self._sockets += [cliente, banco]
             self._calados_por_conexao.append(calada)
+            self._vivas += 1
         destinos = {cliente: banco, banco: cliente}
+        comandos = 0
         try:
             while True:
                 prontos, _, _ = select.select(list(destinos), [], [], 0.2)
@@ -109,6 +131,11 @@ class ProxyDoBanco:
                     dados = origem.recv(65536)
                     if not dados:
                         return
+                    if origem is cliente and dados[:1] == b"Q":
+                        comandos += 1
+                        limite = self._calar_no_comando
+                        if limite is not None and comandos >= limite:
+                            calada.set()
                     if self._calado.is_set() or calada.is_set():
                         continue
                     if self._atraso_s:
@@ -117,5 +144,7 @@ class ProxyDoBanco:
         except (OSError, ValueError):
             return
         finally:
+            with self._trava:
+                self._vivas -= 1
             cliente.close()
             banco.close()

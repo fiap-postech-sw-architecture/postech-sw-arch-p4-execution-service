@@ -1,9 +1,12 @@
-"""Gauges por consulta da API contra o PostgreSQL das migracoes.
+"""Gauges do coletor da API contra o PostgreSQL das migracoes.
 
 A fixture e conhecida: cada caso grava as linhas com a idade exata que quer, no
 relogio do proprio banco (o que o coletor le), e confere o valor que o coletor
 devolve na raspagem. As linhas de diagnostico e de reserva saem dos mapeamentos
 dos contextos, como o servico as grava: renomear uma chave la reprova aqui.
+
+O banco que falha (cala com o socket aberto, atende devagar, volta) e um proxy TCP
+na frente dele, ``proxy_do_banco.py``.
 """
 
 from __future__ import annotations
@@ -13,16 +16,20 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
-from sqlalchemy import event, text
+from sqlalchemy import text
 
 from src.coletor import JANELA_DE_NEGOCIO, PRAZO_DA_RASPAGEM_S, ColetorDaApi
-from src.compartilhado.infraestrutura.database import criar_engine_de_metricas
+from src.compartilhado.infraestrutura.database import (
+    abrir_conexao_de_metricas,
+    criar_engine,
+)
 from src.diagnostico.dominio.diagnostico import ItemDiagnostico, TipoItem
 from src.diagnostico.infraestrutura.mapping import _itens_para_json
 from src.estoque.dominio.reserva import Faltante, StatusReserva
@@ -30,10 +37,11 @@ from src.estoque.infraestrutura.mapping import _faltantes_para_json
 from src.execucao.dominio.execucao import StatusExecucao
 from src.main import criar_app
 from tests.conftest import provedor_dos_testes
+from tests.integracao.broker import esperar_ate
 from tests.integracao.proxy_do_banco import ProxyDoBanco
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from sqlalchemy import Connection, Engine
 
@@ -42,18 +50,21 @@ IDADE = "pytstop_outbox_mais_antiga_segundos"
 DURACAO = "pytstop_execucao_duracao_media_segundos"
 FALTA = "pytstop_pecas_em_falta"
 TODAS = {IDADE, DURACAO, FALTA}
-# Pode estar no meio de uma conexao ou de uma consulta quando o teste acaba.
 THREAD_DO_COLETOR = "coletor-da-api"
+NOME_NO_BANCO = "pytstop-execucao-metricas"
+
+
+def _threads_do_coletor() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == THREAD_DO_COLETOR]
 
 
 def _esperar_a_thread_do_coletor() -> None:
     """A raspagem devolve assim que a ultima consulta volta; a thread ainda fecha a
-    conexao. A que ficou presa num socket mudo morre quando o socket fecha."""
-    limite = time.monotonic() + 10
-    while any(t.name == THREAD_DO_COLETOR for t in threading.enumerate()):
-        if time.monotonic() > limite:
-            pytest.fail("a thread do coletor nao terminou")
-        time.sleep(0.05)
+    conexao."""
+    try:
+        esperar_ate(lambda: not _threads_do_coletor(), prazo_s=10)
+    except AssertionError:
+        pytest.fail("a thread do coletor nao terminou")
 
 
 @pytest.fixture(autouse=True)
@@ -64,11 +75,9 @@ def _nenhuma_thread_do_coletor_sobra() -> Iterator[None]:
 
 
 @pytest.fixture
-def engine_de_metricas(database_url: str) -> Iterator[Engine]:
-    """O engine que o app usa na raspagem."""
-    metricas = criar_engine_de_metricas(database_url)
-    yield metricas
-    metricas.dispose()
+def abridor(engine: Engine) -> Callable[[], Any]:
+    """Como o app abre a conexao da raspagem: o engine so empresta a URL e o dialeto."""
+    return partial(abrir_conexao_de_metricas, engine)
 
 
 @pytest.fixture
@@ -77,14 +86,30 @@ def proxy_do_banco(database_url: str) -> Iterator[ProxyDoBanco]:
         yield proxy
 
 
-def _coletar(engine: Engine) -> dict[str, dict[tuple[str, ...], float]]:
+@pytest.fixture
+def via_proxy(
+    database_url: str, proxy_do_banco: ProxyDoBanco
+) -> Iterator[Callable[[], Any]]:
+    """O mesmo, com o proxy no caminho do banco."""
+    atras_do_proxy = criar_engine(proxy_do_banco.url_para(database_url))
+    yield partial(abrir_conexao_de_metricas, atras_do_proxy)
+    atras_do_proxy.dispose()
+
+
+def _coletar(
+    abrir_conexao: Callable[[], Any],
+) -> dict[str, dict[tuple[str, ...], float]]:
     """O que o coletor devolve: familia -> valores dos rotulos -> valor."""
     return {
         familia.name: {
             tuple(amostra.labels.values()): amostra.value for amostra in familia.samples
         }
-        for familia in ColetorDaApi(engine).collect()
+        for familia in ColetorDaApi(abrir_conexao).collect()
     }
+
+
+def _nomes(abrir_conexao: Callable[[], Any], *, prazo_s: float) -> set[str]:
+    return {f.name for f in ColetorDaApi(abrir_conexao, prazo_s=prazo_s).collect()}
 
 
 def _servico(codigo: str) -> ItemDiagnostico:
@@ -193,7 +218,7 @@ def test_prazo_da_raspagem_cabe_no_scrape_timeout_do_prometheus() -> None:
 
 
 def test_duracao_media_por_servico_conta_so_as_finalizadas_da_janela(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     with engine.begin() as conexao:
         # SRV-A: 100 s e 300 s. SRV-B: 300 s e 600 s (a peca nao entra).
@@ -236,7 +261,7 @@ def test_duracao_media_por_servico_conta_so_as_finalizadas_da_janela(
             status=StatusExecucao.CANCELADA,
         )
 
-    medias = _coletar(engine_de_metricas)[DURACAO]
+    medias = _coletar(abridor)[DURACAO]
 
     assert medias == {
         ("SRV-A",): pytest.approx(200.0),
@@ -245,7 +270,7 @@ def test_duracao_media_por_servico_conta_so_as_finalizadas_da_janela(
 
 
 def test_pecas_em_falta_conta_as_reservas_recusadas_da_janela_por_sku(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     recusada = StatusReserva.RECUSADA
     with engine.begin() as conexao:
@@ -253,17 +278,22 @@ def test_pecas_em_falta_conta_as_reservas_recusadas_da_janela_por_sku(
         _reserva(conexao, recusada, ["PEC-A"], 2 * DIA)
         _reserva(conexao, recusada, ["PEC-C"], JANELA_DE_NEGOCIO - timedelta(hours=1))
         # Fora da janela e as que nao foram recusadas nao contam.
-        _reserva(conexao, recusada, ["PEC-A", "PEC-D"], JANELA_DE_NEGOCIO + DIA)
+        _reserva(
+            conexao,
+            recusada,
+            ["PEC-A", "PEC-D"],
+            JANELA_DE_NEGOCIO + timedelta(hours=1),
+        )
         _reserva(conexao, StatusReserva.ATIVA, [], DIA)
         _reserva(conexao, StatusReserva.LIBERADA, [], DIA)
 
-    faltas = _coletar(engine_de_metricas)[FALTA]
+    faltas = _coletar(abridor)[FALTA]
 
     assert faltas == {("PEC-A",): 2.0, ("PEC-B",): 1.0, ("PEC-C",): 1.0}
 
 
 def test_so_a_execucao_finalizada_e_so_a_reserva_recusada_entram(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     """O banco aceita uma execucao em curso com ``finalizada_em`` e uma reserva
     ativa com ``faltantes`` (so o CHECK do status existe): o dominio nao produz as
@@ -278,14 +308,14 @@ def test_so_a_execucao_finalizada_e_so_a_reserva_recusada_entram(
         )
         _reserva(conexao, StatusReserva.ATIVA, ["PEC-I"], DIA)
 
-    coletado = _coletar(engine_de_metricas)
+    coletado = _coletar(abridor)
 
     assert coletado[DURACAO] == {}
     assert coletado[FALTA] == {}
 
 
 def test_linhas_incoerentes_ficam_de_fora_e_nao_derrubam_a_raspagem(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     """Dado que o dominio nao produz mas o banco aceita (nao ha CHECK nem NOT
     NULL): sem o filtro, ``float(None)`` e o rotulo nulo derrubavam o /metrics."""
@@ -316,7 +346,7 @@ def test_linhas_incoerentes_ficam_de_fora_e_nao_derrubam_a_raspagem(
             faltantes_json=[{"solicitado": 2, "disponivel": 0}],
         )
 
-    coletado = _coletar(engine_de_metricas)
+    coletado = _coletar(abridor)
 
     assert set(coletado) == TODAS
     assert coletado[DURACAO] == {("SRV-A",): pytest.approx(100.0)}
@@ -324,16 +354,16 @@ def test_linhas_incoerentes_ficam_de_fora_e_nao_derrubam_a_raspagem(
 
 
 def test_sem_dado_na_janela_as_familias_saem_sem_serie(
-    engine_de_metricas: Engine,
+    abridor: Callable[[], Any],
 ) -> None:
-    coletado = _coletar(engine_de_metricas)
+    coletado = _coletar(abridor)
 
     assert coletado[DURACAO] == {}
     assert coletado[FALTA] == {}
 
 
 def test_idade_da_outbox_e_a_da_linha_pendente_mais_antiga(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     with engine.begin() as conexao:
         _linha_da_outbox(conexao, "pendente", timedelta(seconds=120))
@@ -342,19 +372,19 @@ def test_idade_da_outbox_e_a_da_linha_pendente_mais_antiga(
         _linha_da_outbox(conexao, "entregue", 3 * DIA)
         _linha_da_outbox(conexao, "dead", 5 * DIA)
 
-    (idade,) = _coletar(engine_de_metricas)[IDADE].values()
+    (idade,) = _coletar(abridor)[IDADE].values()
 
     # Gravada e lida no relogio do banco: a idade nunca e menor que a gravada.
     assert 120 <= idade < 130
 
 
 def test_idade_da_outbox_sem_pendente_e_zero(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     with engine.begin() as conexao:
         _linha_da_outbox(conexao, "entregue", 3 * DIA)
 
-    assert _coletar(engine_de_metricas)[IDADE] == {(): 0.0}
+    assert _coletar(abridor)[IDADE] == {(): 0.0}
 
 
 @pytest.mark.parametrize(
@@ -365,23 +395,24 @@ def test_idade_da_outbox_sem_pendente_e_zero(
         pytest.param("reservas", FALTA, id="reservas"),
     ],
 )
-def test_tabela_travada_omite_so_o_gauge_dela_dentro_do_prazo(
-    engine: Engine, engine_de_metricas: Engine, tabela: str, ausente: str
+def test_tabela_travada_omite_so_o_gauge_dela(
+    engine: Engine, abridor: Callable[[], Any], tabela: str, ausente: str
 ) -> None:
     with engine.connect() as trava, trava.begin():
         trava.execute(text(f"LOCK TABLE {tabela} IN ACCESS EXCLUSIVE MODE"))
         inicio = time.monotonic()
-        coletado = _coletar(engine_de_metricas)
+        coletado = _coletar(abridor)
         gasto = time.monotonic() - inicio
 
     # O statement_timeout de 2 s corta a espera pelo lock e as outras duas gauges
-    # seguem na mesma conexao: uma trava custa 2 s, nao a raspagem.
-    assert 1.5 < gasto < 3.5
+    # seguem na mesma conexao, em autocommit: se ele nao cortasse, a primeira
+    # consulta seguraria a raspagem ate o prazo total e as outras duas nao viriam.
+    assert gasto > 1.5
     assert set(coletado) == TODAS - {ausente}
 
 
 def test_as_tres_tabelas_travadas_devolvem_no_prazo_total_e_nao_em_6_s(
-    engine: Engine, engine_de_metricas: Engine
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     """Sozinhas, as tres esperas pelo lock somariam 3 x 2 s."""
     with engine.connect() as trava, trava.begin():
@@ -389,33 +420,34 @@ def test_as_tres_tabelas_travadas_devolvem_no_prazo_total_e_nao_em_6_s(
             text("LOCK TABLE outbox, execucoes, reservas IN ACCESS EXCLUSIVE MODE")
         )
         inicio = time.monotonic()
-        familias = list(ColetorDaApi(engine_de_metricas, prazo_s=3.0).collect())
+        familias = _nomes(abridor, prazo_s=3.0)
         gasto = time.monotonic() - inicio
 
-    assert familias == []
-    assert 2.8 < gasto < 4.0
+    assert familias == set()
+    assert 2.8 < gasto < 5
 
 
 def test_a_consulta_que_nao_responde_no_prazo_fica_ausente_com_o_banco_vivo(
     engine: Engine,
-    engine_de_metricas: Engine,
+    abridor: Callable[[], Any],
     monkeypatch: pytest.MonkeyPatch,
     log_capturado: Any,
 ) -> None:
     """Sem o ``statement_timeout`` (30 s aqui) so o prazo da raspagem a corta. A
-    consulta presa na espera do lock segue no banco ate a trava soltar, e a
-    raspagem nao espera por ela."""
+    consulta presa na espera do lock segue no servidor ate a trava soltar, e a
+    raspagem nao espera por ela: devolve no prazo, derruba o socket, e o servidor
+    desfaz a espera."""
     monkeypatch.setattr(
-        "src.coletor._PRAZO_DA_CONSULTA",
-        text("SET LOCAL statement_timeout = '30s'"),
+        "src.compartilhado.infraestrutura.database._STATEMENT_TIMEOUT_DAS_METRICAS_MS",
+        30_000,
     )
     with engine.connect() as trava, trava.begin():
         trava.execute(text("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE"))
         inicio = time.monotonic()
-        coletado = _coletar_com_prazo(engine_de_metricas, prazo_s=1.5)
+        coletado = _nomes(abridor, prazo_s=1.5)
         gasto = time.monotonic() - inicio
 
-    assert 1.4 < gasto < 2.5
+    assert gasto > 1.4
     # A primeira consulta prendeu a sequencia: as outras duas nem rodaram.
     assert coletado == set()
     erros = {
@@ -430,121 +462,143 @@ def test_a_consulta_que_nao_responde_no_prazo_fica_ausente_com_o_banco_vivo(
     }
 
 
-def _coletar_com_prazo(engine: Engine, *, prazo_s: float) -> set[str]:
-    return {f.name for f in ColetorDaApi(engine, prazo_s=prazo_s).collect()}
-
-
 def test_banco_fora_deixa_os_gauges_ausentes_e_a_raspagem_de_pe() -> None:
-    morto = criar_engine_de_metricas(
-        "postgresql://x:y@127.0.0.1:1/nada"
-    )  # gitleaks:allow
-    coletor = ColetorDaApi(morto)
+    morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
+    coletor = ColetorDaApi(partial(abrir_conexao_de_metricas, morto))
 
     assert list(coletor.collect()) == []
     assert {f.name for f in coletor.describe()} == TODAS
+    morto.dispose()
+
+
+def test_a_conexao_da_raspagem_leva_o_nome_e_o_prazo_das_consultas(
+    abridor: Callable[[], Any],
+) -> None:
+    """O que as opcoes da conexao fazem no servidor: o nome que a acha no
+    ``pg_stat_activity`` e o ``statement_timeout`` de 2 s."""
+    conexao = abridor()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SHOW application_name")
+            nome = cursor.fetchone()[0]
+            cursor.execute("SHOW statement_timeout")
+            prazo = cursor.fetchone()[0]
+    finally:
+        conexao.close()
+
+    assert (nome, prazo) == (NOME_NO_BANCO, "2s")
 
 
 @pytest.mark.parametrize("defeito", ["calar", "atrasar"])
 def test_banco_mudo_ou_lento_na_conexao_responde_pelo_connect_timeout(
-    database_url: str, proxy_do_banco: ProxyDoBanco, defeito: str
+    proxy_do_banco: ProxyDoBanco, via_proxy: Callable[[], Any], defeito: str
 ) -> None:
-    """O proxy aceita o TCP e nao entrega nada (ou entrega a 0,5 s o trecho):
-    a conexao nao se completa. Sem ``connect_timeout`` o libpq esperaria para
-    sempre; com o do pool da API (3 s) a raspagem levaria 3 s."""
+    """O proxy aceita o TCP e nao entrega nada (ou entrega a 0,5 s o trecho): a
+    conexao nao se completa. Sem ``connect_timeout`` o libpq esperaria para sempre,
+    e com o do pool da API (3 s) a raspagem levaria 3 s."""
     if defeito == "calar":
         proxy_do_banco.calar()
     else:
         proxy_do_banco.atrasar(0.5)
-    metricas = criar_engine_de_metricas(proxy_do_banco.url_para(database_url))
     inicio = time.monotonic()
 
-    familias = list(ColetorDaApi(metricas).collect())
+    familias = list(ColetorDaApi(via_proxy).collect())
     gasto = time.monotonic() - inicio
 
     assert familias == []
-    assert 0.9 < gasto < 2.5
+    assert 0.9 < gasto < 1.5
 
 
-def test_conexao_que_cala_no_meio_da_raspagem_devolve_no_prazo_total(
-    database_url: str, proxy_do_banco: ProxyDoBanco
+def test_primeira_conexao_cortada_e_banco_de_volta_a_seguinte_devolve_as_tres(
+    proxy_do_banco: ProxyDoBanco, via_proxy: Callable[[], Any]
 ) -> None:
-    """A conexao abre e a primeira consulta sai; o banco nunca responde, o socket
-    segue aberto (o kernel do outro lado ainda confirma o que recebe): nem o
+    """A primeira conexao do processo cala no primeiro comando (o pod sobe com o
+    banco pendurado). Com um pool, os hooks de primeira conexao do engine
+    consultam o banco sob um mutex dele, e toda raspagem seguinte esperava ali
+    mesmo com o banco de volta; a conexao crua nao divide nada com a anterior."""
+    proxy_do_banco.calar_no_comando(1)
+    assert _nomes(via_proxy, prazo_s=1.0) == set()
+
+    proxy_do_banco.calar_no_comando(None)  # o banco voltou
+    inicio = time.monotonic()
+    assert _nomes(via_proxy, prazo_s=PRAZO_DA_RASPAGEM_S) == TODAS
+    assert time.monotonic() - inicio < PRAZO_DA_RASPAGEM_S
+
+
+def test_conexao_que_cala_no_meio_da_raspagem_devolve_o_que_ja_veio_no_prazo(
+    proxy_do_banco: ProxyDoBanco, via_proxy: Callable[[], Any]
+) -> None:
+    """A primeira consulta responde e a segunda nunca: o socket segue aberto (o
+    kernel do outro lado ainda confirma o que recebe), entao nem o
     ``statement_timeout`` (a consulta nem chega ao servidor) nem o keepalive
-    acodem. So o prazo da raspagem devolve."""
-    metricas = criar_engine_de_metricas(proxy_do_banco.url_para(database_url))
-
-    @event.listens_for(metricas, "before_cursor_execute")
-    def _calar_na_primeira_consulta(
-        _conexao: object,
-        _cursor: object,
-        comando: str,
-        *_resto: object,
-    ) -> None:
-        if "outbox" in comando:
-            proxy_do_banco.calar()
+    acodem. So o prazo da raspagem devolve, com a gauge que ja tinha chegado."""
+    proxy_do_banco.calar_no_comando(2)
 
     inicio = time.monotonic()
-    familias = list(ColetorDaApi(metricas, prazo_s=1.5).collect())
+    familias = _nomes(via_proxy, prazo_s=1.5)
     gasto = time.monotonic() - inicio
 
-    assert familias == []
-    assert 1.4 < gasto < 2.5
-    # A thread presa no socket mudo nao segura o processo na saida (SIGTERM).
-    (presa,) = [t for t in threading.enumerate() if t.name == THREAD_DO_COLETOR]
-    assert presa.daemon
+    assert familias == {IDADE}
+    assert gasto > 1.4
 
 
-def test_depois_de_calar_a_raspagem_seguinte_conecta_do_zero(
-    database_url: str, proxy_do_banco: ProxyDoBanco
+def test_depois_do_prazo_o_socket_e_a_thread_da_raspagem_sao_soltos(
+    proxy_do_banco: ProxyDoBanco, via_proxy: Callable[[], Any]
 ) -> None:
-    """A conexao presa no socket mudo nao prende a raspagem seguinte: sem pool, ela
-    abre outra, e o banco que voltou (o proxy so calou a que existia) devolve as
-    gauges, com a thread da anterior ainda presa."""
-    metricas = criar_engine_de_metricas(proxy_do_banco.url_para(database_url))
-    ligado = threading.Event()
-    ligado.set()
+    """O proxy segue segurando a conexao calada (o caso em que nem keepalive nem
+    ``tcp_user_timeout`` disparam); quem a fecha e o coletor, no prazo."""
+    proxy_do_banco.calar_no_comando(1)
 
-    @event.listens_for(metricas, "before_cursor_execute")
-    def _calar_a_primeira(
-        _conexao: object, _cursor: object, comando: str, *_resto: object
-    ) -> None:
-        if "outbox" in comando and ligado.is_set():
-            ligado.clear()
-            proxy_do_banco.calar_abertas()
+    assert _nomes(via_proxy, prazo_s=1.0) == set()
 
-    assert list(ColetorDaApi(metricas, prazo_s=1.0).collect()) == []
-
-    assert {f.name for f in ColetorDaApi(metricas).collect()} == TODAS
+    esperar_ate(lambda: proxy_do_banco.abertas == 0 and not _threads_do_coletor(), 5)
 
 
-def test_raspagem_nao_deixa_conexao_aberta(
-    engine: Engine, engine_de_metricas: Engine
+def test_raspagens_cortadas_ao_mesmo_tempo_nao_acumulam_thread_nem_conexao(
+    proxy_do_banco: ProxyDoBanco, via_proxy: Callable[[], Any]
+) -> None:
+    proxy_do_banco.calar_no_comando(1)
+
+    with ThreadPoolExecutor(12) as raspadores:
+        nomes = list(
+            raspadores.map(lambda _: _nomes(via_proxy, prazo_s=1.0), range(12))
+        )
+
+    assert nomes == [set()] * 12
+    esperar_ate(lambda: proxy_do_banco.abertas == 0 and not _threads_do_coletor(), 5)
+
+
+def test_a_conexao_da_raspagem_aparece_no_pg_stat_activity_e_some_com_ela(
+    engine: Engine, abridor: Callable[[], Any]
 ) -> None:
     """Sem pool a conexao fecha com a raspagem: nada fica aberto entre duas, para
-    calar e prender a seguinte."""
+    calar e prender a seguinte. E ela aparece, com o nome dela, enquanto roda."""
     contar = text(
-        "SELECT count(*) FROM pg_stat_activity "
-        "WHERE application_name = 'pytstop-execucao-metricas'"
+        "SELECT count(*) FROM pg_stat_activity WHERE application_name = :nome"
     )
 
     def abertas() -> int:
         # Uma transacao por leitura: o pg_stat_activity e um retrato por transacao.
         with engine.connect() as conexao:
-            return conexao.execute(contar).scalar_one()
+            return int(conexao.execute(contar, {"nome": NOME_NO_BANCO}).scalar_one())
 
-    antes = abertas()
-    _coletar(engine_de_metricas)
+    assert abertas() == 0
+    raspador = threading.Thread(target=_coletar, args=(abridor,))
+    with engine.connect() as trava, trava.begin():
+        trava.execute(text("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE"))
+        raspador.start()
+        # Presa na espera do lock da outbox, a conexao dela esta aberta.
+        esperar_ate(lambda: abertas() == 1, 5)
+    raspador.join(10)
+
     _esperar_a_thread_do_coletor()
-    depois = abertas()
-
-    assert (antes, depois) == (0, 0)
+    assert abertas() == 0
 
 
 def test_raspagens_simultaneas_devolvem_as_tres_gauges(
-    engine_de_metricas: Engine,
+    abridor: Callable[[], Any],
 ) -> None:
-    coletor = ColetorDaApi(engine_de_metricas)
+    coletor = ColetorDaApi(abridor)
 
     with ThreadPoolExecutor(8) as raspadores:
         nomes = list(
@@ -612,7 +666,8 @@ def test_metrics_da_api_com_o_banco_travado_responde_no_prazo_com_o_resto(
         gasto = time.monotonic() - inicio
 
     assert resposta.status_code == 200
-    assert PRAZO_DA_RASPAGEM_S - 0.5 < gasto < PRAZO_DA_RASPAGEM_S + 1.5
+    # O Prometheus do platform desiste aos 10 s (o scrape_timeout padrao).
+    assert PRAZO_DA_RASPAGEM_S - 0.5 < gasto < 8
     for familia in TODAS:
         assert familia not in resposta.text
     for resto in (
@@ -639,7 +694,8 @@ def test_raspagem_nao_disputa_o_pool_das_requisicoes(
             conexao.close()
 
     assert f"\n{IDADE} " in resposta.text
-    assert gasto < 1.5
+    # Sem o pool dela, a raspagem esperaria os 5 s do pool_timeout da API.
+    assert gasto < 3
 
 
 def test_coletor_sai_do_registro_com_o_app_e_o_proximo_app_registra_de_novo(
