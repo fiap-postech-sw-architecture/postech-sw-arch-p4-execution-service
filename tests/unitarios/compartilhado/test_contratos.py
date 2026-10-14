@@ -222,64 +222,59 @@ def test_quebra_de_linha_no_fim_do_valor_e_recusada(
     assert str(erro.value) == f"{onde} (pattern)"
 
 
-@pytest.mark.parametrize(
-    "sku",
-    [
-        "pec-vela",
-        "PEC_VELA",
-        "PEC.VELA",
-        "pec_vela.2",
-        "-PEC",
-        "PEC-",
-        "PEC--VELA",
-        "PEC VELA",
-        "PEC-VELA\n",
-        "PEC-ÓLEO",
-        "",
-        "A" * 51,
-    ],
-)
+_SKUS_NO_FORMATO = [
+    pytest.param("A", id="um-caractere"),
+    pytest.param("PEC-OLEO-5W30", id="exemplo-do-billing"),
+    pytest.param("A1-B2-C3", id="tres-grupos"),
+    pytest.param("A" * 50, id="50-caracteres"),
+]
+_SKUS_FORA_DO_FORMATO = [
+    pytest.param("pec-vela", id="minusculas"),
+    pytest.param("PEC_VELA", id="sublinhado"),
+    pytest.param("PEC.VELA", id="ponto"),
+    pytest.param("pec_vela.2", id="minusculas-sublinhado-e-ponto"),
+    pytest.param("-PEC", id="hifen-no-comeco"),
+    pytest.param("PEC-", id="hifen-no-fim"),
+    pytest.param("PEC--VELA", id="hifen-duplo"),
+    pytest.param("PEC VELA", id="espaco"),
+    pytest.param("PEC-VELA\n", id="quebra-de-linha-no-fim"),
+    pytest.param("PEC-ÓLEO", id="acento"),
+    pytest.param("", id="vazio"),
+    pytest.param("A" * 51, id="51-caracteres"),
+]
+
+
+def _reservar_com_sku(sku: str) -> dict[str, Any]:
+    comando = _exemplo("ReservarPecas")
+    comando["dados"]["pecas"][0]["sku"] = sku
+    return comando
+
+
+@pytest.mark.parametrize("sku", _SKUS_FORA_DO_FORMATO)
 def test_sku_do_reservar_pecas_fora_do_formato_do_billing_e_recusado(sku: str) -> None:
-    comando = _exemplo("ReservarPecas")
-    comando["dados"]["pecas"][0]["sku"] = sku
-
     with pytest.raises(MensagemInvalidaError, match=r"\$\.pecas\[0\]\.sku"):
-        validar(comando)
+        validar(_reservar_com_sku(sku))
 
 
-@pytest.mark.parametrize("sku", ["A", "PEC-OLEO-5W30", "A1-B2-C3", "A" * 50])
+@pytest.mark.parametrize("sku", _SKUS_NO_FORMATO)
 def test_sku_do_reservar_pecas_no_formato_do_billing_e_aceito(sku: str) -> None:
-    comando = _exemplo("ReservarPecas")
-    comando["dados"]["pecas"][0]["sku"] = sku
-
-    validar(comando)
+    validar(_reservar_com_sku(sku))
 
 
 @pytest.mark.parametrize(
     "sku",
     [
-        "PEC-VELA",
-        "pec-vela",
-        "PEC_VELA",
-        "PEC-VELA\n",
-        "\nPEC-VELA",
-        "PEC--VELA",
-        "-PEC",
-        "PEC-",
-        "PEC-ÓLEO",
-        "٣",
-        "",
-        "A" * 50,
-        "A" * 51,
+        *_SKUS_NO_FORMATO,
+        *_SKUS_FORA_DO_FORMATO,
+        pytest.param("\nPEC-VELA", id="quebra-de-linha-no-comeco"),
+        pytest.param("٣", id="digito-arabe"),
     ],
 )
 def test_o_contrato_e_o_sku_do_dominio_aceitam_os_mesmos_codigos(sku: str) -> None:
     """Quem passa pelo contrato nunca falha no ``Sku``: o consumidor entrega o
     comando ao caso de uso sem checar o formato de novo."""
-    comando = _exemplo("ReservarPecas")
-    comando["dados"]["pecas"][0]["sku"] = sku
     try:
-        validar(comando)
+        validar(_reservar_com_sku(sku))
     except MensagemInvalidaError:
         no_contrato = False
     else:
