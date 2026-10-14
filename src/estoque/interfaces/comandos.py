@@ -10,9 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from src.compartilhado.dominio.exceptions import ValorInvalidoError
 from src.estoque.aplicacao.use_cases import LiberarReserva, ReservarPecas
-from src.estoque.dominio.reserva import Faltante, ItemReserva
+from src.estoque.dominio.reserva import ItemReserva
 from src.estoque.dominio.sku import Sku
 from src.estoque.infraestrutura.repository import (
     ItemEstoqueSQLAlchemyRepository,
@@ -30,26 +29,21 @@ if TYPE_CHECKING:
 def reservar_pecas(
     envelope: Mapping[str, Any], sessao: Session, uow: UnitOfWorkDoComando
 ) -> None:
-    """``ReservarPecas``: SKU fora do formato do Billing falta inteiro.
+    """``ReservarPecas``: reserva as pecas da ordem e responde.
 
-    O contrato aceita codigo que o estoque nunca cadastra (minusculas, ``.`` e
-    ``_``): a resposta e ``ReservaDePecasFalhou`` com ele, e a saga compensa,
-    em vez de a mensagem ir para a DLQ.
+    O contrato so aceita SKU no formato do Billing, o mesmo do ``Sku``: o que
+    esta fora dele e recusado pelo consumidor antes do handler (DLQ), entao o
+    ``Sku`` aqui nao recusa nada.
     """
     dados = envelope["dados"]
-    pecas, fora_do_catalogo = [], []
-    for peca in dados["pecas"]:
-        try:
-            pecas.append(ItemReserva(Sku(peca["sku"]), peca["quantidade"]))
-        except ValorInvalidoError:
-            fora_do_catalogo.append(
-                Faltante(sku=peca["sku"], solicitado=peca["quantidade"], disponivel=0)
-            )
+    pecas = [
+        ItemReserva(Sku(peca["sku"]), peca["quantidade"]) for peca in dados["pecas"]
+    ]
     ReservarPecas(
         ItemEstoqueSQLAlchemyRepository(sessao),
         ReservaSQLAlchemyRepository(sessao),
         uow,
-    ).executar(UUID(dados["ordem_id"]), pecas, fora_do_catalogo)
+    ).executar(UUID(dados["ordem_id"]), pecas)
 
 
 def liberar_reserva(

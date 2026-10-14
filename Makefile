@@ -46,7 +46,9 @@ check: lock-check lint lint-arch typecheck security test
 # a stack, confere a readiness (banco), que rota autenticada sem token responde
 # 401, que a imagem roda como 1001:1001, que a resposta nao traz o header
 # `server`, que as linhas de boot do uvicorn saem em JSON e que ele nao escreve
-# access log (so o `http_request` estruturado do middleware); que relay e
+# access log (so o `http_request` estruturado do middleware), que o boot nao traz
+# o aviso da telemetria automatica do FastAPI (o compose leva o endpoint OTLP no
+# ambiente da API, como o cluster); que relay e
 # consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
 # os contratos de mensageria estao na imagem (e a topologia do RabbitMQ, com a
 # senha do admin de demonstracao, nao), que o relay conectou ao broker e
@@ -87,6 +89,8 @@ smoke:
 		|| { echo "smoke: o access log estruturado (http_request) nao saiu" >&2; false; }; } \
 	&& { ! printf '%s\n' "$$logs" | grep -q 'uvicorn.access' \
 		|| { echo "smoke: o uvicorn escreveu access log (--no-access-log nao vale)" >&2; false; }; } \
+	&& { ! printf '%s\n' "$$logs" | grep -q 'automatic telemetry' \
+		|| { echo "smoke: o FastAPI avisou que a telemetria automatica falhou (telemetry auto_configure)" >&2; false; }; } \
 	&& { test "$$(docker inspect -f '{{.State.Health.Status}}' "$$($(SMOKE_COMPOSE) ps -q relay)")" = healthy \
 		|| { echo "smoke: o relay nao esta pronto" >&2; false; }; } \
 	&& { test "$$(docker inspect -f '{{.State.Health.Status}}' "$$($(SMOKE_COMPOSE) ps -q consumidor)")" = healthy \
@@ -101,7 +105,7 @@ smoke:
 	&& { $(SMOKE_COMPOSE) exec -T -e ENVIRONMENT=production api python -c "$(SMOKE_GUARDA)" 2>&1 \
 		| grep -q 'DATABASE_URL usa a senha de demonstracao' \
 		|| { echo "smoke: com ENVIRONMENT=production a imagem aceita a senha de demonstracao" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, contratos na imagem e topologia fora, relay e consumidor prontos, senha de demonstracao recusada em producao" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, sem aviso de telemetria, contratos na imagem e topologia fora, relay e consumidor prontos, senha de demonstracao recusada em producao" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \

@@ -40,6 +40,9 @@ services:
       <<: *banco
       JWKS_URL: ${JWKS_URL:-http://os-service:8000/.well-known/jwks.json}
       BILLING_URL: ${BILLING_URL:-http://billing-service:8000}
+      # Nada exporta neste compose; a API recebe o endpoint do cluster so para o
+      # make smoke provar que o boot nao avisa da telemetria automatica.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4317}
       RUN_MIGRATIONS_ON_STARTUP: "true"
       RUN_SEED_ON_STARTUP: "true"
     # Healthcheck: o HEALTHCHECK do Dockerfile (um lugar so); `--wait` espera ele.

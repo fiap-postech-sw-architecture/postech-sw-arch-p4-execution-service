@@ -16,6 +16,7 @@ import src.diagnostico.aplicacao.events
 import src.estoque.aplicacao.events
 import src.execucao.aplicacao.events  # noqa: F401 - registra as subclasses
 from src.compartilhado.aplicacao.integration_event import IntegrationEvent
+from src.compartilhado.dominio.exceptions import ValorInvalidoError
 from src.compartilhado.infraestrutura.mensageria.consumidor import NIVEIS_DE_RETRY
 from src.compartilhado.infraestrutura.mensageria.contratos import (
     CONTRATOS,
@@ -28,6 +29,7 @@ from src.compartilhado.infraestrutura.mensageria.contratos import (
 )
 from src.consumidor import HANDLERS
 from src.estoque.aplicacao.events import ReservaLiberadaEvent
+from src.estoque.dominio.sku import Sku
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -133,6 +135,158 @@ def test_envelope_fora_do_contrato(campo: str, valor: object, mensagem: str) -> 
     comando = {**_exemplo("LiberarReserva"), campo: valor}
     with pytest.raises(MensagemInvalidaError, match=mensagem):
         validar(comando)
+
+
+def _com_quebra_de_linha_no_fim(tipo: str, caminho: tuple[str | int, ...]) -> Any:
+    """Exemplo do ``tipo`` com ``\\n`` acrescentado ao valor em ``caminho``."""
+    exemplo = _exemplo(tipo)
+    alvo: Any = exemplo
+    for chave in caminho[:-1]:
+        alvo = alvo[chave]
+    alvo[caminho[-1]] += "\n"
+    return exemplo
+
+
+@pytest.mark.parametrize(
+    ("tipo", "caminho", "onde"),
+    [
+        (
+            "LiberarReserva",
+            ("ocorrido_em",),
+            "envelope fora do contrato em $.ocorrido_em",
+        ),
+        ("LiberarReserva", ("tipo",), "envelope fora do contrato em $.tipo"),
+        (
+            "DiagnosticoIniciado",
+            ("dados", "iniciado_em"),
+            "dados fora do contrato em $.iniciado_em",
+        ),
+        (
+            "DiagnosticoConcluido",
+            ("dados", "concluido_em"),
+            "dados fora do contrato em $.concluido_em",
+        ),
+        (
+            "DiagnosticoConcluido",
+            ("dados", "itens", 0, "codigo"),
+            "dados fora do contrato em $.itens[0].codigo",
+        ),
+        (
+            "ExecucaoIniciada",
+            ("dados", "iniciada_em"),
+            "dados fora do contrato em $.iniciada_em",
+        ),
+        (
+            "ExecucaoFinalizada",
+            ("dados", "finalizada_em"),
+            "dados fora do contrato em $.finalizada_em",
+        ),
+        (
+            "ReservaDePecasFalhou",
+            ("dados", "faltantes", 0, "sku"),
+            "dados fora do contrato em $.faltantes[0].sku",
+        ),
+        (
+            "SolicitarDiagnostico",
+            ("dados", "veiculo", "placa"),
+            "dados fora do contrato em $.veiculo.placa",
+        ),
+        (
+            "ReservarPecas",
+            ("dados", "pecas", 0, "sku"),
+            "dados fora do contrato em $.pecas[0].sku",
+        ),
+    ],
+    ids=[
+        "envelope-ocorrido_em",
+        "envelope-tipo",
+        "iniciado_em",
+        "concluido_em",
+        "codigo-do-diagnostico",
+        "iniciada_em",
+        "finalizada_em",
+        "sku-do-faltante",
+        "placa",
+        "sku",
+    ],
+)
+def test_quebra_de_linha_no_fim_do_valor_e_recusada(
+    tipo: str, caminho: tuple[str | int, ...], onde: str
+) -> None:
+    """O ``$`` de um pattern aceita ``\\n`` no fim e o ``format`` do jsonschema
+    tambem: os patterns do contrato terminam em ``(?![\\s\\S])``. O motivo e o
+    do campo (o ``tipo`` do envelope nao passa por "tipo sem contrato")."""
+    with pytest.raises(MensagemInvalidaError) as erro:
+        validar(_com_quebra_de_linha_no_fim(tipo, caminho))
+
+    assert str(erro.value) == f"{onde} (pattern)"
+
+
+_SKUS_NO_FORMATO = [
+    pytest.param("A", id="um-caractere"),
+    pytest.param("PEC-OLEO-5W30", id="exemplo-do-billing"),
+    pytest.param("A1-B2-C3", id="tres-grupos"),
+    pytest.param("A" * 50, id="50-caracteres"),
+]
+_SKUS_FORA_DO_FORMATO = [
+    pytest.param("pec-vela", id="minusculas"),
+    pytest.param("PEC_VELA", id="sublinhado"),
+    pytest.param("PEC.VELA", id="ponto"),
+    pytest.param("pec_vela.2", id="minusculas-sublinhado-e-ponto"),
+    pytest.param("-PEC", id="hifen-no-comeco"),
+    pytest.param("PEC-", id="hifen-no-fim"),
+    pytest.param("PEC--VELA", id="hifen-duplo"),
+    pytest.param("PEC VELA", id="espaco"),
+    pytest.param("PEC-VELA\n", id="quebra-de-linha-no-fim"),
+    pytest.param("PEC-ÓLEO", id="acento"),
+    pytest.param("", id="vazio"),
+    pytest.param("A" * 51, id="51-caracteres"),
+]
+
+
+def _reservar_com_sku(sku: str) -> dict[str, Any]:
+    comando = _exemplo("ReservarPecas")
+    comando["dados"]["pecas"][0]["sku"] = sku
+    return comando
+
+
+@pytest.mark.parametrize("sku", _SKUS_FORA_DO_FORMATO)
+def test_sku_do_reservar_pecas_fora_do_formato_do_billing_e_recusado(sku: str) -> None:
+    with pytest.raises(MensagemInvalidaError, match=r"\$\.pecas\[0\]\.sku"):
+        validar(_reservar_com_sku(sku))
+
+
+@pytest.mark.parametrize("sku", _SKUS_NO_FORMATO)
+def test_sku_do_reservar_pecas_no_formato_do_billing_e_aceito(sku: str) -> None:
+    validar(_reservar_com_sku(sku))
+
+
+@pytest.mark.parametrize(
+    "sku",
+    [
+        *_SKUS_NO_FORMATO,
+        *_SKUS_FORA_DO_FORMATO,
+        pytest.param("\nPEC-VELA", id="quebra-de-linha-no-comeco"),
+        pytest.param("٣", id="digito-arabe"),
+    ],
+)
+def test_o_contrato_e_o_sku_do_dominio_aceitam_os_mesmos_codigos(sku: str) -> None:
+    """Quem passa pelo contrato nunca falha no ``Sku``: o consumidor entrega o
+    comando ao caso de uso sem checar o formato de novo."""
+    try:
+        validar(_reservar_com_sku(sku))
+    except MensagemInvalidaError:
+        no_contrato = False
+    else:
+        no_contrato = True
+    try:
+        Sku(sku)
+    except ValorInvalidoError:
+        no_dominio = False
+    else:
+        no_dominio = True
+
+    assert no_contrato is no_dominio
 
 
 def test_campo_desconhecido_e_tolerado() -> None:

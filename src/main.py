@@ -69,6 +69,12 @@ def criar_app() -> FastAPI:
         description=_DESCRICAO,
         lifespan=lifespan,
         dependencies=[Depends(correlacionar_pela_ordem)],
+        # Sem o export automatico do FastAPI: com o endpoint OTLP no ambiente
+        # ele soma exportadores http/protobuf na partida, que pedem o extra
+        # fastapi[opentelemetry] (o endpoint do cluster e gRPC) e a partida
+        # avisaria no log. A telemetria de cada processo e a de
+        # mensageria/telemetria.py.
+        telemetry={"auto_configure": False},
     )
     application.include_router(router_saude)
     application.include_router(router_estoque)
