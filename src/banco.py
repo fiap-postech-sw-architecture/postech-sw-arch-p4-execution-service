@@ -61,6 +61,16 @@ def revisao_da_imagem() -> tuple[ScriptDirectory, str]:
     return script, head
 
 
+def _causa(erro: DBAPIError) -> str:
+    """Primeira linha do erro do driver, que nunca leva a senha.
+
+    E o que separa conexao recusada, senha errada e nome que nao resolve, que o
+    tipo do erro sozinho (``OperationalError``) mistura.
+    """
+    linhas = str(erro.orig).strip().splitlines()
+    return linhas[0] if linhas else ""
+
+
 def aguardar(
     engine: Engine,
     *,
@@ -71,7 +81,8 @@ def aguardar(
 
     Banco fora do ar (conexao recusada, senha, DNS: erro do driver), sem
     ``alembic_version`` e revisao conhecida mas atras da ``head`` sao espera, e
-    cada espera loga o motivo; o prazo e o do rollout no Kubernetes. Qualquer
+    cada espera loga o motivo (do banco fora do ar, tambem a primeira linha da
+    mensagem do driver); o prazo e o do rollout no Kubernetes. Qualquer
     outro erro (configuracao, URL) sai na hora, em vez de virar laco com a mesma
     linha no log.
     """
@@ -83,7 +94,9 @@ def aguardar(
                 atual = MigrationContext.configure(conexao).get_current_revision()
         except DBAPIError as exc:
             _log.warning(
-                "migration_wait_database_unavailable", error=type(exc).__name__
+                "migration_wait_database_unavailable",
+                error=type(exc).__name__,
+                cause=_causa(exc),
             )
             esperar(intervalo)
             continue

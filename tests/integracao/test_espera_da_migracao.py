@@ -243,6 +243,58 @@ def test_banco_fora_do_ar_e_espera_e_o_log_traz_o_tipo_do_erro(
     [evento] = _eventos(log_capturado)
     assert evento["event"] == "migration_wait_database_unavailable"
     assert evento["error"] == "OperationalError"
+    # So a primeira linha da mensagem do driver, com o endereco que recusou.
+    assert '"127.0.0.1", port 1' in evento["cause"]
+    assert "\n" not in evento["cause"]
+
+
+def test_senha_errada_e_espera_e_o_log_a_distingue_de_banco_fora_do_ar(
+    database_url: str, engine: Engine, log_capturado: io.StringIO
+) -> None:
+    # Pelo IPv4: com "localhost" o libpq tenta o ::1 antes, e a primeira linha
+    # da mensagem seria a recusa dele, nao a do servidor.
+    url = make_url(database_url).set(host="127.0.0.1", password="senha-errada")
+    sem_acesso = criar_engine(url.render_as_string(hide_password=False))
+
+    def esperar(_segundos: float) -> None:
+        raise _EsperaInterrompidaError
+
+    try:
+        with pytest.raises(_EsperaInterrompidaError):
+            aguardar(sem_acesso, esperar=esperar)
+    finally:
+        sem_acesso.dispose()
+
+    [evento] = _eventos(log_capturado)
+    assert evento["event"] == "migration_wait_database_unavailable"
+    assert "password authentication failed" in evento["cause"]
+    assert "senha-errada" not in log_capturado.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("mensagem", "causa"),
+    [
+        ("banco reiniciando", "banco reiniciando"),
+        ("primeira linha\nDETAIL: segunda linha", "primeira linha"),
+        ("", ""),
+    ],
+    ids=["uma-linha", "so-a-primeira", "vazia"],
+)
+def test_a_causa_do_log_e_a_primeira_linha_do_erro_do_driver(
+    log_capturado: io.StringIO, mensagem: str, causa: str
+) -> None:
+    class BancoFora:
+        def connect(self) -> None:
+            raise OperationalError("SELECT 1", {}, Exception(mensagem))
+
+    def esperar(_segundos: float) -> None:
+        raise _EsperaInterrompidaError
+
+    with pytest.raises(_EsperaInterrompidaError):
+        aguardar(BancoFora(), esperar=esperar)  # type: ignore[arg-type]
+
+    [evento] = _eventos(log_capturado)
+    assert evento["cause"] == causa
 
 
 def test_banco_que_volta_do_ar_encerra_a_espera(
