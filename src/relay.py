@@ -10,6 +10,7 @@ import structlog
 
 from src.compartilhado.infraestrutura.ambiente import url_de_conexao
 from src.compartilhado.infraestrutura.database import criar_engine
+from src.compartilhado.infraestrutura.instrumentacao import instrumentar_banco
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.mensageria.processo import (
     SinaisDoProcesso,
@@ -28,6 +29,7 @@ def main() -> None:
     configurar_logging()
     configurar_telemetria("relay")
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
+    instrumentar_banco(engine)
     relay = Relay(
         engine,
         url_de_conexao("RABBITMQ_URL"),

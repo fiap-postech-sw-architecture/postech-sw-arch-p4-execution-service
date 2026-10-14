@@ -932,6 +932,8 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     monkeypatch.setenv("RABBITMQ_URL", _URL)
     monkeypatch.setattr(modulo, classe, _ProcessoFalso)
     monkeypatch.setattr(modulo, "criar_engine", lambda _url: _EngineFalsa())
+    instrumentados: list[object] = []
+    monkeypatch.setattr(modulo, "instrumentar_banco", instrumentados.append)
     monkeypatch.setattr(modulo, "parada_por_sinal", lambda: parado)
     monkeypatch.setattr(modulo, "configurar_logging", lambda: None)
     monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: None)
@@ -945,6 +947,8 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     assert sinais._pronto.name == f"{nome}-pronto"
     assert processo_.parar is parado
     assert _EngineFalsa.disposta
+    # O mesmo engine do processo: sem isso nenhuma consulta dele viraria span.
+    assert instrumentados == [processo_.args[0]]
 
 
 # --- laco do consumidor (sem broker) ------------------------------------------

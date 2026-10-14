@@ -319,7 +319,7 @@ class Consumidor:
                 resultado = self._nova_tentativa(canal, envelope, corpo, tentativa + 1)
             span.set_attribute("pytstop.resultado", resultado.value)
             if resultado in {Resultado.RETRY, Resultado.DLQ}:
-                span.set_status(StatusCode.ERROR, resultado.value)
+                span.set_status(StatusCode.ERROR)
             if resultado is Resultado.DLQ:
                 canal.basic_reject(entrega.delivery_tag, requeue=False)
             else:

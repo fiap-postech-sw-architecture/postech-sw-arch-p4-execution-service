@@ -64,7 +64,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
+    from contextlib import AbstractContextManager
     from sqlalchemy import Engine
+    from opentelemetry.trace import Span
 
     from src.compartilhado.infraestrutura.mensageria.processo import SinaisDoProcesso
 
@@ -172,6 +174,25 @@ class _Broker:
 
 class Relay:
     """Publica a outbox no RabbitMQ; ``executar`` roda ate ``parar`` ser ligado."""
+def _span_da_publicacao(linha: LinhaDaOutbox) -> AbstractContextManager[Span]:
+    """Span PRODUCER filho do contexto gravado na outbox; ele vai nos headers."""
+    pai = contexto_de(
+        {"traceparent": linha.traceparent, "tracestate": linha.tracestate}
+    )
+    return tracer.start_as_current_span(
+        f"publish {linha.tipo}",
+        context=pai,
+        kind=SpanKind.PRODUCER,
+        attributes={
+            "messaging.system": "rabbitmq",
+            "messaging.destination.name": linha.exchange,
+            "messaging.rabbitmq.destination.routing_key": linha.routing_key,
+            "messaging.message.id": linha.envelope["id"],
+            "messaging.message.conversation_id": str(linha.correlation_id),
+        },
+    )
+
+
 
     def __init__(
         self,
@@ -333,38 +354,24 @@ class Relay:
                 if self._outbox.marcar_dead(linha, "envelope fora do contrato"):
                     _log.error("message_dead", tipo=linha.tipo, causa="contrato")
                 return
-            try:
-                falha = self._publicar(broker, linha)
-            except BrokerIndisponivelError:
-                # O lease renovado e o desta linha: o _drenar libera as outras.
-                self._liberar([linha])
-                raise
-            except Exception as exc:  # noqa: BLE001 - a linha falha, o relay segue
-                falha = f"falha ao publicar ({type(exc).__name__})"
-            self._registrar_desfecho(linha, falha)
-
-    @staticmethod
-    def _publicar(broker: _Broker, linha: LinhaDaOutbox) -> str | None:
-        """Span PRODUCER filho do contexto gravado na outbox; ele vai nos headers."""
-        pai = contexto_de(
-            {"traceparent": linha.traceparent, "tracestate": linha.tracestate}
-        )
-        with tracer.start_as_current_span(
-            f"publish {linha.tipo}",
-            context=pai,
-            kind=SpanKind.PRODUCER,
-            attributes={
-                "messaging.system": "rabbitmq",
-                "messaging.destination.name": linha.exchange,
-                "messaging.rabbitmq.destination.routing_key": linha.routing_key,
-                "messaging.message.id": linha.envelope["id"],
-                "messaging.message.conversation_id": str(linha.correlation_id),
-            },
-        ) as span:
-            falha = broker.publicar(linha)
-            if falha is not None:
-                span.set_status(StatusCode.ERROR, falha)
-        return falha
+            # O span cobre a publicacao, a marcacao da linha e os logs dela: o
+            # UPDATE da outbox sai como filho da publicacao no trace da saga, e as
+            # linhas de log levam o trace_id dela.
+            with _span_da_publicacao(linha) as span:
+                try:
+                    falha = broker.publicar(linha)
+                except BrokerIndisponivelError:
+                    # O lease renovado e o desta linha: o _drenar libera as outras.
+                    self._liberar([linha])
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a linha falha, o relay segue
+                    falha = f"falha ao publicar ({type(exc).__name__})"
+                if falha is not None:
+                    # Texto fixo (classe e codigo do broker), em atributo: o
+                    # status do span nao leva descricao.
+                    span.set_attribute("pytstop.falha", falha)
+                    span.set_status(StatusCode.ERROR)
+                self._registrar_desfecho(linha, falha)
 
     def _registrar_desfecho(self, linha: LinhaDaOutbox, falha: str | None) -> None:
         """Marca a linha: entregue, nova tentativa com atraso ou ``dead``."""

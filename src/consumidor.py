@@ -12,6 +12,7 @@ import structlog
 
 from src.compartilhado.infraestrutura.ambiente import url_de_conexao
 from src.compartilhado.infraestrutura.database import criar_engine
+from src.compartilhado.infraestrutura.instrumentacao import instrumentar_banco
 from src.compartilhado.infraestrutura.logging import configurar_logging
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.processo import (
@@ -57,6 +58,7 @@ def main() -> None:
     configurar_logging()
     configurar_telemetria("consumidor")
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
+    instrumentar_banco(engine)
     consumidor = Consumidor(
         engine,
         url_de_conexao("RABBITMQ_URL"),

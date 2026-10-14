@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID, uuid4
 
 import pytest
+from opentelemetry.trace import StatusCode
 from prometheus_client import REGISTRY
 from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
@@ -135,6 +136,7 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     session_factory: sessionmaker[Session],
     relay: Callable[..., Relay],
     outbox: Callable[[], list[dict[str, Any]]],
+    spans: InMemorySpanExporter,
 ) -> None:
     with broker.canal() as canal:
         canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
@@ -149,6 +151,13 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     (linha,) = outbox()
     assert linha["status"] == "pendente"
     assert linha["ultimo_erro"] == "UnroutableError"
+    # O span da publicacao marca o erro e leva o motivo em atributo de texto fixo.
+    publicacao = next(
+        s for s in spans.get_finished_spans() if s.name == "publish ReservaLiberada"
+    )
+    assert publicacao.status.status_code is StatusCode.ERROR
+    assert publicacao.status.description is None
+    assert (publicacao.attributes or {})["pytstop.falha"] == "UnroutableError"
 
 
 def test_publicacao_devolvida_nao_leva_o_corpo_para_o_log(

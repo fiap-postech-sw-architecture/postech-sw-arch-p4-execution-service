@@ -18,6 +18,7 @@ import structlog
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from opentelemetry import trace
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -187,3 +188,17 @@ def spans() -> InMemorySpanExporter:
     """Spans terminados durante o teste."""
     _SPANS.clear()
     return _SPANS
+
+
+@pytest.fixture(autouse=True)
+def _sem_instrumentacao_de_banco_residual() -> Iterator[None]:
+    """O instrumentador do SQLAlchemy e um singleton: cada teste instrumenta o seu.
+
+    O lifespan do app instrumenta o engine dele; sem desfazer, o engine do teste
+    seguinte nao seria instrumentado (o instrumentador recusa a segunda chamada)
+    e o ``Engine.connect`` ficaria embrulhado na suite inteira.
+    """
+    yield
+    instrumentador = SQLAlchemyInstrumentor()
+    if instrumentador.is_instrumented_by_opentelemetry:
+        instrumentador.uninstrument()

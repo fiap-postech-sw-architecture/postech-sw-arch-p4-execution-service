@@ -17,8 +17,16 @@ from src.compartilhado.infraestrutura.database import (
     criar_engine,
     criar_session_factory,
 )
+from src.compartilhado.infraestrutura.instrumentacao import (
+    instrumentar_api,
+    instrumentar_banco,
+    instrumentar_cliente_http,
+)
 from src.compartilhado.infraestrutura.jwks import ValidadorDeTokenJWKS
 from src.compartilhado.infraestrutura.logging import configurar_logging
+from src.compartilhado.infraestrutura.mensageria.telemetria import (
+    configurar_telemetria,
+)
 from src.compartilhado.infraestrutura.metrics import configurar_metricas
 from src.compartilhado.interfaces.dependencies import correlacionar_pela_ordem
 from src.compartilhado.interfaces.error_handler import registrar_error_handlers
@@ -44,11 +52,13 @@ _DESCRICAO = (
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Cria engine, validador de token e cliente do Billing; descarta no shutdown."""
     engine = criar_engine(url_de_conexao("DATABASE_URL"))
+    instrumentar_banco(engine)
     app.state.session_factory = criar_session_factory(engine)
     app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
     app.state.billing_client = httpx.Client(
         base_url=url_http_obrigatoria("BILLING_URL"), timeout=_TIMEOUT_BILLING_S
     )
+    instrumentar_cliente_http(app.state.billing_client)
     app.state.billing_breaker = CircuitBreaker("billing")
     _log.info("execution_service_started")
     try:
@@ -63,6 +73,10 @@ def criar_app() -> FastAPI:
     # (e monta o app) antes de "Started server process"; configurado so no
     # lifespan, as linhas de boot do uvicorn saiam em texto no meio do JSON.
     configurar_logging()
+    # O provider do SDK antes do instrumentador, que o le do global: a API monta
+    # o mesmo provider do relay e do consumidor, com o amostrador e a limpeza do
+    # texto de erro (mensageria/telemetria.py).
+    configurar_telemetria("api")
     application = FastAPI(
         title="PytStop Execution Service",
         version=version("pytstop-execution-service"),
@@ -73,7 +87,7 @@ def criar_app() -> FastAPI:
         # ele soma exportadores http/protobuf na partida, que pedem o extra
         # fastapi[opentelemetry] (o endpoint do cluster e gRPC) e a partida
         # avisaria no log. A telemetria de cada processo e a de
-        # mensageria/telemetria.py.
+        # mensageria/telemetria.py, e a da API, a de instrumentacao.py.
         telemetry={"auto_configure": False},
     )
     application.include_router(router_saude)
@@ -84,6 +98,7 @@ def criar_app() -> FastAPI:
     registrar_error_handlers(application)
     # Por ultimo: o middleware de metricas fica por fora e mede a request inteira.
     configurar_metricas(application)
+    instrumentar_api(application)
     return application
 
 
