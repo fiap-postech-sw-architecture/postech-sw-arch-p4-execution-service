@@ -57,6 +57,32 @@ def test_os_cinco_resultados_sao_os_do_consumidor() -> None:
     assert tuple(r.value for r in Resultado) == smoke.RESULTADOS
 
 
+def test_as_familias_que_o_smoke_pede_sao_as_do_catalogo() -> None:
+    # Escritas aqui de proposito: tirar uma familia do script nao pode passar.
+    esperadas = {
+        "api": {
+            "http_request_duration_seconds",
+            "pytstop_circuit_breaker_aberto",
+            "pytstop_jwks_falhas_total",
+            "pytstop_outbox_mais_antiga_segundos",
+            "pytstop_execucao_duracao_media_segundos",
+            "pytstop_pecas_em_falta",
+        },
+        "relay": {
+            "pytstop_mensagens_publicadas_total",
+            "pytstop_reconexoes_ao_broker_total",
+            "outbox_pendentes",
+            "outbox_dead",
+        },
+        "consumidor": {
+            "pytstop_mensagens_consumidas_total",
+            "pytstop_reconexoes_ao_broker_total",
+        },
+    }
+    assert {p: {f for f, _ in fs} for p, fs in smoke.FAMILIAS.items()} == esperadas
+    assert len(smoke.SERIES["api"]) == 4
+
+
 def test_cada_processo_tem_o_conjunto_completo() -> None:
     assert len(smoke.SERIES["relay"]) == 10 + 1 + 2
     assert len(smoke.SERIES["consumidor"]) == (7 + 1) * 5 + 1
