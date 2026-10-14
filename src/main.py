@@ -7,7 +7,9 @@ from importlib.metadata import version
 import httpx
 import structlog
 from fastapi import Depends, FastAPI
+from prometheus_client import REGISTRY
 
+from src.coletor import ColetorDaApi
 from src.compartilhado.infraestrutura.ambiente import (
     url_de_conexao,
     url_http_obrigatoria,
@@ -15,6 +17,7 @@ from src.compartilhado.infraestrutura.ambiente import (
 from src.compartilhado.infraestrutura.circuit_breaker import CircuitBreaker
 from src.compartilhado.infraestrutura.database import (
     criar_engine,
+    criar_engine_de_metricas,
     criar_session_factory,
 )
 from src.compartilhado.infraestrutura.instrumentacao import (
@@ -50,8 +53,9 @@ _DESCRICAO = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    """Cria engine, validador de token e cliente do Billing; descarta no shutdown."""
-    engine = criar_engine(url_de_conexao("DATABASE_URL"))
+    """Cria engine, validador, cliente do Billing e coletor; descarta no shutdown."""
+    url_do_banco = url_de_conexao("DATABASE_URL")
+    engine = criar_engine(url_do_banco)
     instrumentar_banco(engine)
     app.state.session_factory = criar_session_factory(engine)
     app.state.validador_token = ValidadorDeTokenJWKS(url_http_obrigatoria("JWKS_URL"))
@@ -60,10 +64,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     instrumentar_cliente_http(app.state.billing_client)
     app.state.billing_breaker = CircuitBreaker("billing")
+    # Os gauges por consulta (outbox, execucao e estoque) saem so da API, por uma
+    # conexao propria que nao disputa o pool das requisicoes.
+    engine_de_metricas = criar_engine_de_metricas(url_do_banco)
+    coletor = ColetorDaApi(engine_de_metricas.connect)
+    REGISTRY.register(coletor)
     _log.info("execution_service_started")
     try:
         yield
     finally:
+        REGISTRY.unregister(coletor)
+        engine_de_metricas.dispose()
         app.state.billing_client.close()
         engine.dispose()
 

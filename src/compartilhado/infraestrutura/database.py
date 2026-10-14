@@ -74,6 +74,23 @@ def criar_engine(url: str) -> Engine:
     )
 
 
+def criar_engine_de_metricas(url: str) -> Engine:
+    """Engine so das consultas do ``/metrics``: uma conexao, fora do pool da API.
+
+    A raspagem nao disputa conexao com o trafego (com o pool cheio ela ficaria
+    sem metrica justo quando mais importa) e espera no maximo 2 s por ela.
+    """
+    return create_engine(
+        url,
+        hide_parameters=True,
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=2,
+        connect_args=argumentos_de_conexao(),
+    )
+
+
 def argumentos_de_conexao() -> dict[str, int]:
     """Conexao em ate ``DB_CONNECT_TIMEOUT_S`` (3 s) e socket sem resposta derrubado.
 
