@@ -28,8 +28,11 @@ ruins=()
 while IFS= read -r ocorrencia; do
   if [[ $ocorrencia =~ $variavel_psql ]]; then
     variavel="${BASH_REMATCH[1]}"
+    # \gset (no fim de uma consulta, com ou sem prefixo) grava variavel a partir
+    # de qualquer coluna: nenhum \gset no script.
     if ! grep -qE "^[[:space:]]*\\\\getenv[[:space:]]+${variavel}[[:space:]]+[A-Z_]+[[:space:]]*\$" <<< "$sql" \
-      || grep -qE "^[[:space:]]*\\\\(set|gset)[[:space:]]+${variavel}([[:space:]]|\$)" <<< "$sql"; then
+      || grep -qE "^[[:space:]]*\\\\set[[:space:]]+${variavel}([[:space:]]|\$)" <<< "$sql" \
+      || grep -qE '\\gset([[:space:]]|$)' <<< "$sql"; then
       ruins+=("${ocorrencia} (a variavel nao vem so de \\getenv)")
     fi
   else

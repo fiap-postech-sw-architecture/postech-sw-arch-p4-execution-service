@@ -57,6 +57,8 @@ def test_o_papeis_do_repositorio_so_le_senha_do_ambiente() -> None:
         "CREATE ROLE a LOGIN PASSWORD :'senha';",
         "\\getenv senha POSTGRES_APP_PASSWORD\n"
         "CREATE ROLE a PASSWORD 'lit' || :'senha';",
+        "\\getenv senha POSTGRES_APP_PASSWORD\nSELECT 'literal' AS senha \\gset\n"
+        "CREATE ROLE a LOGIN PASSWORD :'senha';",
     ],
     ids=[
         "literal",
@@ -69,6 +71,7 @@ def test_o_papeis_do_repositorio_so_le_senha_do_ambiente() -> None:
         "variavel-do-set",
         "variavel-sobrescrita-por-set",
         "literal-concatenado",
+        "variavel-sobrescrita-por-gset",
     ],
 )
 def test_password_que_nao_vem_de_variavel_lida_do_ambiente_reprova(
