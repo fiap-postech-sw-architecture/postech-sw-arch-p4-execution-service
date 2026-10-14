@@ -453,3 +453,38 @@ def test_o_security_yml_registra_o_pip_audit_e_o_trivy_no_summary(
 
     assert len(comandos) == 1
     assert comandos[0].startswith("scripts/ci/registra-no-summary.sh ")
+
+
+PADRAO = "../postech-sw-arch-p4-platform"
+
+
+@pytest.mark.parametrize(
+    ("variaveis", "platform", "overlay"),
+    [
+        ([], PADRAO, "kind"),
+        (["KIND_OVERLAY=kind-ci"], PADRAO, "kind-ci"),
+        (["KIND_OVERLAY=k3s"], PADRAO, "k3s"),
+        (["PLATFORM_DIR=/clone/platform"], "/clone/platform", "kind"),
+    ],
+    ids=["padroes", "kind-overlay", "k3s", "platform-dir"],
+)
+def test_kind_deploy_aceita_platform_dir_e_kind_overlay(
+    variaveis: list[str], platform: str, overlay: str
+) -> None:
+    """``PLATFORM_DIR`` (o clone do platform) e ``KIND_OVERLAY`` (kind, kind-ci ou
+    k3s) sao os nomes do alvo nos tres servicos. ``--no-print-directory``: o
+    make 4 dos runners escreve "Entering directory" na saida do ``-n`` quando o
+    teste roda dentro do ``make test``."""
+    resultado = subprocess.run(  # noqa: S603 - o Makefile do proprio repositorio
+        ["make", "-n", "--no-print-directory", "kind-deploy", *variaveis],  # noqa: S607
+        cwd=RAIZ,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    comando = " ".join(resultado.stdout.replace("\\\n", " ").split())
+    assert comando.startswith(f"{platform}/scripts/ci/implantar-servicos.sh")
+    assert f" --overlay {overlay} execution-service=" in comando
