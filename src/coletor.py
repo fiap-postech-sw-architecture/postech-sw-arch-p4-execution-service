@@ -166,7 +166,7 @@ _GAUGES: Final = (
 
 
 class ColetorDaApi:
-    """Os tres gauges por consulta, lidos a cada raspagem do ``/metrics``."""
+    """As tres gauges do coletor, calculadas a cada raspagem do ``/metrics``."""
 
     def __init__(self, engine: Engine, *, prazo_s: float = PRAZO_DA_RASPAGEM_S) -> None:
         self._engine = engine

@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     instrumentar_cliente_http(app.state.billing_client, app.state.provedor)
     app.state.billing_breaker = CircuitBreaker("billing")
-    # Os gauges por consulta (outbox, execucao e estoque) saem so da API, por uma
+    # As gauges do coletor (outbox, execucao e estoque) saem so da API, por uma
     # conexao propria, nova a cada raspagem, que nao disputa o pool das requisicoes.
     coletor = ColetorDaApi(criar_engine_de_metricas(url_do_banco))
     REGISTRY.register(coletor)

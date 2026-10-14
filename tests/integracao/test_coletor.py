@@ -374,7 +374,7 @@ def test_tabela_travada_omite_so_o_gauge_dela_dentro_do_prazo(
         coletado = _coletar(engine_de_metricas)
         gasto = time.monotonic() - inicio
 
-    # O prazo de 2 s da consulta corta a espera pelo lock e as outras duas gauges
+    # O statement_timeout de 2 s corta a espera pelo lock e as outras duas gauges
     # seguem na mesma conexao: uma trava custa 2 s, nao a raspagem.
     assert 1.5 < gasto < 3.5
     assert set(coletado) == TODAS - {ausente}

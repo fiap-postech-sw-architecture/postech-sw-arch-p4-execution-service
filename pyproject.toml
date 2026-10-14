@@ -21,9 +21,14 @@ dependencies = [
     "pika>=1.4.4",
     "jsonschema>=4.26.0",
     "rfc3339-validator>=0.1.4",
-    "opentelemetry-sdk>=1.45.1",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1",
+    # Contexto W3C pela outbox e pelo AMQP; exportacao OTLP/gRPC para o Jaeger
+    # (ADR-043), ligada por OTEL_ENABLED.
+    "opentelemetry-sdk>=1.45.1,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1,<2",
     "pyyaml>=6.0.3",
+    # Instrumentacao da API, do banco e do cliente HTTP do Billing. Par casado com
+    # o SDK 1.45.x: o SDK exige opentelemetry-semantic-conventions==0.66bN, entao
+    # atualizar o SDK e estes tres juntos.
     "opentelemetry-instrumentation-fastapi>=0.66b1,<0.67",
     "opentelemetry-instrumentation-sqlalchemy>=0.66b1,<0.67",
     "opentelemetry-instrumentation-httpx>=0.66b1,<0.67",
