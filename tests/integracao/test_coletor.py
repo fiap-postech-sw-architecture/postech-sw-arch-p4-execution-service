@@ -259,38 +259,50 @@ def ambiente_da_api(
 
 
 @pytest.fixture
-def api_com_uma_linha_pendente(
+def api_com_dados_do_coletor(
     ambiente_da_api: None, engine: Engine
 ) -> Iterator[TestClient]:
     with engine.begin() as conexao:
         _linha_da_outbox(conexao, "pendente", timedelta(seconds=60))
+        _execucao(
+            conexao,
+            [_item("servico", "SRV-A")],
+            finalizada_ha=DIA,
+            duracao=timedelta(seconds=600),
+        )
+        _reserva(conexao, "RECUSADA", ["PEC-A"], DIA)
     with TestClient(criar_app()) as cliente:
         yield cliente
 
 
 def test_metrics_da_api_traz_os_gauges_por_consulta(
-    api_com_uma_linha_pendente: TestClient,
+    api_com_dados_do_coletor: TestClient,
 ) -> None:
-    resposta = api_com_uma_linha_pendente.get("/metrics")
+    resposta = api_com_dados_do_coletor.get("/metrics")
 
     assert resposta.status_code == 200
     for familia in (IDADE, DURACAO, FALTA):
         assert f"# TYPE {familia} gauge" in resposta.text
+    # Lidas no registro, como o Prometheus as le: depois do caso que as dispara.
     idade = REGISTRY.get_sample_value(IDADE)
     assert idade is not None
     assert 59 <= idade < 70
+    assert REGISTRY.get_sample_value(DURACAO, {"servico": "SRV-A"}) == pytest.approx(
+        600.0
+    )
+    assert REGISTRY.get_sample_value(FALTA, {"sku": "PEC-A"}) == 1.0
 
 
 def test_raspagem_nao_disputa_o_pool_das_requisicoes(
-    api_com_uma_linha_pendente: TestClient,
+    api_com_dados_do_coletor: TestClient,
 ) -> None:
     # Pool de 5 mais 10 de excesso (os padroes): todo ocupado, como sob carga.
-    engine_da_api = api_com_uma_linha_pendente.app.state.session_factory.kw["bind"]
+    engine_da_api = api_com_dados_do_coletor.app.state.session_factory.kw["bind"]
     conexoes = [engine_da_api.connect() for _ in range(15)]
     try:
         assert engine_da_api.pool.checkedout() == 15
         inicio = time.monotonic()
-        resposta = api_com_uma_linha_pendente.get("/metrics")
+        resposta = api_com_dados_do_coletor.get("/metrics")
         gasto = time.monotonic() - inicio
     finally:
         for conexao in conexoes:
