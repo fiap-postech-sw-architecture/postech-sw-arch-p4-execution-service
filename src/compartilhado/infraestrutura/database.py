@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final
 from sqlalchemy import MetaData, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import registry, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from src.compartilhado.dominio.exceptions import EntidadeDuplicadaException
 from src.compartilhado.infraestrutura.ambiente import inteiro_opcional
@@ -44,6 +45,8 @@ _SOCKET_SEM_RESPOSTA: Final = {
     "keepalives_count": 3,
     "tcp_user_timeout": 10_000,
 }
+# Conexao da raspagem do /metrics: o banco que nao atende em 1 s nao entra nela.
+_CONNECT_TIMEOUT_DAS_METRICAS_S: Final = 1
 
 
 def criar_engine(url: str) -> Engine:
@@ -75,19 +78,25 @@ def criar_engine(url: str) -> Engine:
 
 
 def criar_engine_de_metricas(url: str) -> Engine:
-    """Engine so das consultas do ``/metrics``: uma conexao, fora do pool da API.
+    """Engine so das consultas do ``/metrics``: sem pool, uma conexao por raspagem.
 
     A raspagem nao disputa conexao com o trafego (com o pool cheio ela ficaria
-    sem metrica justo quando mais importa) e espera no maximo 2 s por ela.
+    sem metrica justo quando mais importa). Sem pool nao ha conexao aberta entre
+    duas raspagens que possa calar (o banco que para de responder sem fechar o
+    socket) e prender a seguinte, nem fila por conexao entre raspagens
+    simultaneas. A conexao nova espera 1 s no maximo (``connect_timeout``), contra
+    os 3 s do pool da API: o prazo de uma raspagem inteira e de 5 s.
     """
     return create_engine(
         url,
         hide_parameters=True,
-        pool_pre_ping=True,
-        pool_size=1,
-        max_overflow=0,
-        pool_timeout=2,
-        connect_args=argumentos_de_conexao(),
+        poolclass=NullPool,
+        connect_args={
+            **argumentos_de_conexao(),
+            "connect_timeout": _CONNECT_TIMEOUT_DAS_METRICAS_S,
+            # Aparece no pg_stat_activity: quem olha o banco acha a raspagem.
+            "application_name": "pytstop-execucao-metricas",
+        },
     )
 
 
