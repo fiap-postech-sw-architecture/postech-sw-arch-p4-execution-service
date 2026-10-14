@@ -527,11 +527,16 @@ def test_raspagem_nao_deixa_conexao_aberta(
         "SELECT count(*) FROM pg_stat_activity "
         "WHERE application_name = 'pytstop-execucao-metricas'"
     )
-    with engine.connect() as conexao:
-        antes = conexao.execute(contar).scalar_one()
-        _coletar(engine_de_metricas)
-        _esperar_a_thread_do_coletor()
-        depois = conexao.execute(contar).scalar_one()
+
+    def abertas() -> int:
+        # Uma transacao por leitura: o pg_stat_activity e um retrato por transacao.
+        with engine.connect() as conexao:
+            return conexao.execute(contar).scalar_one()
+
+    antes = abertas()
+    _coletar(engine_de_metricas)
+    _esperar_a_thread_do_coletor()
+    depois = abertas()
 
     assert (antes, depois) == (0, 0)
 
