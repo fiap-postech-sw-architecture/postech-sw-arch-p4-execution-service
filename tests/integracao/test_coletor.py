@@ -52,6 +52,9 @@ FALTA = "pytstop_pecas_em_falta"
 TODAS = {IDADE, DURACAO, FALTA}
 THREAD_DO_COLETOR = "coletor-da-api"
 NOME_NO_BANCO = "pytstop-execucao-metricas"
+CONTAR_CONEXOES = text(
+    "SELECT count(*) FROM pg_stat_activity WHERE application_name = :nome"
+)
 
 
 def _threads_do_coletor() -> list[threading.Thread]:
@@ -67,11 +70,30 @@ def _esperar_a_thread_do_coletor() -> None:
         pytest.fail("a thread do coletor nao terminou")
 
 
+def _conexoes_da_raspagem(engine: Engine) -> int:
+    """Quantas conexoes da raspagem o servidor tem agora. Uma transacao por leitura:
+    o pg_stat_activity e um retrato por transacao."""
+    with engine.connect() as conexao:
+        contagem = conexao.execute(CONTAR_CONEXOES, {"nome": NOME_NO_BANCO})
+        return int(contagem.scalar_one())
+
+
 @pytest.fixture(autouse=True)
-def _nenhuma_thread_do_coletor_sobra() -> Iterator[None]:
-    """A thread que a raspagem deixa para tras nao pode vazar para o teste seguinte."""
+def _nenhuma_raspagem_sobra(engine: Engine) -> Iterator[None]:
+    """Nem a thread nem a conexao da raspagem passam para o fim do teste.
+
+    A conexao importa para o TRUNCATE que limpa as tabelas depois dele: a consulta
+    das duas tabelas que ainda roda no servidor (presa no lock que o teste acabou de
+    soltar) pega as tabelas em outra ordem que o TRUNCATE, e as duas se esperariam
+    (deadlock, que o servidor desfaz reprovando o TRUNCATE). Este fixture sai antes
+    do que limpa as tabelas.
+    """
     yield
     _esperar_a_thread_do_coletor()
+    try:
+        esperar_ate(lambda: _conexoes_da_raspagem(engine) == 0, prazo_s=10)
+    except AssertionError:
+        pytest.fail("o servidor ainda tem a conexao da raspagem")
 
 
 @pytest.fixture
@@ -573,14 +595,9 @@ def test_a_conexao_da_raspagem_aparece_no_pg_stat_activity_e_some_com_ela(
 ) -> None:
     """Sem pool a conexao fecha com a raspagem: nada fica aberto entre duas, para
     calar e prender a seguinte. E ela aparece, com o nome dela, enquanto roda."""
-    contar = text(
-        "SELECT count(*) FROM pg_stat_activity WHERE application_name = :nome"
-    )
 
     def abertas() -> int:
-        # Uma transacao por leitura: o pg_stat_activity e um retrato por transacao.
-        with engine.connect() as conexao:
-            return int(conexao.execute(contar, {"nome": NOME_NO_BANCO}).scalar_one())
+        return _conexoes_da_raspagem(engine)
 
     assert abertas() == 0
     raspador = threading.Thread(target=_coletar, args=(abridor,))
