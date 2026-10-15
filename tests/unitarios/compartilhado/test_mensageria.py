@@ -52,6 +52,7 @@ from src.compartilhado.infraestrutura.mensageria import amqp, processo, telemetr
 from src.compartilhado.infraestrutura.mensageria import consumidor as modulo_consumidor
 from src.compartilhado.infraestrutura.mensageria.consumidor import Consumidor
 from src.compartilhado.infraestrutura.mensageria.contratos import CONTRATOS
+from tests.conftest import valor_da_serie
 from tests.fakes import FakeTransacaoDoComando
 
 if TYPE_CHECKING:
@@ -248,25 +249,36 @@ def test_provedor_com_otel_enabled_exporta_por_otlp(
     assert atributos["pytstop.processo"] == "consumidor"
 
 
-def test_configurar_telemetria_instala_o_provider_do_processo(
+def test_configurar_telemetria_instala_e_devolve_o_provider_do_processo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instalados: list[object] = []
+    propagadores: list[object] = []
     monkeypatch.setattr(telemetria.trace, "set_tracer_provider", instalados.append)
-    telemetria.configurar_telemetria("relay")
+    monkeypatch.setattr(telemetria, "set_global_textmap", propagadores.append)
+
+    devolvido = telemetria.configurar_telemetria("relay")
+
+    # So traceparent e tracestate: o padrao do SDK soma o baggage do chamador.
+    (propagador,) = propagadores
+    assert propagador.fields == {"traceparent", "tracestate"}
+    # Quem instala e dono do provider: devolve o mesmo que o global recebeu.
     (provedor,) = instalados
+    assert devolvido is provedor
     assert isinstance(provedor, TracerProvider)
     assert provedor.resource.attributes["pytstop.processo"] == "relay"
 
 
-def test_contexto_de_trace_nao_carrega_o_sdk_nem_o_grpc() -> None:
-    # A UoW da API importa a telemetria: o SDK e o exportador so carregam no
-    # relay e no consumidor (criar_provedor).
+def test_grpc_so_carrega_com_a_exportacao_ligada() -> None:
+    # Os tres processos montam o provider do SDK, mas o gRPC do exportador OTLP
+    # so entra com OTEL_ENABLED=true (criar_provedor).
     codigo = (
         "import sys\n"
-        "import src.compartilhado.infraestrutura.unit_of_work\n"
+        "from src.compartilhado.infraestrutura.mensageria.telemetria import "
+        "criar_provedor\n"
+        "criar_provedor({}, processo='api')\n"
         "carregados = [m for m in sys.modules if m.startswith(('grpc', "
-        "'opentelemetry.sdk', 'opentelemetry.exporter'))]\n"
+        "'opentelemetry.exporter'))]\n"
         "assert carregados == [], carregados\n"
     )
     subprocess.run([sys.executable, "-c", codigo], check=True, cwd=RAIZ)  # noqa: S603 - comando fixo do teste
@@ -444,6 +456,33 @@ def test_desfechos_com_ack_comitam_a_transacao_da_mensagem(
     # Ignorada tambem comita: o id fica gravado e a reentrega e duplicada.
     assert transacoes.comitadas == 1
     assert _consumidas("ReservarPecas", resultado) == antes + 1
+
+
+@pytest.mark.parametrize(
+    ("handler", "resultado", "passo"),
+    [
+        pytest.param(_Handler(), "processada", "basic_ack", id="ack"),
+        pytest.param(
+            _Handler(RuntimeError("defeito")), "dlq", "basic_reject", id="reject"
+        ),
+    ],
+)
+def test_mensagem_so_conta_depois_do_ack_ou_do_reject(
+    monkeypatch: pytest.MonkeyPatch, handler: _Handler, resultado: str, passo: str
+) -> None:
+    # A conexao cai no ack: o broker reentrega, e contar antes contaria a mesma
+    # entrega duas vezes.
+    def conexao_perdida(*_: object, **__: object) -> None:
+        raise StreamLostError
+
+    canal = _Canal()
+    monkeypatch.setattr(canal, passo, conexao_perdida)
+    antes = _consumidas("ReservarPecas", resultado)
+
+    with pytest.raises(StreamLostError):
+        _consumir(handler, canal=canal)
+
+    assert _consumidas("ReservarPecas", resultado) == antes
 
 
 def test_id_ja_processado_recebe_ack_sem_chamar_o_handler() -> None:
@@ -776,6 +815,7 @@ def test_atributos_do_span_sao_so_messaging_com_ids_conferidos(
     (span,) = [s for s in spans.get_finished_spans() if s.name.startswith("process")]
     assert dict(span.attributes or {}) == {
         "messaging.system": "rabbitmq",
+        "messaging.operation.type": "process",
         "messaging.destination.name": "execucao.comandos",
         "messaging.message.id": corpo["id"],
         "pytstop.resultado": "processada",
@@ -930,9 +970,16 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     monkeypatch.setenv("RABBITMQ_URL", _URL)
     monkeypatch.setattr(modulo, classe, _ProcessoFalso)
     monkeypatch.setattr(modulo, "criar_engine", lambda _url: _EngineFalsa())
+    instrumentados: list[object] = []
+    provedor = TracerProvider(shutdown_on_exit=False)
+    monkeypatch.setattr(
+        modulo,
+        "instrumentar_banco",
+        lambda engine, provedor_: instrumentados.append((engine, provedor_)),
+    )
     monkeypatch.setattr(modulo, "parada_por_sinal", lambda: parado)
     monkeypatch.setattr(modulo, "configurar_logging", lambda: None)
-    monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: None)
+    monkeypatch.setattr(modulo, "configurar_telemetria", lambda _processo: provedor)
     monkeypatch.setattr(modulo, "servir_metricas", lambda: None)
 
     modulo.main()
@@ -943,6 +990,9 @@ def test_main_executa_o_processo_com_os_sinais_proprios_e_libera_o_engine(
     assert sinais._pronto.name == f"{nome}-pronto"
     assert processo_.parar is parado
     assert _EngineFalsa.disposta
+    # O mesmo engine do processo, com o provider que o processo instalou: sem isso
+    # nenhuma consulta dele viraria span (ou iria para outro provider).
+    assert instrumentados == [(processo_.args[0], provedor)]
 
 
 # --- laco do consumidor (sem broker) ------------------------------------------
@@ -987,6 +1037,10 @@ class _CanalFalso:
 
     def confirm_delivery(self) -> None:
         pass
+
+
+def _reconexoes(componente: str) -> float:
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente=componente)
 
 
 def _rodar_laco(
@@ -1096,9 +1150,12 @@ def test_assinatura_cancelada_pelo_broker_vira_nova_assinatura(
         assert canal.ao_cancelar is not None
         canal.ao_cancelar(object())  # Basic.Cancel: o pika so chama o callback
 
+    antes = _reconexoes("consumidor")
     assinaturas, backoff = _rodar_laco(monkeypatch, cancelar, tmp_path)
     assert (assinaturas, backoff.esperas) == (2, 1)
     assert '"error": "ConsumerCancelled"' in log_capturado.getvalue()
+    # Uma contagem por espera antes de reconectar, so do consumidor.
+    assert _reconexoes("consumidor") == antes + 1
 
 
 def test_copia_recusada_pelo_broker_reconecta_com_backoff(
@@ -1108,9 +1165,13 @@ def test_copia_recusada_pelo_broker_reconecta_com_backoff(
         # basic_publish da copia num canal que o broker fechou (403 ou 406).
         raise ChannelClosedByBroker(403, "ACCESS_REFUSED")
 
+    antes = _reconexoes("consumidor")
+    relay_antes = _reconexoes("relay")
     assinaturas, backoff = _rodar_laco(monkeypatch, recusar, tmp_path)
     assert (assinaturas, backoff.esperas) == (2, 1)
     assert '"error": "ChannelClosedByBroker"' in log_capturado.getvalue()
+    assert _reconexoes("consumidor") == antes + 1
+    assert _reconexoes("relay") == relay_antes
 
 
 def test_nome_do_broker_sem_resolucao_reconecta_com_backoff_fora_da_prontidao(

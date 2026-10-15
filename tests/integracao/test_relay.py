@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID, uuid4
 
 import pytest
+from opentelemetry.trace import StatusCode
 from prometheus_client import REGISTRY
 from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
@@ -37,6 +38,7 @@ from src.compartilhado.infraestrutura.mensageria.relay import (
     BrokerIndisponivelError,
     Relay,
 )
+from tests.conftest import valor_da_serie
 from tests.integracao.broker import EmSegundoPlano, esperar_ate
 from tests.integracao.transacao import linha_pendente
 
@@ -135,7 +137,9 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     session_factory: sessionmaker[Session],
     relay: Callable[..., Relay],
     outbox: Callable[[], list[dict[str, Any]]],
+    spans: InMemorySpanExporter,
 ) -> None:
+    publicadas_antes = _publicadas("ReservaLiberada")
     with broker.canal() as canal:
         canal.queue_unbind("os.eventos", "pytstop.eventos", "evento.execucao.#")
     try:
@@ -149,6 +153,15 @@ def test_mensagem_sem_rota_conta_tentativa_e_nao_vira_entregue(
     (linha,) = outbox()
     assert linha["status"] == "pendente"
     assert linha["ultimo_erro"] == "UnroutableError"
+    # A serie conta a confirmacao do broker: a publicacao sem rota nao entra.
+    assert _publicadas("ReservaLiberada") == publicadas_antes
+    # O span da publicacao marca o erro e leva o motivo em atributo de texto fixo.
+    publicacao = next(
+        s for s in spans.get_finished_spans() if s.name == "publish ReservaLiberada"
+    )
+    assert publicacao.status.status_code is StatusCode.ERROR
+    assert publicacao.status.description is None
+    assert (publicacao.attributes or {})["pytstop.falha"] == "UnroutableError"
 
 
 def test_publicacao_devolvida_nao_leva_o_corpo_para_o_log(
@@ -272,6 +285,14 @@ def _vezes_fora_do_ar(log: io.StringIO) -> int:
     return log.getvalue().count('"dependencia": "broker"')
 
 
+def _reconexoes() -> float:
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente="relay")
+
+
+def _publicadas(tipo: str) -> float:
+    return valor_da_serie("pytstop_mensagens_publicadas_total", tipo=tipo)
+
+
 def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
     broker: Broker,
     session_factory: sessionmaker[Session],
@@ -281,6 +302,7 @@ def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
     log_capturado: io.StringIO,
 ) -> None:
     pronto = tmp_path / "relay-pronto"
+    reconexoes_antes = _reconexoes()
     with EmSegundoPlano(relay()):
         esperar_ate(pronto.exists)
         broker.rabbitmqctl("stop_app")
@@ -297,6 +319,8 @@ def test_broker_parado_nao_gasta_tentativa_e_a_entrega_sai_na_volta(
         esperar_ate(lambda: outbox()[0]["status"] == "entregue", prazo_s=60)
     assert outbox()[0]["tentativas"] == 0
     assert esperar_ate(lambda: broker.pegar("os.eventos"))
+    # Cada espera antes de reconectar conta uma vez, com o log dela.
+    assert _reconexoes() - reconexoes_antes == _vezes_fora_do_ar(log_capturado) >= 2
 
 
 def test_queda_real_do_broker_no_meio_do_lote_devolve_as_linhas_sem_gastar_tentativa(
@@ -375,12 +399,15 @@ def test_banco_fora_tira_a_prontidao_e_o_gauge_vira_nan(
     morto = criar_engine("postgresql://x:y@127.0.0.1:1/nada")  # gitleaks:allow
     sinais = SinaisDoProcesso(tmp_path / "hb", tmp_path / "pronto")
     relay = Relay(morto, broker.url("execucao"), sinais, backoff=Backoff(0.05, 0.1))
+    reconexoes_antes = _reconexoes()
     with EmSegundoPlano(relay):
         esperar_ate(lambda: "relay_dependency_unavailable" in log_capturado.getvalue())
         assert not (tmp_path / "pronto").exists()
         assert (tmp_path / "hb").exists()
     assert math.isnan(REGISTRY.get_sample_value("outbox_pendentes") or 0.0)
     assert '"dependencia": "database"' in log_capturado.getvalue()
+    # A espera por causa do banco nao e reconexao ao broker.
+    assert _reconexoes() == reconexoes_antes
 
 
 def test_retencao_apaga_entregues_e_processadas_antigas(
@@ -957,8 +984,7 @@ def test_metricas_do_relay_contam_publicadas_e_pendentes(
     broker_falso: type[_BrokerFalso],
 ) -> None:
     broker_falso.conexoes = 1
-    chave = {"tipo": "ReservaLiberada"}
-    antes = REGISTRY.get_sample_value("pytstop_mensagens_publicadas_total", chave) or 0
+    antes = _publicadas("ReservaLiberada")
     for _ in range(2):
         _gravar(engine, daqui_a=timedelta(hours=1))  # seguem pendentes
     relay = _relay_falso(engine, sinais)
@@ -977,8 +1003,7 @@ def test_metricas_do_relay_contam_publicadas_e_pendentes(
         _gravar(engine)
     with EmSegundoPlano(relay):
         esperar_ate(lambda: len(broker_falso.publicadas) == 3)
-    depois = REGISTRY.get_sample_value("pytstop_mensagens_publicadas_total", chave)
-    assert depois == antes + 3
+    assert _publicadas("ReservaLiberada") == antes + 3
 
 
 def test_encerramento_gracioso_tira_a_prontidao_e_mantem_o_heartbeat(

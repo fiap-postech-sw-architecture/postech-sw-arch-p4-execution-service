@@ -17,6 +17,7 @@ from src.compartilhado.infraestrutura.logging import (
     redigir_pii_erro,
     scrub_pii,
 )
+from tests.conftest import provedor_dos_testes
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -601,7 +602,7 @@ def test_criar_app_configura_o_log_json_antes_do_lifespan(
     from src.main import criar_app
 
     logging.getLogger().handlers = []
-    criar_app()  # sem entrar no lifespan
+    criar_app(provedor_dos_testes())  # sem entrar no lifespan
     capsys.readouterr()
 
     logging.getLogger("uvicorn.error").info("Started server process [1]")

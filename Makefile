@@ -42,20 +42,23 @@ test:
 check: lock-check lint lint-arch typecheck security test
 	@echo "Todos os gates passaram"
 
-# Smoke da imagem pelo entrypoint real (migracao, seed), o job build do CI: sobe
-# a stack, confere a readiness (banco), que rota autenticada sem token responde
-# 401, que a imagem roda como 1001:1001, que a resposta nao traz o header
-# `server`, que as linhas de boot do uvicorn saem em JSON e que ele nao escreve
-# access log (so o `http_request` estruturado do middleware), que o boot nao traz
-# o aviso da telemetria automatica do FastAPI (o compose leva o endpoint OTLP no
-# ambiente da API, como o cluster); que relay e
-# consumidor estao saudaveis (broker e banco conectados, heartbeat em dia), que
-# os contratos de mensageria estao na imagem (e a topologia do RabbitMQ, com a
-# senha do admin de demonstracao, nao), que o relay conectou ao broker e
-# que o consumidor assinou a execucao.comandos; que a imagem, com
-# ENVIRONMENT=production, recusa a senha de demonstracao do compose (o compose
-# sobe com development); e
-# derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
+# Smoke da imagem pelo entrypoint real (migracao, seed), o job build do CI. Sobe
+# a stack e confere:
+# - a readiness da API (banco), o 401 de rota autenticada sem token, a imagem
+#   rodando como 1001:1001 e a resposta sem o header `server`;
+# - as linhas de boot do uvicorn em JSON, sem access log dele (so o
+#   `http_request` estruturado do middleware) e o boot sem o aviso da telemetria
+#   automatica do FastAPI (o compose leva o endpoint OTLP no ambiente da API,
+#   como o cluster);
+# - relay e consumidor saudaveis (broker e banco conectados, heartbeat em dia),
+#   o relay conectado ao broker e o consumidor assinando a execucao.comandos;
+# - os contratos de mensageria na imagem, e a topologia do RabbitMQ (com a senha
+#   do admin de demonstracao) fora dela;
+# - o /metrics de cada processo, logo depois do boot e sem trafego, com as
+#   familias e as series de rotulo fechado dele (scripts/smoke_metricas.py);
+# - a imagem, com ENVIRONMENT=production, recusando a senha de demonstracao do
+#   compose (o compose sobe com development).
+# Derruba tudo com os volumes, inclusive em falha (depois de mostrar os logs).
 # Projeto e portas proprios para nao derrubar a stack do compose-up.
 API_IMAGE ?= pytstop-execution-service:dev
 SMOKE_PORT ?= 18003
@@ -102,10 +105,19 @@ smoke:
 	&& { $(SMOKE_COMPOSE) exec -T rabbitmq rabbitmqctl -q list_consumers queue_name \
 		| grep -qx 'execucao.comandos' \
 		|| { echo "smoke: o consumidor nao assinou a execucao.comandos" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T api python - api http://127.0.0.1:8000/metrics \
+		< scripts/smoke_metricas.py \
+		|| { echo "smoke: o /metrics da API nao traz as familias e series dela" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T relay python - relay http://127.0.0.1:9100/metrics \
+		< scripts/smoke_metricas.py \
+		|| { echo "smoke: o /metrics do relay nao traz as familias e series dele" >&2; false; }; } \
+	&& { $(SMOKE_COMPOSE) exec -T consumidor python - consumidor http://127.0.0.1:9100/metrics \
+		< scripts/smoke_metricas.py \
+		|| { echo "smoke: o /metrics do consumidor nao traz as familias e series dele" >&2; false; }; } \
 	&& { $(SMOKE_COMPOSE) exec -T -e ENVIRONMENT=production api python -c "$(SMOKE_GUARDA)" 2>&1 \
 		| grep -q 'DATABASE_URL usa a senha de demonstracao' \
 		|| { echo "smoke: com ENVIRONMENT=production a imagem aceita a senha de demonstracao" >&2; false; }; } \
-	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, sem aviso de telemetria, contratos na imagem e topologia fora, relay e consumidor prontos, senha de demonstracao recusada em producao" \
+	&& echo "smoke ok: readiness 200, 401 sem token, usuario 1001:1001, sem header server, boot em JSON, sem access log do uvicorn, sem aviso de telemetria, contratos na imagem e topologia fora, relay e consumidor prontos, familias e series dos tres processos no /metrics, senha de demonstracao recusada em producao" \
 	|| status=$$?; \
 	if [ $$status -ne 0 ]; then $(SMOKE_COMPOSE) logs --no-color --tail=200; fi; \
 	$(SMOKE_COMPOSE) down -v; \

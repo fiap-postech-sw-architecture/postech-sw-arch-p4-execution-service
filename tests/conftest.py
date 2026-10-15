@@ -18,16 +18,24 @@ import structlog
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from prometheus_client import REGISTRY
 
 from src.compartilhado.infraestrutura.logging import configurar_logging
+from src.compartilhado.infraestrutura.mensageria import relay as modulo_relay
+from src.compartilhado.infraestrutura.mensageria.telemetria import (
+    criar_provedor,
+    instalar_propagador,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+    from opentelemetry.sdk.trace import TracerProvider
 
 # Colima (macOS): o socket do Docker nao fica em /var/run/docker.sock. Ajusta o
 # ambiente antes de o testcontainers ler DOCKER_HOST, para `uv run pytest` puro
@@ -40,11 +48,28 @@ if "DOCKER_HOST" not in os.environ and _SOCKET_COLIMA.exists():
     )
 
 # Provider global do SDK com exportador em memoria, instalado uma vez (o OTel
-# so aceita um por processo): os testes leem os spans de relay e consumidor.
+# so aceita um por processo): os testes leem os spans dos tres processos. E o
+# provider de producao (amostrador e limpeza do texto de erro), sem exportacao
+# OTLP: os testes veem o que iria para o Jaeger.
 _SPANS = InMemorySpanExporter()
-_PROVEDOR = TracerProvider()
+_PROVEDOR = criar_provedor({}, processo="testes")
 _PROVEDOR.add_span_processor(SimpleSpanProcessor(_SPANS))
 trace.set_tracer_provider(_PROVEDOR)
+instalar_propagador()
+
+
+def valor_da_serie(nome: str, **rotulos: str) -> float:
+    """O valor da serie no registro, ou 0 se ela ainda nao existe (contador que
+    ninguem incrementou e que nao nasce com zero)."""
+    return REGISTRY.get_sample_value(nome, rotulos) or 0.0
+
+
+def provedor_dos_testes() -> TracerProvider:
+    """O provider de producao da sessao (exportador em memoria), para
+    ``criar_app(provedor=...)``: o app dos testes usa o dos testes, nao instala
+    outro (nem deixa um exportador de sobra com ``OTEL_ENABLED`` no ambiente)."""
+    return _PROVEDOR
+
 
 KID = "chave-de-teste"
 EMISSOR = "pytstop-os-service"
@@ -185,3 +210,53 @@ def spans() -> InMemorySpanExporter:
     """Spans terminados durante o teste."""
     _SPANS.clear()
     return _SPANS
+
+
+@pytest.fixture(autouse=True)
+def _telemetria_hermetica() -> Iterator[None]:
+    """Nenhum teste instala um provider global por conta propria: ``criar_app``
+    sem ``provedor=`` instalaria o do processo (e um exportador, com
+    ``OTEL_ENABLED`` no ambiente). O teste que quer exercitar esse caminho troca o
+    ``configurar_telemetria`` por um espiao.
+
+    Um ``MonkeyPatch`` proprio, nao o fixture ``monkeypatch``: este e compartilhado
+    com o teste, e o que o teste troca (o ``connect`` de um engine) so voltaria
+    depois dos fixtures de limpeza que dependem desse engine.
+    """
+
+    def sem_provider_global(_processo: str) -> TracerProvider:
+        msg = "em teste, passe provedor= a criar_app (provedor_dos_testes())"
+        raise AssertionError(msg)
+
+    with pytest.MonkeyPatch.context() as isolado:
+        isolado.setattr("src.main.configurar_telemetria", sem_provider_global)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _gauges_do_relay_sem_a_funcao_de_outro_teste() -> Iterator[None]:
+    """Devolve a zero as gauges ``outbox_pendentes`` e ``outbox_dead`` depois do teste.
+
+    Elas sao do modulo, e cada ``Relay`` aponta a funcao delas para o proprio banco:
+    a do ultimo teste que criou um ficaria valendo no ``/metrics`` de todo teste
+    seguinte, esperando um lock de outra tabela travada (5 s cada) dentro do
+    ``generate_latest``, fora de qualquer prazo do coletor. O resultado dependia da
+    ordem em que a suite rodava.
+    """
+    yield
+    modulo_relay._PENDENTES.set_function(lambda: 0.0)
+    modulo_relay._DEAD.set_function(lambda: 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _sem_instrumentacao_de_banco_residual() -> Iterator[None]:
+    """O instrumentador do SQLAlchemy e um singleton: cada teste instrumenta o seu.
+
+    O lifespan do app instrumenta o engine dele; sem desfazer, o engine do teste
+    seguinte nao seria instrumentado (o instrumentador recusa a segunda chamada)
+    e o ``Engine.connect`` ficaria embrulhado na suite inteira.
+    """
+    yield
+    instrumentador = SQLAlchemyInstrumentor()
+    if instrumentador.is_instrumented_by_opentelemetry:
+        instrumentador.uninstrument()

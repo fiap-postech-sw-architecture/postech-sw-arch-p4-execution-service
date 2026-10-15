@@ -104,6 +104,11 @@ def produtor(tipo: str) -> str | None:
     return _produtores().get(tipo)
 
 
+def tipos_publicados_por(usuario: str) -> frozenset[str]:
+    """Tipos que o usuario do RabbitMQ publica (as operacoes de envio do AsyncAPI)."""
+    return frozenset(tipo for tipo, dono in _produtores().items() if dono == usuario)
+
+
 def routing_key(tipo: str) -> str:
     """``evento.execucao.<tipo em snake_case>`` (convencao do AsyncAPI do platform)."""
     return "evento.execucao." + re.sub(r"(?<!^)(?=[A-Z])", "_", tipo).lower()

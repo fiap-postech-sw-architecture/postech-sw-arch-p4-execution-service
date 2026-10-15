@@ -13,6 +13,7 @@ from src.compartilhado.interfaces.autenticacao import CREDENCIAL_INVALIDA
 from src.estoque.dominio.sku import Sku
 from src.estoque.infraestrutura.repository import ItemEstoqueSQLAlchemyRepository
 from src.estoque.infraestrutura.seed import ITENS_DEMO, main, semear
+from tests.conftest import provedor_dos_testes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,7 +125,7 @@ def test_jwks_fora_do_ar_e_503_com_retry_after_e_sem_token_e_401(
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
     monkeypatch.setenv("BILLING_URL", "http://billing.test")
-    with TestClient(criar_app()) as api:
+    with TestClient(criar_app(provedor_dos_testes())) as api:
         com_token = api.get(
             "/api/v1/fila", headers={"Authorization": f"Bearer {emitir_token('admin')}"}
         )
@@ -151,7 +152,10 @@ def test_jwks_pendurado_nao_atrasa_as_demais_rotas(
     monkeypatch.setenv("JWKS_URL", servidor_jwks_proprio.url)
     monkeypatch.setenv("BILLING_URL", "http://billing.test")
     autenticado = {"Authorization": f"Bearer {emitir_token('admin')}"}
-    with TestClient(criar_app()) as api, ThreadPoolExecutor(21) as executor:
+    with (
+        TestClient(criar_app(provedor_dos_testes())) as api,
+        ThreadPoolExecutor(21) as executor,
+    ):
         inicio = time.monotonic()
         protegidas = [
             executor.submit(api.get, "/api/v1/fila", headers=autenticado)
@@ -221,7 +225,10 @@ def test_boot_recusa_url_sem_esquema(
     monkeypatch.setenv("JWKS_URL", jwks_url)
     monkeypatch.setenv("BILLING_URL", "http://billing.test")
     monkeypatch.setenv(variavel, "servico:8000")
-    with pytest.raises(RuntimeError, match=variavel), TestClient(criar_app()):
+    with (
+        pytest.raises(RuntimeError, match=variavel),
+        TestClient(criar_app(provedor_dos_testes())),
+    ):
         pass
 
 
@@ -239,5 +246,8 @@ def test_boot_falha_sem_configuracao_obrigatoria(
     monkeypatch.setenv("JWKS_URL", jwks_url)
     monkeypatch.setenv("BILLING_URL", "http://billing.test")
     monkeypatch.delenv(ausente)
-    with pytest.raises(RuntimeError, match=ausente), TestClient(criar_app()):
+    with (
+        pytest.raises(RuntimeError, match=ausente),
+        TestClient(criar_app(provedor_dos_testes())),
+    ):
         pass

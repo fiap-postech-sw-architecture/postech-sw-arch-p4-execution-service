@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from starlette.middleware.base import RequestResponseEndpoint
     from starlette.requests import Request
 
-_ROTA_NAO_ROTEADA: Final = "nao_roteada"
+ROTA_NAO_ROTEADA: Final = "nao_roteada"
 
 # 5ms..5s: do hit simples ao pior caso com lock pessimista ou retry no Billing.
 _LATENCIA_HTTP = Histogram(
@@ -38,7 +38,7 @@ _LATENCIA_HTTP = Histogram(
 def _rota_template(request: Request) -> str:
     rota = request.scope.get("route")
     template = getattr(rota, "path_format", None) or getattr(rota, "path", None)
-    return template if isinstance(template, str) else _ROTA_NAO_ROTEADA
+    return template if isinstance(template, str) else ROTA_NAO_ROTEADA
 
 
 class MetricasHTTPMiddleware(BaseHTTPMiddleware):

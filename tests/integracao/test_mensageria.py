@@ -18,7 +18,6 @@ import pika
 import pytest
 from opentelemetry.trace import SpanKind
 from pika.exceptions import ChannelClosedByBroker
-from prometheus_client import REGISTRY
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -54,6 +53,7 @@ from src.estoque.infraestrutura.seed import semear
 from src.estoque.interfaces.comandos import reservar_pecas
 from src.execucao.dominio.execucao import Execucao, Prioridade
 from src.execucao.infraestrutura.repository import ExecucaoSQLAlchemyRepository
+from tests.conftest import valor_da_serie
 from tests.integracao.broker import (
     TTL_DE_TESTE_MS,
     EmSegundoPlano,
@@ -81,10 +81,13 @@ VEICULO_ID = UUID("3277db7e-8283-4dd9-89e7-df3eeacb8710")
 
 
 def consumidas(tipo: str, resultado: str) -> float:
-    valor = REGISTRY.get_sample_value(
-        "pytstop_mensagens_consumidas_total", {"tipo": tipo, "resultado": resultado}
+    return valor_da_serie(
+        "pytstop_mensagens_consumidas_total", tipo=tipo, resultado=resultado
     )
-    return valor or 0.0
+
+
+def reconexoes_do_consumidor() -> float:
+    return valor_da_serie("pytstop_reconexoes_ao_broker_total", componente="consumidor")
 
 
 def _esperar_consumo(tipo: str, resultado: str, antes: float, vezes: int = 1) -> None:
@@ -168,6 +171,9 @@ def test_comando_vira_evento_do_contrato_com_causa_e_trace_encadeados(
     publicacao = _span(spans, "publish PecasReservadas")
     assert processo.kind is SpanKind.CONSUMER
     assert publicacao.kind is SpanKind.PRODUCER
+    # A tag que o Jaeger filtra nos tres servicos: send e process.
+    assert (processo.attributes or {})["messaging.operation.type"] == "process"
+    assert (publicacao.attributes or {})["messaging.operation.type"] == "send"
     assert processo.parent.span_id == origem.context.span_id
     assert publicacao.parent.span_id == processo.context.span_id
     assert {s.context.trace_id for s in (origem, processo, publicacao)} == {
@@ -1376,6 +1382,7 @@ def test_banco_fora_para_o_consumo_em_vez_de_gastar_a_escada_de_retry(
         Backoff(0.05, 0.1),
     )
     antes = consumidas("ReservarPecas", "retry")
+    reconexoes_antes = reconexoes_do_consumidor()
     with EmSegundoPlano(consumidor):
         esperar_ate((tmp_path / "pronto").exists)
         broker.publicar_comando(
@@ -1394,6 +1401,8 @@ def test_banco_fora_para_o_consumo_em_vez_de_gastar_a_escada_de_retry(
         assert broker.contar("execucao.comandos") == 1
         assert not (tmp_path / "pronto").exists()
     assert consumidas("ReservarPecas", "retry") == antes + 1
+    # A pausa por causa do banco nao e reconexao ao broker.
+    assert reconexoes_do_consumidor() == reconexoes_antes
 
 
 def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
@@ -1407,6 +1416,7 @@ def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
     # levanta erro; sem tratar, o processo seguiria pronto sem consumir nada.
     _criar_item(engine, "PEC-VELA", 5)
     pronto = tmp_path / "consumidor-pronto"
+    reconexoes_antes = reconexoes_do_consumidor()
     with EmSegundoPlano(consumidor()):
         esperar_ate(pronto.exists)
         with broker.canal() as canal:
@@ -1428,6 +1438,7 @@ def test_consumidor_assina_de_novo_quando_o_broker_cancela_a_assinatura(
             envelope_de_comando("ReservarPecas", _reservar(uuid4()))
         )
         esperar_ate(outbox)
+    assert reconexoes_do_consumidor() >= reconexoes_antes + 1
 
 
 def _trace(traceparent: str | None) -> str | None:
