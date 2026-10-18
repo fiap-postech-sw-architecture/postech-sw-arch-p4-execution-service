@@ -38,6 +38,7 @@ def test_placa_antiga_e_mercosul_normalizadas(placa: str, normalizada: str) -> N
         pytest.param("1BC1234", id="digito-no-inicio"),
         # A placa inteira tem de casar o formato, nao so o comeco ou parte dela.
         pytest.param("BRA12345", id="antiga-com-digito-a-mais"),
+        pytest.param("BRA123", id="antiga-com-digito-a-menos"),
         pytest.param("BRA2E1", id="mercosul-com-digito-a-menos"),
         pytest.param("BRA2E194", id="mercosul-com-digito-a-mais"),
         pytest.param("ANONIMIZADO:x", id="marcador-da-lgpd-nao-e-entrada"),
