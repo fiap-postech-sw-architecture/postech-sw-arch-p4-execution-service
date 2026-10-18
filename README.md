@@ -203,12 +203,13 @@ Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/a
 
 Um bloco por fluxo, com o método e a rota do OpenAPI. Os comandos rodam contra a stack completa no kind, pela borda (o Kong do `platform`, com certificado autoassinado, daí o `-k`), porque as rotas autenticadas validam o token no JWKS do OS Service; com o `make compose-up` sozinho só as sondas respondem, em `http://127.0.0.1:8003`.
 
-Preparação: o token do admin, que pode agir em todas as rotas, pelo login do OS Service. A senha do admin fica no Secret `os-admin`, e o `printf`, embutido no shell, a entrega ao `curl` pela entrada padrão, fora da lista de processos. Um mecânico cadastrado pelo admin no OS Service (`POST /api/v1/autenticacao/registrar`) usa o próprio token nas mesmas rotas de diagnóstico e execução.
+Preparação: o token do admin, que pode agir em todas as rotas, pelo login do OS Service. O e-mail do admin é a chave `ADMIN_EMAIL` do ConfigMap do OS Service, achado pela chave e não pelo nome, como no [runbook da saga](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/operacao/runbook-saga.md) do `platform`; a senha fica no Secret `os-admin`, e o `printf`, embutido no shell, a entrega ao `curl` pela entrada padrão, fora da lista de processos. Um mecânico cadastrado pelo admin no OS Service (`POST /api/v1/autenticacao/registrar`) usa o próprio token nas mesmas rotas de diagnóstico e execução.
 
 ```bash
 export BASE_URL=https://localhost/execucao
+email=$(kubectl --context kind-pytstop-p4 -n pytstop-os get configmaps -o json | jq -r 'first(.items[].data.ADMIN_EMAIL // empty)')
 senha=$(kubectl --context kind-pytstop-p4 -n pytstop-os get secret os-admin -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d)
-export TOKEN=$(printf '{"email": "admin@pytstop.dev", "senha": "%s"}' "$senha" \
+export TOKEN=$(printf '{"email": "%s", "senha": "%s"}' "$email" "$senha" \
   | curl -sk https://localhost/os/api/v1/autenticacao/login -H 'Content-Type: application/json' --data @- \
   | jq -r .access_token)
 ```
