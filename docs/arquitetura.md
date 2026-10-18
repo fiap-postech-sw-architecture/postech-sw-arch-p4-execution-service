@@ -188,7 +188,7 @@ A quantidade livre (`quantidade_disponivel - quantidade_reservada`) não é colu
 | `status` | `varchar(20)` | não | `CHECK` com os quatro estados (`ck_execucoes_status`) |
 | `prioridade` | `varchar(10)` | não | `CHECK IN ('normal', 'alta')` (`ck_execucoes_prioridade`), o enum do contrato `AgendarExecucao` |
 | `enfileirada_em` | `timestamptz` | não | desempate da fila dentro da mesma prioridade |
-| `veiculo` | `jsonb` | sim | cópia do retrato do diagnóstico, para a fila mostrar o carro; nula na lápide |
+| `veiculo` | `jsonb` | sim | cópia do retrato do diagnóstico, para a fila mostrar o carro; nula na lápide e quando a ordem não tem retrato no diagnóstico (`VeiculosPort.da_ordem` devolve `None`, [`ports.py`](../src/execucao/aplicacao/ports.py)) |
 | `mecanico_id` | `uuid` | sim | quem iniciou; o admin age em nome dele sem trocá-lo |
 | `iniciada_em`, `finalizada_em`, `cancelada_em` | `timestamptz` | sim | uma por transição |
 | `agendamento_id` | `uuid` | sim | `id` do `AgendarExecucao`: o `causation_id` do início e da finalização; nulo na lápide |
@@ -261,7 +261,7 @@ stateDiagram-v2
 
 | Agregado | Estado final | O que acontece com o comando que chega depois |
 |---|---|---|
-| Diagnóstico | `DESCARTADO` (e `CONCLUIDO` para o `SolicitarDiagnostico` atrasado) | `DescartarDiagnostico` repetido reemite `DiagnosticoDescartado`; `SolicitarDiagnostico` atrasado é descartado com log |
+| Diagnóstico | `DESCARTADO` | `DescartarDiagnostico` repetido reemite `DiagnosticoDescartado`; `SolicitarDiagnostico` atrasado, com o diagnóstico já `CONCLUIDO` ou `DESCARTADO`, é descartado com log |
 | Reserva | `LIBERADA`, `CONSUMIDA`, `RECUSADA` | `ReservarPecas` repetido reemite a resposta enquanto a reserva está `ATIVA` ou `RECUSADA` e é descartado depois de `LIBERADA` ou `CONSUMIDA`; `LiberarReserva` repetido reemite `ReservaLiberada` e, com a reserva `CONSUMIDA`, é ignorado |
 | Execução | `FINALIZADA`, `CANCELADA` | `CancelarExecucao` repetido reemite `ExecucaoCancelada` e, depois do início, é ignorado; `AgendarExecucao` repetido reemite a posição atual enquanto `AGUARDANDO` e é descartado depois |
 
@@ -404,7 +404,7 @@ sequenceDiagram
     C->>DB: diagnósticos do veículo, pelo índice do veiculo_id
     C->>DB: placa vira ANONIMIZADO:{veiculo_id}, descrição e observações viram o marcador
     C->>DB: execuções do veículo: a placa da cópia vira ANONIMIZADO:{veiculo_id}
-    C->>DB: outbox pendente dessas ordens: observações viram o marcador
+    C->>DB: outbox dessas ordens, em qualquer status: observações viram o marcador
     C->>DB: commit, sem resposta
 ```
 
@@ -460,7 +460,7 @@ O `causation_id` é como o orquestrador casa cada evento: a resposta a um comand
 - **Responsável e auditoria**: só o mecânico que iniciou conclui ou finaliza; o admin age em nome dele sem trocar o responsável, e toda ação do admin (inclusive as escritas no estoque) gera o log `audit` com ação, ator e alvo, só com identificadores ([`responsavel.py`](../src/compartilhado/aplicacao/responsavel.py)).
 - **Dado pessoal guardado**: o retrato do veículo (placa, marca, modelo, ano e o `veiculo_id`), a descrição do problema e as observações. Nada de nome, documento ou contato do cliente, que ficam no OS Service. A eliminação segue a [seção 4.5](#45-anonimização-lgpd).
 - **Fora dos logs, spans e métricas**: o pipeline de log mascara chaves sensíveis (senha, token, placa, observações, `motivo` e outras) e os padrões de CPF, CNPJ, e-mail, telefone e placa ([`logging.py`](../src/compartilhado/infraestrutura/logging.py)); os spans saem sem o caminho cru, a query, o texto de erro e os dados de rede do chamador; os rótulos das métricas são só códigos do catálogo. O detalhe está no README, em [O que não é exportado](../README.md#o-que-não-é-exportado-e-por-quê).
-- **Retenção**: `mensagens_processadas` por 30 dias; na outbox, entregues por 7 dias e `dead` por 30, contados do fim do último lease.
+- **Retenção**: `mensagens_processadas` por 30 dias; na outbox, a entregue por 7 dias, contados da confirmação do broker (`entregue_em`), e a `dead` por 30, contados do fim do último lease (`proxima_tentativa_em`), não da gravação ([`outbox.py`](../src/compartilhado/infraestrutura/mensageria/outbox.py)).
 - **Banco e cluster**: papéis separados no PostgreSQL (o dono `execucao` só no Job de migração; `execucao_app`, só DML, na API, no relay e no consumidor; `execucao_exporter`, `pg_monitor`), sem conexão sem senha nem no loopback, NetworkPolicy com entrada negada por padrão, Pod Security `restricted` e nenhum Secret no repositório ([`k8s/base/papeis.sql`](../k8s/base/papeis.sql) e README, [Implantação](../README.md#implantação)).
 
 ## 7. Observabilidade
