@@ -6,6 +6,7 @@ import importlib.util
 import json
 import re
 import shlex
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,7 @@ from src.main import criar_app
 from tests.conftest import provedor_dos_testes
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from types import ModuleType
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -130,6 +132,77 @@ def test_rota_nova_sem_exemplo_reprova_a_geracao(
 def test_arquitetura_existe_e_o_readme_a_linka() -> None:
     assert ARQUITETURA.is_file()
     assert "](docs/arquitetura.md)" in README.read_text()
+
+
+def _fora_de_codigo(texto: str) -> Iterator[str]:
+    """Linhas do Markdown fora dos blocos de codigo."""
+    em_codigo = False
+    for linha in texto.splitlines():
+        if linha.lstrip().startswith("```"):
+            em_codigo = not em_codigo
+        elif not em_codigo:
+            yield linha
+
+
+def _ancoras(documento: Path) -> set[str]:
+    """Ancoras que o GitHub gera para os titulos (o repetido ganha -1, -2...)."""
+    ancoras: set[str] = set()
+    vistas: Counter[str] = Counter()
+    for linha in _fora_de_codigo(documento.read_text()):
+        if titulo := re.fullmatch(r"#{1,6} (.+)", linha):
+            ancora = re.sub(r"[^\w\- ]", "", titulo[1].strip().lower())
+            ancora = ancora.replace(" ", "-")
+            ancoras.add(f"{ancora}-{vistas[ancora]}" if vistas[ancora] else ancora)
+            vistas[ancora] += 1
+    return ancoras
+
+
+def _links_quebrados(documento: Path) -> list[str]:
+    """Links relativos do documento cujo arquivo ou ancora nao existe.
+
+    Os absolutos (o ``platform`` e outros sites) ficam de fora: o teste roda
+    sem rede.
+    """
+    quebrados = []
+    for linha in _fora_de_codigo(documento.read_text()):
+        for alvo in re.findall(r"\]\(([^)\s]+)\)", linha):
+            if alvo.startswith(("http://", "https://")):
+                continue
+            caminho, _, ancora = alvo.partition("#")
+            arquivo = documento.parent / caminho if caminho else documento
+            if not arquivo.exists() or (
+                ancora and arquivo.suffix == ".md" and ancora not in _ancoras(arquivo)
+            ):
+                quebrados.append(alvo)
+    return quebrados
+
+
+@pytest.mark.parametrize(
+    "documento", [README, ARQUITETURA], ids=["README", "arquitetura"]
+)
+def test_links_relativos_apontam_arquivo_e_ancora_que_existem(
+    documento: Path,
+) -> None:
+    assert _links_quebrados(documento) == []
+
+
+def test_link_para_arquivo_ou_ancora_que_nao_existe_e_apontado(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "outro.md").write_text(
+        "# Título\n\n## Seção `um`, 2\n\n## Seção `um`, 2\n"
+    )
+    (tmp_path / "codigo.py").write_text("# comentario, nao titulo\n")
+    documento = tmp_path / "doc.md"
+    documento.write_text(
+        "# Aqui\n\n"
+        "[a](outro.md) [b](outro.md#título) [c](outro.md#seção-um-2-1) [d](#aqui)\n"
+        "[e](codigo.py#L1) [f](https://exemplo.invalid/x.md#nada)\n"
+        "[g](sumiu.md) [h](outro.md#seção-dois) [i](#ali)\n"
+        "```bash\n[j](sumiu.md)\n```\n"
+    )
+
+    assert _links_quebrados(documento) == ["sumiu.md", "outro.md#seção-dois", "#ali"]
 
 
 def _colunas_do_er(texto: str) -> dict[str, set[str]]:
