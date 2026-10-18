@@ -312,6 +312,42 @@ def test_jwks_cai_depois_de_cacheado_e_a_chave_conhecida_vale_por_ate_1h(
         validador.validar(token)
 
 
+def test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    assert FRESCO_SEGUNDOS == 600  # o prazo do cache e contrato (ADR-039)
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+
+    relogio.agora = 1000.0 + FRESCO_SEGUNDOS - 1  # ainda fresco: nao busca
+    validador.validar(token)
+    assert servidor_jwks_proprio.requisicoes == 1
+
+    relogio.agora = 1000.0 + FRESCO_SEGUNDOS  # na hora exata ja renova
+    validador.validar(token)
+    assert servidor_jwks_proprio.requisicoes == 2
+
+
+def test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata(
+    servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
+) -> None:
+    assert VELHO_MAXIMO_SEGUNDOS == 3600
+    relogio = _Relogio()
+    validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
+    token = emitir_token("admin")
+    validador.validar(token)
+    servidor_jwks_proprio.status = 503
+
+    relogio.agora = 1000.0 + VELHO_MAXIMO_SEGUNDOS - 1  # a renovacao falha: vale
+    assert validador.validar(token)["papel"] == "admin"
+
+    relogio.agora = 1000.0 + VELHO_MAXIMO_SEGUNDOS  # na hora exata, nao vale mais
+    with pytest.raises(JwksIndisponivelError):
+        validador.validar(token)
+
+
 def test_tres_falhas_abrem_o_circuito_e_param_as_buscas(
     servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
 ) -> None:

@@ -783,6 +783,18 @@ def test_corpo_acima_do_teto_nem_chega_ao_parse(log_capturado: io.StringIO) -> N
     assert "corpo acima de 65536 bytes" in log_capturado.getvalue()
 
 
+def test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse(
+    log_capturado: io.StringIO,
+) -> None:
+    # So acima de 64 KiB e recusado pelo tamanho: o corpo de espacos com 64 KiB
+    # cravados chega ao parse e cai como JSON ilegivel.
+    canal = _consumir(_Handler(), corpo=b" " * (64 * 1024))
+    log = log_capturado.getvalue()
+    assert "corpo acima de 65536 bytes" not in log
+    assert "corpo ilegivel (JSONDecodeError)" in log
+    assert canal.passos == ["reject"]
+
+
 @pytest.mark.parametrize(
     ("user_id", "tentativa"),
     [
