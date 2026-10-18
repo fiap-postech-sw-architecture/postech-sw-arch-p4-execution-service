@@ -80,6 +80,11 @@ def atualizar_readme(xml: Path, readme: Path, url_do_run: str) -> int:
     if run is None:
         print(f"{url_do_run} nao e o link de um run do GitHub Actions", file=sys.stderr)
         return 2
+    if not xml.exists():
+        print(
+            f"{xml} nao existe: baixe o artefato relatorios-de-teste", file=sys.stderr
+        )
+        return 1
     texto = readme.read_text()
     inicio, fim = texto.find(INICIO), texto.find(FIM)
     if inicio < 0 or fim < inicio:

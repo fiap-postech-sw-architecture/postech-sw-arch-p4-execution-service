@@ -137,6 +137,21 @@ def test_readme_sem_marcadores_ou_link_que_nao_e_run_fica_como_estava(
     assert readme.read_text() == conteudo
 
 
+def test_readme_sem_o_coverage_xml_sai_com_1_sem_traceback(
+    script: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    xml = tmp_path / "coverage.xml"
+    readme = tmp_path / "README.md"
+    conteudo = f"{script.INICIO}\ntabela velha\n{script.FIM}\n"
+    readme.write_text(conteudo)
+
+    assert script.main(["prog", str(xml), str(readme), _URL]) == 1
+    assert capsys.readouterr().err == (
+        f"{xml} nao existe: baixe o artefato relatorios-de-teste\n"
+    )
+    assert readme.read_text() == conteudo
+
+
 _LINHA_DA_TABELA = re.compile(
     r"\| (`src[\w/]*`|\*\*total\*\*) \| (\d+) \| (\d+) \| (\d+\.\d)% \|"
 )
