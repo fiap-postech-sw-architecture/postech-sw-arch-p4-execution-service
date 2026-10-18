@@ -340,6 +340,12 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 `make check` roda localmente os mesmos gates de código do job `CI`, e `make manifests` e `make smoke`, os do job `build`.
 
+## Dependências automatizadas
+
+O Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) abre pull requests uma vez por semana, às segundas às 06:00 (São Paulo), para três ecossistemas: `pyproject.toml` e `uv.lock` (uv), as actions dos workflows e as imagens base do `Dockerfile`. Patch e minor de cada ecossistema chegam agrupados num PR só, major abre PR próprio para ser lido com o changelog, e há no máximo 3 abertos por ecossistema. O commit usa o prefixo `chore(deps)` (`ci` nas actions, como no OS e no Billing), e o PR leva os rótulos padrão do Dependabot (`dependencies` e o do ecossistema), que ele cria no repositório se faltarem. As bibliotecas `opentelemetry-*` formam um grupo próprio, com a major incluída: o SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão e cada instrumentação fixa a sua, então subir só uma parte não resolve e a família inteira vai num PR só. O SDK e o exportador têm teto `<1.46` no `pyproject.toml` (como no OS e no Billing), porque `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar. Cada PR passa pelos mesmos nove checks dos dois workflows, inclusive o `pip-audit`, o trivy e o gate de cobertura. O Python é a exceção no bloco do Docker: major e minor ficam de fora (o patch segue), porque a versão sobe à mão de uma vez em `.python-version`, `python-version` do `security.yml`, `requires-python` e `python_version` (mypy) do `pyproject.toml` e nas duas imagens do `Dockerfile`; sem isso o 3.14 → 3.15 chegaria como "minor" e trocaria só a imagem do runtime.
+
+Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0. O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit e o SonarQube.
+
 ## Repositórios da fase 4
 
 | Repositório | Papel |
