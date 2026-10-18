@@ -1,22 +1,32 @@
 """Resumo da cobertura em Markdown a partir do coverage.xml (formato Cobertura).
 
-Uso: python scripts/cobertura_resumo.py coverage.xml >> "$GITHUB_STEP_SUMMARY"
+Uso no summary do CI:
+    python scripts/cobertura_resumo.py coverage.xml >> "$GITHUB_STEP_SUMMARY"
+Uso no README (troca o trecho entre os marcadores pela tabela e pelo link do run):
+    python scripts/cobertura_resumo.py coverage.xml README.md <URL do run do CI>
 
 Agrupa por contexto e camada (`src/<contexto>/<camada>`) para a evidencia de
-cobertura pedida no enunciado ficar legivel no summary do CI e no README.
-O XML lido e o coverage.xml gerado pelo proprio pytest-cov no mesmo job, nao
-entrada externa (por isso o parser da stdlib basta).
+cobertura pedida no enunciado ficar legivel no summary do CI e no README, onde
+a tabela e gerada, nunca digitada: o coverage.xml e o do artefato
+`relatorios-de-teste` do run que o link aponta. O XML lido e o gerado pelo
+proprio pytest-cov, nao entrada externa (por isso o parser da stdlib basta).
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 from xml.etree import ElementTree  # nosec B405
 
 PROFUNDIDADE = 2  # <contexto>/<camada>, relativo ao <source> (relative_files = True)
+INICIO = "<!-- cobertura:inicio -->"
+FIM = "<!-- cobertura:fim -->"
+_RUN = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/(\d+)")
 _ARGUMENTOS = 2  # programa + coverage.xml
+_COM_README = 4  # programa + coverage.xml + README + URL do run
+_USO = "uso: python scripts/cobertura_resumo.py coverage.xml [README.md URL-do-run]"
 
 
 def _grupo(nome_arquivo: str, prefixo: str) -> str:
@@ -64,9 +74,31 @@ def resumir(caminho: Path) -> str:
     return "\n".join(saida) + "\n"
 
 
+def atualizar_readme(xml: Path, readme: Path, url_do_run: str) -> int:
+    """Troca o trecho entre ``INICIO`` e ``FIM`` pela tabela e pelo link do run."""
+    run = _RUN.fullmatch(url_do_run)
+    if run is None:
+        print(f"{url_do_run} nao e o link de um run do GitHub Actions", file=sys.stderr)
+        return 2
+    texto = readme.read_text()
+    inicio, fim = texto.find(INICIO), texto.find(FIM)
+    if inicio < 0 or fim < inicio:
+        print(f"{readme} sem os marcadores {INICIO} e {FIM}", file=sys.stderr)
+        return 2
+    link = (
+        "Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` "
+        f"do [run {run[1]} do CI]({url_do_run})."
+    )
+    secao = f"{INICIO}\n{resumir(xml)}\n{link}\n{FIM}"
+    readme.write_text(texto[:inicio] + secao + texto[fim + len(FIM) :])
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == _COM_README:
+        return atualizar_readme(Path(argv[1]), Path(argv[2]), argv[3])
     if len(argv) != _ARGUMENTOS:
-        print("uso: python scripts/cobertura_resumo.py coverage.xml", file=sys.stderr)
+        print(_USO, file=sys.stderr)
         return 2
     caminho = Path(argv[1])
     if not caminho.exists():

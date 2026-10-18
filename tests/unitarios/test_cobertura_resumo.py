@@ -78,3 +78,57 @@ def test_main_escreve_o_resumo(
     xml.write_text(_XML)
     assert script.main(["prog", str(xml)]) == 0
     assert capsys.readouterr().out.startswith("### Cobertura de testes: 60.0% no gate")
+
+
+_URL = "https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/123"
+
+
+def test_readme_recebe_a_tabela_entre_os_marcadores_com_o_link_do_run(
+    script: ModuleType, tmp_path: Path
+) -> None:
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(_XML)
+    readme = tmp_path / "README.md"
+    readme.write_text(f"antes\n{script.INICIO}\ntabela velha\n{script.FIM}\ndepois\n")
+
+    assert script.main(["prog", str(xml), str(readme), _URL]) == 0
+
+    texto = readme.read_text()
+    assert texto.startswith(f"antes\n{script.INICIO}\n{script.resumir(xml)}\n")
+    assert texto.endswith(f"[run 123 do CI]({_URL}).\n{script.FIM}\ndepois\n")
+    assert "tabela velha" not in texto
+
+
+@pytest.mark.parametrize(
+    ("conteudo", "url", "motivo"),
+    [
+        ("sem marcadores\n", _URL, "sem os marcadores"),
+        (
+            "<!-- cobertura:fim -->\n<!-- cobertura:inicio -->\n",
+            _URL,
+            "sem os marcadores",
+        ),
+        (
+            "<!-- cobertura:inicio -->\n<!-- cobertura:fim -->\n",
+            "https://x/1",
+            "nao e o link",
+        ),
+    ],
+    ids=["sem marcadores", "marcadores invertidos", "link que nao e run"],
+)
+def test_readme_sem_marcadores_ou_link_que_nao_e_run_fica_como_estava(
+    script: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    conteudo: str,
+    url: str,
+    motivo: str,
+) -> None:
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(_XML)
+    readme = tmp_path / "README.md"
+    readme.write_text(conteudo)
+
+    assert script.main(["prog", str(xml), str(readme), url]) == 2
+    assert motivo in capsys.readouterr().err
+    assert readme.read_text() == conteudo
