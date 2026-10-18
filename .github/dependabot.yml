@@ -14,8 +14,8 @@
 # O que o Dependabot nao cobre e a versao ficou fixada de proposito, a ser
 # subida a mao: postgres e prometheuscommunity/postgres-exporter em k8s/ (README,
 # Implantacao), o PostgreSQL e o RabbitMQ do compose e dos testes de integracao,
-# o kubeconform e o trivy (Makefile) e o gitleaks, o pip-audit e o SonarQube
-# (workflows).
+# o kubeconform, o trivy e o diff-cover (Makefile) e o gitleaks, o pip-audit e o
+# SonarQube (workflows).
 version: 2
 
 updates:
