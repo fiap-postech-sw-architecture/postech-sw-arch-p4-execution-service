@@ -55,7 +55,10 @@ updates:
       actions-patch-e-minor:
         update-types: ["minor", "patch"]
 
-  # Imagens base do Dockerfile (uv e python).
+  # Imagens base do Dockerfile (uv e python). A do uv sobe por aqui: o
+  # required-version do pyproject.toml so tem piso, porque o atualizador do
+  # bloco uv acima roda um uv mais novo, e com teto o `uv lock` dele recusaria
+  # o projeto. O piso e os Requisitos do README sobem juntos, a mao.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

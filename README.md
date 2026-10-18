@@ -231,7 +231,7 @@ O boot falha com mensagem clara se faltar uma variável obrigatória, se `JWKS_U
 
 ## Como rodar
 
-Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 (instala o Python 3.14 do `.python-version`) e Docker (compose e os testes de integração com testcontainers).
+Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 ou mais novo (instala o Python 3.14 do `.python-version`) e Docker (compose e os testes de integração com testcontainers).
 
 ```bash
 make compose-up
@@ -423,6 +423,7 @@ Regras dos três:
 
 Exceções:
 
+- **uv**: o `required-version` do `pyproject.toml` só tem piso (`>=0.11`), como no Billing. O atualizador do Dependabot roda um uv mais novo (0.12 em outubro de 2026), e com teto o `uv lock` dele recusaria o projeto. A imagem do uv no `Dockerfile` sobe pelo bloco do Docker; o piso e os Requisitos de [Como rodar](#como-rodar) sobem juntos, à mão, quando o serviço passar a exigir um uv mais novo.
 - **OpenTelemetry**: as bibliotecas `opentelemetry-*` formam um grupo próprio, com a major incluída. O SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão, e cada instrumentação fixa a sua: subir só uma parte não resolve.
 - **Teto do OpenTelemetry**: o SDK e o exportador têm teto `<1.46` no `pyproject.toml`, como no OS e no Billing. O `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar.
 - **Python**: no bloco do Docker, major e minor ficam de fora (o patch segue). A versão sobe à mão, de uma vez, em `.python-version`, no `python-version` do `security.yml`, no `requires-python` e no `python_version` (mypy) do `pyproject.toml` e nas duas imagens do `Dockerfile`. Sem isso, o 3.14 → 3.15 chegaria como minor e trocaria só a imagem do runtime.
