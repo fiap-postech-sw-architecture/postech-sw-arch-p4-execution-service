@@ -258,7 +258,7 @@ curl -sk -X POST "$BASE_URL/api/v1/execucoes/$ORDEM_ID/inicio" -H "Authorization
 curl -sk -X POST "$BASE_URL/api/v1/execucoes/$ORDEM_ID/finalizacao" -H "Authorization: Bearer $TOKEN"
 ```
 
-O `make test` confere que cada método e rota do OpenAPI tem um `curl` aqui, com o token nas rotas autenticadas e um corpo que o schema da rota aceita ([`test_documentacao.py`](tests/unitarios/test_documentacao.py)).
+O `make test` confere que cada método e rota do OpenAPI tem um `curl` aqui, com o token nas rotas autenticadas e, nas rotas com corpo, o `Content-Type: application/json` e um corpo que o schema da rota aceita ([`test_documentacao.py`](tests/unitarios/test_documentacao.py)).
 
 ## Configuração
 

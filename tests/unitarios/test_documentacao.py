@@ -287,10 +287,13 @@ def _curl(argumentos: list[str]) -> _Curl | None:
     return _Curl(metodo, caminho, corpo, tuple(cabecalhos))
 
 
-def test_readme_tem_um_curl_por_rota_com_token_e_corpo_aceito(
-    openapi: dict[str, Any],
-) -> None:
-    curls = [c for a in _comandos_curl(README.read_text()) if (c := _curl(a))]
+def _erros_dos_curls(openapi: dict[str, Any], texto: str) -> list[str]:
+    """Erros dos ``curl`` dos blocos ``bash`` de ``texto`` contra o OpenAPI.
+
+    Rota sem ``curl``; ``curl`` sem o token numa rota com 401, sem
+    ``Content-Type: application/json`` ou com um corpo que a rota recusa.
+    """
+    curls = [c for a in _comandos_curl(texto) if (c := _curl(a))]
     erros: list[str] = []
     for rota, operacoes in openapi["paths"].items():
         modelo = re.compile(re.sub(r"\{\w+\}", "[^/]+", rota))
@@ -304,20 +307,53 @@ def test_readme_tem_um_curl_por_rota_com_token_e_corpo_aceito(
             if not casados:
                 erros.append(f"{onde}: sem curl no README")
             for curl in casados:
+                cabecalhos = [h.lower() for h in curl.cabecalhos]
                 com_token = any(
-                    h.startswith("Authorization: Bearer ") for h in curl.cabecalhos
+                    h.startswith("authorization: bearer ") for h in cabecalhos
                 )
                 if "401" in operacao["responses"] and not com_token:
                     erros.append(f"{onde}: curl sem o token")
                 if "requestBody" in operacao:
+                    if "content-type: application/json" not in cabecalhos:
+                        erros.append(
+                            f"{onde}: corpo sem Content-Type: application/json"
+                        )
                     corpo = json.loads(curl.corpo or "null")
                     erros += _fora_do_schema(
                         openapi, operacao["requestBody"], corpo, onde
                     )
                 elif curl.corpo is not None:
                     erros.append(f"{onde}: corpo numa rota sem requestBody")
+    return erros
 
-    assert erros == []
+
+def test_readme_tem_um_curl_por_rota_com_token_e_corpo_aceito(
+    openapi: dict[str, Any],
+) -> None:
+    assert _erros_dos_curls(openapi, README.read_text()) == []
+
+
+def test_curl_que_falta_ou_que_a_rota_recusa_e_apontado(
+    openapi: dict[str, Any],
+) -> None:
+    rotas = ("/api/v1/saude", "/api/v1/estoque", "/api/v1/fila")
+    recorte = {**openapi, "paths": {rota: openapi["paths"][rota] for rota in rotas}}
+    texto = (
+        "```bash\n"
+        "curl -sk -X GET \"$B/api/v1/saude\" -d '{}'\n"
+        'curl -sk -X POST "$B/api/v1/estoque" -H "Authorization: Bearer $T" \\\n'
+        '  -d \'{"sku": "PEC-X", "nome": "X", "quantidade_disponivel": 1}\'\n'
+        'curl -sk "$B/api/v1/fila"\n'
+        'curl -sk "$B/metrics"\n'
+        "```\n"
+    )
+
+    assert sorted(_erros_dos_curls(recorte, texto)) == [
+        "GET /api/v1/estoque: sem curl no README",
+        "GET /api/v1/fila: curl sem o token",
+        "GET /api/v1/saude: corpo numa rota sem requestBody",
+        "POST /api/v1/estoque: corpo sem Content-Type: application/json",
+    ]
 
 
 def test_curl_em_varias_linhas_com_json_quebrado_e_lido_inteiro() -> None:
