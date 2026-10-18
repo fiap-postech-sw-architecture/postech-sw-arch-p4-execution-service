@@ -275,6 +275,7 @@ def test_jwks_lento_desiste_em_2s(
 def test_falha_memorizada_responde_na_hora_sem_buscar_de_novo(
     servidor_jwks_proprio: ServidorJwks, emitir_token: Callable[..., str]
 ) -> None:
+    assert MEMORIA_DA_FALHA_SEGUNDOS == 5
     relogio = _Relogio()
     servidor_jwks_proprio.status = 500
     validador = ValidadorDeTokenJWKS(servidor_jwks_proprio.url, relogio=relogio)
@@ -282,10 +283,11 @@ def test_falha_memorizada_responde_na_hora_sem_buscar_de_novo(
     with pytest.raises(JwksIndisponivelError):
         validador.validar(token)
 
-    relogio.agora += 2
+    relogio.agora += 2.5
     with pytest.raises(JwksIndisponivelError) as erro:
         validador.validar(token)
-    assert erro.value.retry_after == MEMORIA_DA_FALHA_SEGUNDOS - 2
+    # Faltam 2,5 s: o Retry-After arredonda para cima, e o cliente nao volta cedo.
+    assert erro.value.retry_after == 3
     assert servidor_jwks_proprio.requisicoes == 1
 
     relogio.agora += MEMORIA_DA_FALHA_SEGUNDOS

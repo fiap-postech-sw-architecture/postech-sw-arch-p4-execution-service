@@ -602,6 +602,22 @@ testes = "jwt"
 de = "permitidos = frozenset({Papel.ADMIN, *papeis})"
 para = "permitidos = frozenset(papeis)"
 
+[[mutante]]
+id = "J13"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "MEMORIA_DA_FALHA_SEGUNDOS: Final = 5"
+para = "MEMORIA_DA_FALHA_SEGUNDOS: Final = 6"
+
+[[mutante]]
+id = "J14"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "retry_after=max(1, math.ceil(espera))"
+para = "retry_after=max(1, math.floor(espera))"
+
 # --- Consumidor ---------------------------------------------------------------
 
 [[mutante]]
