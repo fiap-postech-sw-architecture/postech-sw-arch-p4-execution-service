@@ -162,18 +162,24 @@ _LINK_DO_RUN = re.compile(
 
 
 def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None:
-    """O trecho entre os marcadores tem o formato do script e as contas certas."""
+    """O trecho entre os marcadores tem o formato do script e as contas certas.
+
+    A taxa de linhas e a do total da tabela; o gate, que soma linhas e ramos, fica
+    entre as duas taxas (com a folga do arredondamento); e cada pacote existe.
+    """
     texto = _README.read_text()
     assert texto.count(script.INICIO) == texto.count(script.FIM) == 1
     secao = texto.split(script.INICIO)[1].split(script.FIM)[0].strip().splitlines()
 
     cabecalho, _, taxas, _, *tabela, _, link = secao
     linhas = [_LINHA_DA_TABELA.fullmatch(linha) for linha in tabela[2:]]
-
-    assert re.fullmatch(
-        r"### Cobertura de testes: \d+\.\d% no gate \(linhas e ramos\)", cabecalho
+    gate = re.fullmatch(
+        r"### Cobertura de testes: (\d+\.\d)% no gate \(linhas e ramos\)", cabecalho
     )
-    assert re.fullmatch(r"\d+\.\d% de linhas e \d+\.\d% de ramos\.", taxas)
+    taxa = re.fullmatch(r"(\d+\.\d)% de linhas e (\d+\.\d)% de ramos\.", taxas)
+
+    assert gate, cabecalho
+    assert taxa, taxas
     assert tabela[:2] == [
         "| Pacote | Linhas | Cobertas | Cobertura |",
         "|---|---:|---:|---:|",
@@ -183,4 +189,10 @@ def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None
     assert all(pct == f"{100 * cob / tot:.1f}" for tot, cob, pct in contagens)
     *pacotes, total = contagens
     assert total[:2] == (sum(t for t, _, _ in pacotes), sum(c for _, c, _ in pacotes))
+    assert taxa[1] == total[2]
+    de_linhas, de_ramos = float(taxa[1]), float(taxa[2])
+    assert min(de_linhas, de_ramos) - 0.1 <= float(gate[1])
+    assert float(gate[1]) <= max(de_linhas, de_ramos) + 0.1
+    nomes = [m[1].strip("`") for m in linhas[:-1] if m]
+    assert [nome for nome in nomes if not (_RAIZ / nome).is_dir()] == []
     assert _LINK_DO_RUN.search(link), link
