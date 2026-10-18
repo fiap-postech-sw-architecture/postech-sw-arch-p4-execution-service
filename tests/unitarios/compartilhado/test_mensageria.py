@@ -737,6 +737,33 @@ def test_comando_fora_do_estado_loga_command_ignored_com_o_codigo(
     assert "MARCADOR-DA-MENSAGEM" not in saida
 
 
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(ValorInvalidoError("MARCADOR-DO-DADO"), id="dominio-recusa"),
+        pytest.param(
+            RespostaInvalidaDaDependenciaException("MARCADOR-DO-DADO"),
+            id="dependencia-recusa",
+        ),
+    ],
+)
+def test_recusa_permanente_loga_so_a_classe_do_erro(
+    log_capturado: io.StringIO, erro: Exception
+) -> None:
+    # A mensagem do erro pode ecoar o dado do comando (placa, texto livre): a
+    # recusa vai para a DLQ com o log so da classe, sem a mensagem nem o
+    # traceback do erro nao classificado.
+    _consumir(_Handler(erro))
+    saida = log_capturado.getvalue()
+    (recusa,) = [
+        json.loads(linha)
+        for linha in saida.splitlines()
+        if '"command_rejected_by_domain"' in linha
+    ]
+    assert recusa["error"] == type(erro).__name__
+    assert "MARCADOR-DO-DADO" not in saida
+
+
 _ANINHADO = b'{"id":' + b'{"a":' * 10_000 + b"1" + b"}" * 10_000 + b"}"
 
 
