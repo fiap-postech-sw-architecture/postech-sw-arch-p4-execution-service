@@ -493,7 +493,6 @@ def test_dependabot_tem_agenda_prefixo_grupos_e_ignore_de_cada_bloco() -> None:
     config = yaml.safe_load(
         (RAIZ / ".github" / "dependabot.yml").read_text(encoding="utf-8")
     )
-    blocos = {bloco["package-ecosystem"]: bloco for bloco in config["updates"]}
     agenda = {
         "interval": "weekly",
         "day": "monday",
@@ -523,15 +522,27 @@ def test_dependabot_tem_agenda_prefixo_grupos_e_ignore_de_cada_bloco() -> None:
         ),
     }
 
+    blocos = {bloco["package-ecosystem"]: bloco for bloco in config["updates"]}
+
+    assert config["version"] == 2
+    assert set(config) == {"version", "updates"}
+    # Um bloco por ecossistema: o dict acima esconderia um repetido.
+    assert len(config["updates"]) == len(esperado)
     assert set(blocos) == set(esperado)
     for nome, (prefixo, grupos, ignore) in esperado.items():
-        bloco = blocos[nome]
-        assert bloco["directory"] == "/", nome
-        assert bloco["schedule"] == agenda, nome
-        assert bloco["open-pull-requests-limit"] == 3, nome
-        assert bloco["commit-message"] == {"prefix": prefixo}, nome
-        assert bloco["groups"] == grupos, nome
-        assert bloco.get("ignore", []) == ignore, nome
+        # O bloco inteiro: chave a mais (allow, cooldown, target-branch,
+        # versioning-strategy...) reprova. Sem `labels`: rotulo declarado e
+        # inexistente no repositorio vira comentario em cada PR do Dependabot,
+        # que cria os padrao se faltarem.
+        assert blocos[nome] == {
+            "package-ecosystem": nome,
+            "directory": "/",
+            "schedule": agenda,
+            "open-pull-requests-limit": 3,
+            "commit-message": {"prefix": prefixo},
+            "groups": grupos,
+            **({"ignore": ignore} if ignore else {}),
+        }, nome
 
 
 PADRAO = "../postech-sw-arch-p4-platform"
