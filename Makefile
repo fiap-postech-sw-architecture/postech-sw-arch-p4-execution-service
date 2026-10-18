@@ -25,8 +25,11 @@ format:
 	$(PY) ruff format .
 	$(PY) ruff check --fix .
 
+# Testes que o mypy strict confere junto com o src; os demais ficam de fora.
+TESTES_TIPADOS := tests/unitarios/test_mutacao_manual.py
+
 typecheck:
-	$(PY) mypy src
+	$(PY) mypy src $(TESTES_TIPADOS)
 
 security:
 	$(PY) bandit -r src -q
