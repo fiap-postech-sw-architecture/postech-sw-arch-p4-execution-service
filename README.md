@@ -358,7 +358,7 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
 
 (`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 92 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
 
-**Resultado** em 18/10/2026: 91 de 91 mutantes mortos (100,0%) em 11,8 min, com 1 equivalente de fora da conta. A primeira execução matou 84 de 91 (92,3%) em 13,3 min; os 7 sobreviventes eram lacunas reais (limites exatos, o formato da placa, um estado sem teste e um efeito que só o log mostrava) e hoje têm teste.
+**Resultado** em 18/10/2026: 91 de 91 mutantes mortos (100,0%) em 11,8 min, com 1 equivalente de fora da conta.
 
 | Área | Mutantes | Mortos | Equivalentes |
 |---|---:|---:|---:|
@@ -373,7 +373,7 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
 | Relay e outbox | 10 | 10 | 0 |
 | **total** | **92** | **91** | **1** |
 
-- **Sobreviventes que viraram teste:** corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`); recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`); JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes); placa aceita com um dígito a mais ou a menos, porque o regex casava só o começo ou um formato mais curto (casos novos em `test_placa_invalida_sem_ecoar_o_valor`); e a execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+- **Limites que só a mutação mostrou, hoje com teste:** corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`); recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`); JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes); placa aceita com um dígito a mais ou a menos, porque o regex casava só o começo ou um formato mais curto (casos novos em `test_placa_invalida_sem_ecoar_o_valor`); e a execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
 - **Equivalente:** `HS256` na lista de algoritmos do JWT. O PyJWT recusa HS256 com a chave RS256 do JWKS mesmo assim (`Token algorithm 'HS256' does not match the key's algorithm 'RS256'`); a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda as duas. O motivo fica no campo `equivalente` do `mutantes.toml`.
 - **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 92 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
 
@@ -384,7 +384,16 @@ make mutacao
 make mutacao MUTANTES="E01 C03"
 ```
 
-O alvo para de iniciar mutantes depois de `MUTACAO_PRAZO` segundos (900) e escreve a tabela em `reports/mutacao.md`. Antes do primeiro mutante de cada grupo de testes, o script roda o grupo na cópia sem mutante: se ele já reprova (ou estoura o tempo), os mutantes do grupo saem `erro`, porque um teste que já falha mataria qualquer um. A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela. O comando sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código, e com 1 se algum mutante sair `erro` (medida inválida, como o Docker fora); sobrevivente não reprova, porque não há gate (ADR-041). Com `erro` ou `nao rodado` o percentual vira `n/d`. Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container, e o que chega à integração sobe um PostgreSQL (e, na mensageria, um RabbitMQ); com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe. Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo) e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
+Como o alvo se comporta:
+
+- Para de iniciar mutantes depois de `MUTACAO_PRAZO` segundos (900); os que sobram saem `nao rodado`. A tabela vai para `reports/mutacao.md`.
+- Antes do primeiro mutante de cada grupo de testes, roda o grupo na cópia sem mutante. Se ele já reprova ou estoura o tempo, os mutantes do grupo saem `erro`: um teste que já falha mataria qualquer um.
+- A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela.
+- Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container. O que chega à integração sobe um PostgreSQL, e na mensageria também um RabbitMQ. Com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe.
+- Sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
+- Sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- Com `erro` ou `nao rodado`, o percentual vira `n/d`.
+- Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo), e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
 
 ## Integração contínua
 
@@ -399,7 +408,24 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 ## Dependências automatizadas
 
-O Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) abre pull requests uma vez por semana, às segundas às 06:00 (São Paulo), para três ecossistemas: `pyproject.toml` e `uv.lock` (uv), as actions dos workflows e as imagens base do `Dockerfile`. Patch e minor de cada ecossistema chegam agrupados num PR só, major abre PR próprio para ser lido com o changelog, e há no máximo 3 abertos por ecossistema. O commit usa o prefixo `chore(deps)` (`ci` nas actions, como no OS e no Billing), e o PR leva os rótulos padrão do Dependabot (`dependencies` e o do ecossistema), que ele cria no repositório se faltarem. As bibliotecas `opentelemetry-*` formam um grupo próprio, com a major incluída: o SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão e cada instrumentação fixa a sua, então subir só uma parte não resolve e a família inteira vai num PR só. O SDK e o exportador têm teto `<1.46` no `pyproject.toml` (como no OS e no Billing), porque `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar. Cada PR passa pelos mesmos nove checks dos dois workflows, inclusive o `pip-audit`, o trivy e o gate de cobertura. O Python é a exceção no bloco do Docker: major e minor ficam de fora (o patch segue), porque a versão sobe à mão de uma vez em `.python-version`, `python-version` do `security.yml`, `requires-python` e `python_version` (mypy) do `pyproject.toml` e nas duas imagens do `Dockerfile`; sem isso o 3.14 → 3.15 chegaria como "minor" e trocaria só a imagem do runtime.
+O Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) abre pull requests toda segunda às 06:00 (São Paulo), em três blocos:
+
+- **uv**: `pyproject.toml` e `uv.lock`, com o prefixo `chore(deps)`.
+- **Actions** dos workflows, com o prefixo `ci`, como no OS e no Billing.
+- **Docker**: as imagens base do `Dockerfile`, com o prefixo `chore(deps)`.
+
+Regras dos três:
+
+- Patch e minor chegam agrupados num PR só por bloco; major abre PR próprio, para ser lido com o changelog.
+- No máximo 3 PRs abertos por bloco.
+- O PR leva os rótulos padrão do Dependabot (`dependencies` e o do ecossistema), que ele cria no repositório se faltarem.
+- Cada PR passa pelos mesmos nove checks dos dois workflows, inclusive o `pip-audit`, o trivy e o gate de cobertura.
+
+Exceções:
+
+- **OpenTelemetry**: as bibliotecas `opentelemetry-*` formam um grupo próprio, com a major incluída. O SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão, e cada instrumentação fixa a sua: subir só uma parte não resolve.
+- **Teto do OpenTelemetry**: o SDK e o exportador têm teto `<1.46` no `pyproject.toml`, como no OS e no Billing. O `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar.
+- **Python**: no bloco do Docker, major e minor ficam de fora (o patch segue). A versão sobe à mão, de uma vez, em `.python-version`, no `python-version` do `security.yml`, no `requires-python` e no `python_version` (mypy) do `pyproject.toml` e nas duas imagens do `Dockerfile`. Sem isso, o 3.14 → 3.15 chegaria como minor e trocaria só a imagem do runtime.
 
 Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0. O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit, o SonarQube e o diff-cover.
 
