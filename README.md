@@ -331,7 +331,7 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 
 ## Cobertura
 
-**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.433 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.437 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
 
 | Pacote | Linhas | Cobertas | Cobertura |
 |---|---:|---:|---:|
@@ -356,9 +356,9 @@ O `mutmut` não roda em pacote chamado `src`, o caso deste serviço: a versão 3
 AssertionError: Failed trampoline hit. Module name starts with `src.`, which is invalid
 ```
 
-(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 92 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
+(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 95 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
 
-**Resultado** em 18/10/2026: 91 de 91 mutantes mortos (100,0%) em 11,8 min, com 1 equivalente de fora da conta.
+**Resultado** em 18/10/2026: 94 de 94 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
 
 | Área | Mutantes | Mortos | Equivalentes |
 |---|---:|---:|---:|
@@ -367,15 +367,21 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
 | Reserva e saldo de peça | 15 | 15 | 0 |
 | Saga (guardas, lápide e repetição do comando) | 10 | 10 | 0 |
 | Idempotência e concorrência | 6 | 6 | 0 |
-| Placa do veículo | 7 | 7 | 0 |
-| Validação do JWT | 12 | 11 | 1 |
+| Placa do veículo | 8 | 8 | 0 |
+| Validação do JWT | 14 | 13 | 1 |
 | Consumidor | 13 | 13 | 0 |
 | Relay e outbox | 10 | 10 | 0 |
-| **total** | **92** | **91** | **1** |
+| **total** | **95** | **94** | **1** |
 
-- **Limites que só a mutação mostrou, hoje com teste:** corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`); recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`); JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes); placa aceita com um dígito a mais ou a menos, porque o regex casava só o começo ou um formato mais curto (casos novos em `test_placa_invalida_sem_ecoar_o_valor`); e a execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+- **Limites que só a mutação mostrou, hoje com teste:**
+  - corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`);
+  - recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`);
+  - JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes);
+  - memória da falha do JWKS diferente de 5 s e `Retry-After` do 503 arredondado para baixo (`test_falha_memorizada_responde_na_hora_sem_buscar_de_novo`, que prende a constante e espera 2,5 s);
+  - placa aceita com um dígito a mais ou a menos, nos dois formatos, porque o regex casava só o começo ou um formato mais curto (casos em `test_placa_invalida_sem_ecoar_o_valor`);
+  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
 - **Equivalente:** `HS256` na lista de algoritmos do JWT (J01), e só enquanto valem duas condições: o PyJWT amarra a chave ao algoritmo dela (na 2.15, o `decode` com um `PyJWK` recusa `Token algorithm 'HS256' does not match the key's algorithm 'RS256'`) e o validador passa um `PyJWK` ao `decode`. Com elas, a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda o desfecho; sem elas, a lista `RS256` do ADR-039 é a única barreira, e nenhum teste a prende. O motivo fica no campo `equivalente` do `mutantes.toml`.
-- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 92 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
+- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 95 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
 
 Para refazer:
 
