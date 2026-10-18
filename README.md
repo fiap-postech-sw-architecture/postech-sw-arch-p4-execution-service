@@ -240,7 +240,7 @@ make check
 make compose-down
 ```
 
-O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`); o `make compose-logs` acompanha o log da API; o `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit e os testes com gate de cobertura (90%); o `make compose-down` derruba a stack e apaga o volume.
+O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`); o `make compose-logs` acompanha o log da API; o `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit e os testes com gate de cobertura (95%); o `make compose-down` derruba a stack e apaga o volume.
 
 Fora do compose, `.env.example` traz as variáveis com os valores de demonstração (`cp .env.example .env`, depois `set -a; . ./.env; set +a; make run`).
 
@@ -327,7 +327,22 @@ O primeiro comando cria o cluster, sobe a plataforma e gera os Secrets. O `make 
 - **Concorrência**: a disputa pela última unidade de uma peça, cada lock pessimista, cópias simultâneas dos comandos da saga e réplicas migrando juntas.
 - **Implantação**: o PostgreSQL 16.15 com o ambiente do StatefulSet e o `papeis.sql` dos manifestos, como o usuário 999 e com a raiz somente leitura (o dono migra, a API sobe com `execucao_app`, que não faz DDL, o exporter não lê tabela, ninguém entra como `postgres` sem senha e nenhuma senha chega ao log do servidor, gravando todo comando); o `entrypoint.sh` com o `ROOT_PATH`; e o uvicorn com o prefixo da borda, servindo o Swagger sob ele e as sondas sem ele.
 
-O gate de cobertura (ramos incluídos) é de 90%, no `.coveragerc`. O teste da cópia dos contratos precisa de rede (marcador `rede`).
+O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc` ([Cobertura](#cobertura)). O teste da cópia dos contratos precisa de rede (marcador `rede`).
+
+## Cobertura
+
+**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.399 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`, ADR-041). Medido em 18/10/2026 na `main` 301052a. Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+
+| Pacote | Linhas | Cobertas | Cobertura |
+|---|---:|---:|---:|
+| `src` (módulos da raiz: processos, coletor, mapeamentos e `banco`) | 318 | 318 | 100,0% |
+| `src/compartilhado` | 1.763 | 1.763 | 100,0% |
+| `src/diagnostico` | 523 | 523 | 100,0% |
+| `src/estoque` | 599 | 599 | 100,0% |
+| `src/execucao` | 478 | 478 | 100,0% |
+| **total** | 3.681 | 3.681 | 100,0% |
+
+Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)).
 
 ## Integração contínua
 
@@ -335,7 +350,7 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 | Workflow | Jobs | O que garante |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 90% (o summary mostra o número do gate, que soma linhas e ramos, e o detalhe por pacote; `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`), os manifestos do Kubernetes (`make manifests`: os três overlays no kubeconform, contra os schemas do Kubernetes 1.35 e com `Secret` recusado, e no `trivy config`, sem achado HIGH ou CRITICAL, com a única exceção e o motivo em [`k8s/trivy-ignore.rego`](k8s/trivy-ignore.rego) e a conferência de que todo `PASSWORD` do `papeis.sql` vem de variável do `psql` lida por `\getenv`, que a exceção do trivy não enxerga) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, sem o aviso da telemetria automática do FastAPI no boot (o compose leva o endpoint OTLP no ambiente da API, como o cluster), contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis, o consumidor assinado na `execucao.comandos`, as famílias e as séries do `/metrics` de cada processo logo depois do boot (`scripts/smoke_metricas.py`: as gauges da API; os dez tipos publicados, as reconexões e as gauges da outbox do relay; os sete comandos e o `desconhecido` vezes os cinco resultados do consumidor) e a senha de demonstração recusada com `ENVIRONMENT=production`) |
+| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 95% (o summary mostra o número do gate, que soma linhas e ramos, e o detalhe por pacote; `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`), os manifestos do Kubernetes (`make manifests`: os três overlays no kubeconform, contra os schemas do Kubernetes 1.35 e com `Secret` recusado, e no `trivy config`, sem achado HIGH ou CRITICAL, com a única exceção e o motivo em [`k8s/trivy-ignore.rego`](k8s/trivy-ignore.rego) e a conferência de que todo `PASSWORD` do `papeis.sql` vem de variável do `psql` lida por `\getenv`, que a exceção do trivy não enxerga) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, sem o aviso da telemetria automática do FastAPI no boot (o compose leva o endpoint OTLP no ambiente da API, como o cluster), contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis, o consumidor assinado na `execucao.comandos`, as famílias e as séries do `/metrics` de cada processo logo depois do boot (`scripts/smoke_metricas.py`: as gauges da API; os dez tipos publicados, as reconexões e as gauges da outbox do relay; os sete comandos e o `desconhecido` vezes os cinco resultados do consumidor) e a senha de demonstração recusada com `ENVIRONMENT=production`) |
 | `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos em todo o histórico do commit testado (um segredo commitado e apagado no commit seguinte também reprova; a regra de URI de banco e de broker com senha tem teste negativo, `scripts/ci/testa-gitleaks.sh`, que reprova a senha gerada num manifesto) e CVE HIGH/CRITICAL com correção na imagem (as imagens de terceiros dos manifestos entram só como relatório no summary); o resultado do `pip-audit` e o do `trivy` da imagem vão também para o summary do job (`scripts/ci/registra-no-summary.sh`, que mantém o código de saída da ferramenta); roda também toda segunda-feira |
 
 `make check` roda localmente os mesmos gates de código do job `CI`, e `make manifests` e `make smoke`, os do job `build`.
