@@ -177,7 +177,7 @@ def _comandos_curl(texto: str) -> list[list[str]]:
             if token == "curl":
                 atual = []
                 comandos.append(atual)
-            elif set(token) <= set(_SEPARADORES):
+            elif token and set(token) <= set(_SEPARADORES):
                 atual = None
             elif atual is not None:
                 atual.append(token)
@@ -255,6 +255,7 @@ def test_curl_em_varias_linhas_com_json_quebrado_e_lido_inteiro() -> None:
         'curl -sk -X PUT "$B/api/v1/x/$ID" -d \'{"a": 1,\n'
         '   "b": 2}\'\n'
         "curl -sk \"$B/api/v1/x\" -d '{}'\n"
+        "curl -sk -X POST \"$B/api/v1/y\" -d ''\n"
         "```\n"
     )
 
@@ -264,4 +265,5 @@ def test_curl_em_varias_linhas_com_json_quebrado_e_lido_inteiro() -> None:
         _Curl("GET", "/api/v1/x", None, ("Authorization: Bearer $T",)),
         _Curl("PUT", "/api/v1/x/$ID", '{"a": 1,\n   "b": 2}', ()),
         _Curl("POST", "/api/v1/x", "{}", ()),
+        _Curl("POST", "/api/v1/y", "", ()),
     ]
