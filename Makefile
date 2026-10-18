@@ -8,7 +8,8 @@ GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
 .PHONY: install lock-check lint format typecheck security lint-arch test diff-cover mutacao \
-	check smoke manifests print-trivy-version kind-deploy compose-up compose-down compose-logs migrate seed run
+	check smoke manifests print-trivy-version kind-deploy compose-up compose-down compose-logs migrate seed run \
+	docs-api
 
 install:
 	uv sync --frozen
@@ -81,6 +82,13 @@ mutacao:
 
 check: lock-check lint lint-arch typecheck security test diff-cover
 	@echo "Todos os gates passaram"
+
+# docs/api: o OpenAPI do app e a colecao Postman (uma requisicao por rota, com
+# corpo e resposta de exemplo), gerados juntos para nao divergirem. So monta o
+# app: nao sobe servidor nem banco. O make test reprova se os arquivos
+# versionados ficarem atras do codigo (tests/unitarios/test_documentacao.py).
+docs-api:
+	$(PY) python scripts/gerar_docs_api.py
 
 # Smoke da imagem pelo entrypoint real (migracao, seed), o job build do CI. Sobe
 # a stack e confere:
