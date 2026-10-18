@@ -475,8 +475,9 @@ Como o alvo se comporta:
 - Antes do primeiro mutante de cada grupo de testes, roda o grupo na cópia sem mutante. Se ele já reprova ou estoura o tempo, os mutantes do grupo saem `erro`: um teste que já falha mataria qualquer um.
 - A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela.
 - Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container. O que chega à integração sobe um PostgreSQL, e na mensageria também um RabbitMQ. Com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe.
-- Sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
-- Sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- O script sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
+- O script sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- São os códigos do script. Com falha, o `make mutacao` mostra `Error 1` ou `Error 2` e sai com 2 (o `make` troca o código do script pelo dele); sem falha, sai com 0.
 - Com `erro` ou `nao rodado`, o percentual vira `n/d`.
 - Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo), e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
 
