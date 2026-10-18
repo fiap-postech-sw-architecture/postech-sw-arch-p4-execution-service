@@ -108,6 +108,7 @@ _TOKEN_DA_COLECAO = {
     "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}],
 }
 _CORPO_JSON = {"key": "Content-Type", "value": "application/json"}
+_VARIAVEIS_DA_COLECAO = ["baseUrl", "ordem_id", "sku", "token"]
 
 
 def _promessas_quebradas(openapi: dict[str, Any], colecao: dict[str, Any]) -> list[str]:
@@ -115,11 +116,20 @@ def _promessas_quebradas(openapi: dict[str, Any], colecao: dict[str, Any]) -> li
 
     O token da colecao, herdado pelas rotas com 401, e ``noauth`` nas outras (as
     sondas); ``Content-Type`` em todo corpo; a URL a partir de ``{{baseUrl}}``; e
-    uma resposta de exemplo por requisicao.
+    uma resposta de exemplo por requisicao; e as variaveis ``baseUrl``, ``token``,
+    ``ordem_id`` e ``sku``, todas declaradas e so elas usadas.
     """
     erros = []
     if colecao.get("auth") != _TOKEN_DA_COLECAO:
         erros.append("colecao sem o token {{token}} como bearer")
+    declaradas = sorted(v["key"] for v in colecao.get("variable", []))
+    if declaradas != _VARIAVEIS_DA_COLECAO:
+        erros.append(f"variaveis da colecao fora das prometidas: {declaradas}")
+    usadas = set(re.findall(r"\{\{(\w+)\}\}", json.dumps(colecao)))
+    if usadas - set(declaradas):
+        erros.append(
+            f"variavel usada e nao declarada: {sorted(usadas - set(declaradas))}"
+        )
     for item in _requisicoes(colecao):
         pedido = item["request"]
         metodo, rota = _par(pedido)
@@ -155,6 +165,7 @@ def test_colecao_que_quebra_cada_promessa_e_apontada(openapi: dict[str, Any]) ->
         "http://127.0.0.1:8003/api/v1/estoque?limit=20"
     )
     itens["delete", "/api/v1/estoque/{sku}"]["response"] = []
+    colecao["variable"] = [v for v in colecao["variable"] if v["key"] != "sku"]
 
     assert sorted(_promessas_quebradas(openapi, colecao)) == [
         "DELETE /api/v1/estoque/{sku}: sem resposta de exemplo",
@@ -163,6 +174,8 @@ def test_colecao_que_quebra_cada_promessa_e_apontada(openapi: dict[str, Any]) ->
         "GET /api/v1/saude: auth fora do padrao (token so nas rotas com 401)",
         "POST /api/v1/estoque: corpo sem Content-Type: application/json",
         "colecao sem o token {{token}} como bearer",
+        "variaveis da colecao fora das prometidas: ['baseUrl', 'ordem_id', 'token']",
+        "variavel usada e nao declarada: ['sku']",
     ]
 
 

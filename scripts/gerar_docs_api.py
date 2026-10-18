@@ -3,14 +3,15 @@
 - ``docs/api/openapi.json``: o ``app.openapi()`` do servico, o mesmo do ``/docs``.
 - ``docs/api/execucao.postman_collection.json``: colecao Postman v2.1 com uma
   requisicao por metodo e rota do OpenAPI, cada uma com corpo e resposta de
-  exemplo (``EXEMPLOS``) e as variaveis ``{{baseUrl}}`` e ``{{token}}``.
+  exemplo (``EXEMPLOS``) e as variaveis ``{{baseUrl}}``, ``{{token}}``,
+  ``{{ordem_id}}`` e ``{{sku}}``.
 
 Os dois saem juntos, do mesmo OpenAPI, para nao divergirem. O script so monta o
 app e le o OpenAPI dele: nao sobe servidor nem banco. ``tests/unitarios/
 test_documentacao.py`` reprova quando os arquivos ficam atras do codigo, quando
 falta exemplo para uma rota, quando um exemplo sai do schema da rota ou quando a
 colecao perde o token, o ``noauth`` das sondas, o ``Content-Type`` dos corpos, o
-``{{baseUrl}}`` ou a resposta de exemplo.
+``{{baseUrl}}``, a resposta de exemplo ou uma das quatro variaveis.
 """
 
 from __future__ import annotations
