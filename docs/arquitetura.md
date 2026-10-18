@@ -2,7 +2,7 @@
 
 Este documento descreve o serviço por dentro: responsabilidades, camadas e módulos, o modelo de dados completo, os fluxos passo a passo, a mensageria, a segurança e as decisões. A arquitetura global da fase 4 (divisão dos serviços, saga, catálogo de mensagens, rotas e o recorte de dados de que os contratos dependem) está na [RFC-004](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md) e nos [ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) do repositório `platform`; a [seção 7](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md#7-dados) da RFC remete a este arquivo o modelo com todas as colunas. O [README](../README.md) traz a operação (configuração, implantação, testes, métricas e um `curl` por endpoint), e [`docs/api/`](api) o OpenAPI e a coleção Postman.
 
-Tudo aqui foi conferido contra o código; onde a decisão não é óbvia, o texto aponta o arquivo.
+Conferido contra o código da `main` em 18/10/2026 (commit `301052a`); onde a decisão não é óbvia, o texto aponta o arquivo.
 
 ## 1. Contexto e responsabilidades
 
@@ -23,7 +23,7 @@ flowchart LR
     relay[Relay] -->|eventos: pytstop.eventos| broker
     broker -->|os.eventos| os
     api -->|POST /api/v1/precos/validacao| billing[Billing]
-    api -.->|JWKS| os
+    api -.->|"chaves públicas (JWKS)"| os
     api --> banco[(PostgreSQL execucao)]
     consumidor --> banco
     relay --> banco
@@ -32,7 +32,7 @@ flowchart LR
     prometheus -.->|/metrics| consumidor
 ```
 
-As três partes rodam a mesma imagem com comandos diferentes: a API (`uvicorn src.main:app`), o relay da outbox (`python -m src.relay`) e o consumidor dos comandos (`python -m src.consumidor`). A única chamada síncrona a outro serviço é a validação de preços no Billing, na conclusão do diagnóstico ([ADR-038](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/038-borda-e-comunicacao-sincrona.md)); o JWKS do OS Service é lido para validar o token, não é chamada de negócio.
+As três partes rodam a mesma imagem com comandos diferentes: a API (`uvicorn src.main:app`), o relay da outbox (`python -m src.relay`) e o consumidor dos comandos (`python -m src.consumidor`). A única chamada síncrona a outro serviço é a validação de preços no Billing, na conclusão do diagnóstico ([ADR-038](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/038-borda-e-comunicacao-sincrona.md)); o JWKS (JSON Web Key Set) do OS Service, o conjunto das chaves públicas que conferem a assinatura do token, é lido para validar o token, não é chamada de negócio.
 
 ## 2. Camadas e módulos
 
@@ -43,7 +43,7 @@ DDD com arquitetura em camadas (onion): `dominio` ← `aplicacao` ← `infraestr
 | `src/compartilhado` | Base de entidades e VOs (`Entity`, `AggregateRoot`, `ValueObject`, `Veiculo`, código do Billing), exceções, máquina de estados, unidade de trabalho com outbox, banco, JWT e JWKS, circuit breaker, logging com mascaramento, métricas, telemetria e a mensageria (relay, consumidor, contratos) |
 | `src/estoque` | `ItemEstoque` (SKU como VO) e `Reserva`; serviço de domínio da reserva tudo ou nada ([`services.py`](../src/estoque/dominio/services.py)); casos de uso do cadastro e dos comandos `ReservarPecas` e `LiberarReserva` |
 | `src/diagnostico` | `Diagnostico` (identidade = `ordem_id`); comandos `SolicitarDiagnostico` e `DescartarDiagnostico`; início e conclusão pela API, com a validação no Billing ([`validador_billing.py`](../src/diagnostico/infraestrutura/validador_billing.py)) |
-| `src/execucao` | `Execucao` (identidade = `ordem_id`); comandos `AgendarExecucao`, `CancelarExecucao` e `AnonimizarVeiculo`; fila, início (pivot da saga) e finalização com baixa pela API |
+| `src/execucao` | `Execucao` (identidade = `ordem_id`); comandos `AgendarExecucao`, `CancelarExecucao` e `AnonimizarVeiculo`; fila, início (o pivot da saga: depois dele a OS não cancela mais) e finalização com baixa pela API |
 | `src/main.py`, `src/relay.py`, `src/consumidor.py` | Os três processos; o consumidor liga cada tipo de comando ao handler do contexto dono (`HANDLERS`) |
 | `src/coletor.py` | As gauges calculadas na raspagem do `/metrics` da API (outbox, duração das execuções, peças em falta) |
 | `src/banco.py` | `aguardar` (initContainer que espera a migração da imagem) e `restringir` (o Job tira da aplicação a escrita na `alembic_version`) |
@@ -57,13 +57,13 @@ A conversa entre contextos passa por portas na aplicação e adapters na infraes
 |---|---|---|
 | Execução | `EstoquePort`: a ordem tem reserva ativa? consome a reserva na baixa | estoque (`EstoqueSQLAlchemyAdapter`) |
 | Execução | `VeiculosPort`: o retrato do veículo da ordem, copiado no agendamento | diagnóstico (`VeiculosSQLAlchemy`) |
-| Execução | `DiagnosticosDoVeiculoPort` e `MensagensGuardadasPort`: o que a eliminação LGPD troca | diagnóstico e outbox |
+| Execução | `DiagnosticosDoVeiculoPort` e `MensagensGuardadasPort`: o que a eliminação de dados pessoais da LGPD (Lei Geral de Proteção de Dados) troca | diagnóstico e outbox |
 | Diagnóstico | `CatalogoDePecasPort`: as peças apontadas existem e estão ativas no estoque? | estoque (`CatalogoDePecasSQLAlchemy`) |
 | Diagnóstico | `ValidadorDeItensPort`: os códigos têm preço? | Billing, por HTTP |
 
 ## 3. Modelo de dados
 
-PostgreSQL 16, banco `execucao`, só deste serviço ([ADR-037](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/037-banco-por-servico.md)). O esquema vem das migrações do Alembic ([`001_esquema_inicial.py`](../migrations/versions/001_esquema_inicial.py) e [`002_mensageria.py`](../migrations/versions/002_mensageria.py)), e os mapeamentos imperativos declaram as mesmas tabelas ([`estoque`](../src/estoque/infraestrutura/mapping.py), [`diagnostico`](../src/diagnostico/infraestrutura/mapping.py), [`execucao`](../src/execucao/infraestrutura/mapping.py), [`outbox_mapping.py`](../src/compartilhado/infraestrutura/outbox_mapping.py)); os testes de integração criam o banco pelas migrações, não pelos mapeamentos. Datas sempre com fuso (`timestamptz`, UTC). Além das seis tabelas abaixo há a `alembic_version`, do Alembic.
+PostgreSQL 16, banco `execucao`, só deste serviço ([ADR-037](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/037-banco-por-servico.md)). O esquema vem das migrações do Alembic ([`001_esquema_inicial.py`](../migrations/versions/001_esquema_inicial.py) e [`002_mensageria.py`](../migrations/versions/002_mensageria.py)), e os mapeamentos imperativos declaram as mesmas tabelas ([`estoque`](../src/estoque/infraestrutura/mapping.py), [`diagnostico`](../src/diagnostico/infraestrutura/mapping.py), [`execucao`](../src/execucao/infraestrutura/mapping.py), [`outbox_mapping.py`](../src/compartilhado/infraestrutura/outbox_mapping.py)); os testes de integração criam o banco pelas migrações, não pelos mapeamentos. Datas sempre com fuso (`timestamptz`, UTC). Além das seis tabelas abaixo há a `alembic_version`, do Alembic. Nos comentários das colunas, **lápide** é o registro que uma compensação grava quando chega antes do comando original, já no estado final ([seção 4.4](#44-compensações-e-lápide)).
 
 ```mermaid
 erDiagram
@@ -142,6 +142,8 @@ erDiagram
 ```
 
 As relações entre `diagnosticos`, `reservas` e `execucoes` são lógicas: `ordem_id` é a identidade da ordem de serviço do OS Service, sem chave estrangeira (o dado de outro serviço nunca é chave local), e é única em cada tabela (a chave primária do diagnóstico e da execução, uma `UNIQUE` na reserva). É isso que torna cada comando idempotente por ordem e sustenta a lápide ([seção 4.4](#44-compensações-e-lápide)).
+
+O ER da RFC-004 (seção 7.3) traz `traceparent` e `tracestate` como `varchar`; as colunas são `text`, como nas migrações. No PostgreSQL, sem tamanho declarado, os dois tipos se guardam e se comportam do mesmo jeito.
 
 ### 3.1 Estoque: `itens_estoque` e `reservas`
 
@@ -327,7 +329,7 @@ sequenceDiagram
     C->>DB: commit (efeito, outbox e id do comando)
 ```
 
-1. O comando é validado antes de travar linhas; o contrato já recusou SKU fora do formato do Billing (vai para a DLQ, sem resposta, e a saga compensa pelo prazo técnico da etapa, [RFC-004, seção 4.6](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md#46-prazos)).
+1. O comando é validado antes de travar linhas; o contrato já recusou SKU fora do formato do Billing (vai para a DLQ, a fila de mensagens mortas `execucao.comandos.dlq`, sem resposta, e a saga compensa pelo prazo técnico da etapa, [RFC-004, seção 4.6](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md#46-prazos)).
 2. Os itens são travados com `SELECT ... FOR UPDATE` sempre em ordem de SKU, o que evita deadlock entre reservas, e só então a reserva existente é conferida: a segunda cópia simultânea do mesmo comando espera a primeira e vê a decisão dela. Sem itens para travar (lista vazia), a `UNIQUE` de `ordem_id` barra a segunda cópia, que roda de novo e cai na regra de repetição (`releitura_em_corrida`, [`idempotencia.py`](../src/compartilhado/aplicacao/idempotencia.py)).
 3. A regra é tudo ou nada ([`services.py`](../src/estoque/dominio/services.py)): SKU ausente ou inativo conta com saldo livre 0. Com tudo disponível, a reserva nasce `ATIVA` e soma em `quantidade_reservada`; com qualquer falta, nada é separado e a recusa fica registrada como `RECUSADA`, com `{sku, solicitado, disponivel}` de cada faltante, para o reenvio receber a mesma resposta (uma reposição do estoque no meio do caminho não vira reserva tardia).
 
@@ -424,8 +426,8 @@ sequenceDiagram
     participant C as Consumidor
     UC->>DB: estado + linha da outbox (envelope validado) na mesma transação
     UC->>DB: NOTIFY outbox_novo no commit
-    DB-->>R: aviso (ou o poll de 5 s)
-    R->>DB: reivindica até 10 pendentes (FOR UPDATE SKIP LOCKED), lease de 60 s
+    DB-->>R: aviso (ou o poll)
+    R->>DB: reivindica um lote de pendentes (FOR UPDATE SKIP LOCKED) e grava o lease
     R->>MQ: publish com confirm e mandatory, no trace gravado na linha
     MQ-->>R: ack
     R->>DB: entregue (só se o lease ainda for dele)
@@ -438,7 +440,7 @@ sequenceDiagram
 ```
 
 - **Gravação.** O caso de uso registra o evento na unidade de trabalho, que grava a linha da outbox no commit, já como o envelope do contrato, validado contra o JSON Schema (falha aqui é defeito do serviço), com o destino e o contexto de trace de quem gravou ([`unit_of_work.py`](../src/compartilhado/infraestrutura/unit_of_work.py)).
-- **Relay** ([`relay.py`](../src/compartilhado/infraestrutura/mensageria/relay.py), [`outbox.py`](../src/compartilhado/infraestrutura/mensageria/outbox.py)): acorda pelo `NOTIFY` ou pelo poll de 5 s; reivindica em transação curta e publica sem transação aberta; não passa à frente de mensagem pendente da mesma ordem (`ix_outbox_correlacao`). Sem rota, nack ou recusa do broker contam tentativa (atrasos de 1, 4, 16 e 64 s), e a quinta falha vira `dead`; queda do broker não conta tentativa. Uma vez por hora apaga, em lotes, as entregues há mais de 7 dias e as `dead` há mais de 30.
+- **Relay** ([`relay.py`](../src/compartilhado/infraestrutura/mensageria/relay.py), [`outbox.py`](../src/compartilhado/infraestrutura/mensageria/outbox.py)): acorda pelo `NOTIFY` ou pelo poll; reivindica em transação curta e publica sem transação aberta; não passa à frente de mensagem pendente da mesma ordem (`ix_outbox_correlacao`). Sem rota, nack ou recusa do broker contam tentativa, com atraso crescente, e a quinta falha vira `dead`; queda do broker não conta tentativa. A limpeza periódica apaga, em lotes, as entregues e as `dead` vencidas. O tamanho do lote, o lease, o poll, os atrasos e os prazos da limpeza estão no README, em [Mensageria](../README.md#mensageria).
 - **Consumidor** ([`consumidor.py`](../src/compartilhado/infraestrutura/mensageria/consumidor.py)): o `id` entra em `mensagens_processadas` antes do handler, a sessão do handler fica presa à transação da mensagem por savepoint e só o consumidor comita. `id` repetido recebe ack sem efeito; comando fora do estado é ignorado com ack (o `id` fica gravado); erro transitório vai para a fila de retry da tentativa; erro permanente, não classificado ou a quinta falha vão para a DLQ.
 
 ## 5. Mensageria
