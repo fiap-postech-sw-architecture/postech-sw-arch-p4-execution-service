@@ -236,7 +236,7 @@ curl -sk -X PUT "$BASE_URL/api/v1/estoque/$SKU" -H "Authorization: Bearer $TOKEN
 curl -sk -X DELETE "$BASE_URL/api/v1/estoque/$SKU" -H "Authorization: Bearer $TOKEN"
 ```
 
-**Diagnóstico**, pelo mecânico ou pelo admin. A ordem chega pela saga: uma OS aberta no OS Service (o `make -C ../postech-sw-arch-p4-platform demo` abre algumas) aparece na fila do mecânico, de onde sai o `ORDEM_ID`. Os códigos da conclusão são os do seed do Billing:
+**Diagnóstico**, pelo mecânico ou pelo admin. A ordem chega pela saga: uma OS aberta no OS Service (`POST /os/api/v1/ordens-de-servico`, no [README dele](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-os-service#readme)) aparece na fila do mecânico, de onde sai o `ORDEM_ID`. Os códigos da conclusão são os do seed do Billing:
 
 ```bash
 export ORDEM_ID=$(curl -sk "$BASE_URL/api/v1/diagnosticos?status=AGUARDANDO" \
