@@ -34,6 +34,11 @@ def _grupo(nome_arquivo: str, prefixo: str) -> str:
     return "/".join([prefixo, *partes]) if partes else prefixo
 
 
+def _sem_linha_de_cobertura(caminho: Path) -> bool:
+    raiz = ElementTree.parse(caminho).getroot()  # noqa: S314  # nosec B314
+    return next(raiz.iter("line"), None) is None
+
+
 def resumir(caminho: Path) -> str:
     # Arquivo gerado pelo proprio pytest-cov no mesmo job, nao entrada externa.
     raiz = ElementTree.parse(caminho).getroot()  # noqa: S314  # nosec B314
@@ -85,17 +90,28 @@ def atualizar_readme(xml: Path, readme: Path, url_do_run: str) -> int:
             f"{xml} nao existe: baixe o artefato relatorios-de-teste", file=sys.stderr
         )
         return 1
-    texto = readme.read_text()
-    inicio, fim = texto.find(INICIO), texto.find(FIM)
-    if inicio < 0 or fim < inicio:
-        print(f"{readme} sem os marcadores {INICIO} e {FIM}", file=sys.stderr)
-        return 2
-    link = (
-        "Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` "
-        f"do [run {run[1]} do CI]({url_do_run})."
-    )
-    secao = f"{INICIO}\n{resumir(xml)}\n{link}\n{FIM}"
-    readme.write_text(texto[:inicio] + secao + texto[fim + len(FIM) :])
+    try:
+        texto = readme.read_text()
+        # Um XML bem formado sem linha alguma zeraria a tabela com status 0.
+        if _sem_linha_de_cobertura(xml):
+            print(
+                f"{xml} nao traz nenhuma linha de cobertura: baixe o artefato certo",
+                file=sys.stderr,
+            )
+            return 1
+        inicio, fim = texto.find(INICIO), texto.find(FIM)
+        if inicio < 0 or fim < inicio:
+            print(f"{readme} sem os marcadores {INICIO} e {FIM}", file=sys.stderr)
+            return 2
+        link = (
+            "Tabela gerada por `scripts/cobertura_resumo.py` a partir do "
+            f"`coverage.xml` do [run {run[1]} do CI]({url_do_run})."
+        )
+        secao = f"{INICIO}\n{resumir(xml)}\n{link}\n{FIM}"
+        readme.write_text(texto[:inicio] + secao + texto[fim + len(FIM) :])
+    except (OSError, ElementTree.ParseError) as erro:
+        print(erro, file=sys.stderr)
+        return 1
     return 0
 
 

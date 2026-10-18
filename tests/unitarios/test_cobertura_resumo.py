@@ -152,6 +152,35 @@ def test_readme_sem_o_coverage_xml_sai_com_1_sem_traceback(
     assert readme.read_text() == conteudo
 
 
+@pytest.mark.parametrize(
+    ("xml", "readme_existe"),
+    [
+        ("<coverage/>", True),
+        ("<html/>", True),
+        ("<coverage>", True),
+        (_XML, False),
+    ],
+    ids=["xml-sem-linha", "outro-xml", "xml-quebrado", "readme-ausente"],
+)
+def test_readme_com_entrada_que_nao_serve_sai_com_1_numa_linha_sem_tocar_no_readme(
+    script: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    xml: str,
+    readme_existe: bool,
+) -> None:
+    arquivo = tmp_path / "coverage.xml"
+    arquivo.write_text(xml)
+    readme = tmp_path / "README.md"
+    conteudo = f"{script.INICIO}\ntabela velha\n{script.FIM}\n"
+    if readme_existe:
+        readme.write_text(conteudo)
+
+    assert script.main(["prog", str(arquivo), str(readme), _URL]) == 1
+    assert capsys.readouterr().err.count("\n") == 1
+    assert not readme_existe or readme.read_text() == conteudo
+
+
 _LINHA_DA_TABELA = re.compile(
     r"\| (`src[\w/]*`|\*\*total\*\*) \| (\d+) \| (\d+) \| (\d+\.\d)% \|"
 )
