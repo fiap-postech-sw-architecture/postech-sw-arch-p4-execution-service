@@ -380,18 +380,47 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 
 ## Cobertura
 
-**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.437 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+O gate é de 95% no total, com linhas e ramos somados (`fail_under` no `.coveragerc`), e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+
+A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_resumo.py`](scripts/cobertura_resumo.py) a escreve entre os marcadores a partir do `coverage.xml` de um run do CI (artefato `relatorios-de-teste` do job `test`) e põe o link desse run no fim, e o `make test` reprova o trecho que sair do formato do script ou com as contas erradas ([`test_cobertura_resumo.py`](tests/unitarios/test_cobertura_resumo.py)). O CI repete a mesma tabela no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), com o `diff-cover` do pull request logo abaixo.
+
+<!-- cobertura:inicio -->
+### Cobertura de testes: 100.0% no gate (linhas e ramos)
+
+100.0% de linhas e 100.0% de ramos.
 
 | Pacote | Linhas | Cobertas | Cobertura |
 |---|---:|---:|---:|
-| `src` (módulos da raiz: processos, coletor, mapeamentos e `banco`) | 318 | 318 | 100,0% |
-| `src/compartilhado` | 1.763 | 1.763 | 100,0% |
-| `src/diagnostico` | 523 | 523 | 100,0% |
-| `src/estoque` | 599 | 599 | 100,0% |
-| `src/execucao` | 478 | 478 | 100,0% |
-| **total** | 3.681 | 3.681 | 100,0% |
+| `src` | 318 | 318 | 100.0% |
+| `src/compartilhado/aplicacao` | 59 | 59 | 100.0% |
+| `src/compartilhado/dominio` | 144 | 144 | 100.0% |
+| `src/compartilhado/infraestrutura` | 1324 | 1324 | 100.0% |
+| `src/compartilhado/interfaces` | 236 | 236 | 100.0% |
+| `src/diagnostico/aplicacao` | 127 | 127 | 100.0% |
+| `src/diagnostico/dominio` | 177 | 177 | 100.0% |
+| `src/diagnostico/infraestrutura` | 127 | 127 | 100.0% |
+| `src/diagnostico/interfaces` | 92 | 92 | 100.0% |
+| `src/estoque/aplicacao` | 155 | 155 | 100.0% |
+| `src/estoque/dominio` | 226 | 226 | 100.0% |
+| `src/estoque/infraestrutura` | 105 | 105 | 100.0% |
+| `src/estoque/interfaces` | 113 | 113 | 100.0% |
+| `src/execucao/aplicacao` | 173 | 173 | 100.0% |
+| `src/execucao/dominio` | 122 | 122 | 100.0% |
+| `src/execucao/infraestrutura` | 99 | 99 | 100.0% |
+| `src/execucao/interfaces` | 84 | 84 | 100.0% |
+| **total** | 3681 | 3681 | 100.0% |
 
-Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), e o `diff-cover` do pull request vem logo abaixo.
+Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39106764174 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39106764174).
+<!-- cobertura:fim -->
+
+Para refazer a tabela com o `coverage.xml` de outro run, com o número dele em `RUN`:
+
+```bash
+destino=$(mktemp -d)
+gh run download "$RUN" -n relatorios-de-teste -D "$destino"
+uv run python scripts/cobertura_resumo.py "$destino/coverage.xml" README.md \
+  "https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/$RUN"
+```
 
 O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele exista e seja mais novo que o código de `src/`: com o XML ausente ou velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
 

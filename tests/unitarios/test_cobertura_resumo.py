@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,9 @@ import pytest
 if TYPE_CHECKING:
     from types import ModuleType
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "cobertura_resumo.py"
+_RAIZ = Path(__file__).resolve().parents[2]
+_SCRIPT = _RAIZ / "scripts" / "cobertura_resumo.py"
+_README = _RAIZ / "README.md"
 _XML = """<?xml version="1.0" ?>
 <coverage branch-rate="0.5" line-rate="0.75" lines-valid="6" lines-covered="4"
           branches-valid="4" branches-covered="2">
@@ -132,3 +135,37 @@ def test_readme_sem_marcadores_ou_link_que_nao_e_run_fica_como_estava(
     assert script.main(["prog", str(xml), str(readme), url]) == 2
     assert motivo in capsys.readouterr().err
     assert readme.read_text() == conteudo
+
+
+_LINHA_DA_TABELA = re.compile(
+    r"\| (`src[\w/]*`|\*\*total\*\*) \| (\d+) \| (\d+) \| (\d+\.\d)% \|"
+)
+_LINK_DO_RUN = re.compile(
+    r"\[run (\d+) do CI\]\(https://github\.com/fiap-postech-sw-architecture/"
+    r"postech-sw-arch-p4-execution-service/actions/runs/\1\)\.$"
+)
+
+
+def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None:
+    """O trecho entre os marcadores tem o formato do script e as contas certas."""
+    texto = _README.read_text()
+    assert texto.count(script.INICIO) == texto.count(script.FIM) == 1
+    secao = texto.split(script.INICIO)[1].split(script.FIM)[0].strip().splitlines()
+
+    cabecalho, _, taxas, _, *tabela, _, link = secao
+    linhas = [_LINHA_DA_TABELA.fullmatch(linha) for linha in tabela[2:]]
+
+    assert re.fullmatch(
+        r"### Cobertura de testes: \d+\.\d% no gate \(linhas e ramos\)", cabecalho
+    )
+    assert re.fullmatch(r"\d+\.\d% de linhas e \d+\.\d% de ramos\.", taxas)
+    assert tabela[:2] == [
+        "| Pacote | Linhas | Cobertas | Cobertura |",
+        "|---|---:|---:|---:|",
+    ]
+    assert all(linhas), tabela
+    contagens = [(int(m[2]), int(m[3]), m[4]) for m in linhas if m]
+    assert all(pct == f"{100 * cob / tot:.1f}" for tot, cob, pct in contagens)
+    *pacotes, total = contagens
+    assert total[:2] == (sum(t for t, _, _ in pacotes), sum(c for _, c, _ in pacotes))
+    assert _LINK_DO_RUN.search(link), link
