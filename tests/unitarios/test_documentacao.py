@@ -224,6 +224,54 @@ def test_rota_nova_sem_exemplo_reprova_a_geracao(
         gerador.colecao(com_rota_nova)
 
 
+@pytest.fixture
+def docs_api_temporario(
+    gerador: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """O ``make docs-api`` escrevendo em ``tmp_path``, nao no repositorio."""
+    destino = tmp_path / "docs" / "api"
+    monkeypatch.setattr(gerador, "RAIZ", tmp_path)
+    monkeypatch.setattr(gerador, "DOCS_API", destino)
+    monkeypatch.setattr(gerador, "OPENAPI", destino / OPENAPI.name)
+    monkeypatch.setattr(gerador, "COLECAO", destino / COLECAO.name)
+    return destino
+
+
+def test_make_docs_api_escreve_os_arquivos_versionados_e_repete_igual(
+    gerador: ModuleType,
+    docs_api_temporario: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    versionados = {
+        OPENAPI.name: OPENAPI.read_bytes(),
+        COLECAO.name: COLECAO.read_bytes(),
+    }
+
+    assert gerador.main() == 0
+    primeira = {a.name: a.read_bytes() for a in docs_api_temporario.iterdir()}
+    assert gerador.main() == 0
+    segunda = {a.name: a.read_bytes() for a in docs_api_temporario.iterdir()}
+
+    assert primeira == segunda == versionados
+    aviso = f"atualizados: docs/api/{OPENAPI.name} e docs/api/{COLECAO.name}\n"
+    assert capsys.readouterr().out == aviso * 2
+
+
+def test_make_docs_api_sem_exemplo_de_uma_rota_sai_com_1_sem_escrever(
+    gerador: ModuleType,
+    docs_api_temporario: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sem_a_sonda = dict(gerador.EXEMPLOS)
+    del sem_a_sonda["get", "/api/v1/saude"]
+    monkeypatch.setattr(gerador, "EXEMPLOS", sem_a_sonda)
+
+    assert gerador.main() == 1
+    assert "faltam [('get', '/api/v1/saude')]" in capsys.readouterr().err
+    assert not docs_api_temporario.exists()
+
+
 def test_arquitetura_existe_e_o_readme_a_linka() -> None:
     assert ARQUITETURA.is_file()
     assert "](docs/arquitetura.md)" in README.read_text()
