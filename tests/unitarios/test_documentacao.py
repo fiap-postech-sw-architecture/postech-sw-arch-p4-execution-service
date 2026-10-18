@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 import src.mapeamentos  # noqa: F401 - registra as tabelas de todos os contextos
 from src.compartilhado.infraestrutura.database import metadata
@@ -69,7 +69,11 @@ def _fora_do_schema(
     schema = declaracao.get("content", {}).get("application/json", {}).get("schema")
     if schema is None:
         return [f"{onde}: a rota nao declara corpo JSON"]
-    validador = Draft202012Validator({**schema, "components": openapi["components"]})
+    # Sem o FormatChecker o jsonschema ignora o `format` (uuid, date-time).
+    validador = Draft202012Validator(
+        {**schema, "components": openapi["components"]},
+        format_checker=FormatChecker(),
+    )
     return [f"{onde}: {erro.message}" for erro in validador.iter_errors(valor)]
 
 
@@ -162,9 +166,12 @@ def test_colecao_que_quebra_cada_promessa_e_apontada(openapi: dict[str, Any]) ->
     ]
 
 
-def test_exemplos_da_colecao_seguem_o_schema_da_rota(openapi: dict[str, Any]) -> None:
+def _exemplos_fora_do_schema(
+    openapi: dict[str, Any], colecao: dict[str, Any]
+) -> list[str]:
+    """Corpos e respostas de exemplo da colecao que o schema da rota recusa."""
     erros: list[str] = []
-    for item in _requisicoes(json.loads(COLECAO.read_text())):
+    for item in _requisicoes(colecao):
         metodo, rota = _par(item["request"])
         operacao = openapi["paths"][rota][metodo]
         onde = f"{metodo.upper()} {rota}"
@@ -178,8 +185,33 @@ def test_exemplos_da_colecao_seguem_o_schema_da_rota(openapi: dict[str, Any]) ->
             if resposta["body"]:
                 valor = json.loads(resposta["body"])
                 erros += _fora_do_schema(openapi, declarada, valor, f"{onde} resposta")
+    return erros
 
-    assert erros == []
+
+def test_exemplos_da_colecao_seguem_o_schema_da_rota(openapi: dict[str, Any]) -> None:
+    assert _exemplos_fora_do_schema(openapi, json.loads(COLECAO.read_text())) == []
+
+
+def test_exemplo_fora_do_schema_ou_do_formato_e_apontado(
+    openapi: dict[str, Any],
+) -> None:
+    colecao = json.loads(COLECAO.read_text())
+    itens = {_par(item["request"]): item for item in _requisicoes(colecao)}
+    itens["get", "/api/v1/fila"]["request"]["body"] = {"mode": "raw", "raw": "{}"}
+    itens["delete", "/api/v1/estoque/{sku}"]["response"][0]["body"] = "{}"
+    peca = itens["get", "/api/v1/estoque/{sku}"]["response"][0]
+    peca["body"] = json.dumps({**json.loads(peca["body"]), "id": "nao-e-uuid"})
+    fila = itens["get", "/api/v1/diagnosticos"]["response"][0]
+    pagina = json.loads(fila["body"])
+    pagina["items"][0]["solicitado_em"] = "ontem de manha"
+    fila["body"] = json.dumps(pagina)
+
+    assert sorted(_exemplos_fora_do_schema(openapi, colecao)) == [
+        "DELETE /api/v1/estoque/{sku} resposta: a rota nao declara corpo JSON",
+        "GET /api/v1/diagnosticos resposta: 'ontem de manha' is not a 'date-time'",
+        "GET /api/v1/estoque/{sku} resposta: 'nao-e-uuid' is not a 'uuid'",
+        "GET /api/v1/fila: corpo numa rota sem requestBody",
+    ]
 
 
 def test_rota_nova_sem_exemplo_reprova_a_geracao(
