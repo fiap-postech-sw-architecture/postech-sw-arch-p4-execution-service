@@ -331,7 +331,7 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 
 ## Cobertura
 
-**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.399 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 na `main` 301052a. Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.433 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
 
 | Pacote | Linhas | Cobertas | Cobertura |
 |---|---:|---:|---:|
@@ -345,6 +345,46 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), e o `diff-cover` do pull request vem logo abaixo.
 
 O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele seja mais novo que o código de `src/`: com o XML velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
+
+## Mutação
+
+Cobertura diz que a linha rodou; mutação diz se a suíte percebe quando ela está errada (ADR-041). Não é gate de CI e não tem pontuação mínima.
+
+O `mutmut` não roda em pacote chamado `src`, o caso deste serviço: a versão 3.8.0 espera o pacote em `src/<pacote>` e tira o prefixo `src.` do nome do módulo, e a primeira função mutada que os testes chamam reprova com
+
+```text
+AssertionError: Failed trampoline hit. Module name starts with `src.`, which is invalid
+```
+
+(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 92 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
+
+**Resultado** em 18/10/2026: 91 de 91 mutantes mortos (100,0%) em 11,8 min, com 1 equivalente de fora da conta. A primeira execução matou 84 de 91 (92,3%) em 13,3 min; os 7 sobreviventes eram lacunas reais (limites exatos, o formato da placa, um estado sem teste e um efeito que só o log mostrava) e hoje têm teste.
+
+| Área | Mutantes | Mortos | Equivalentes |
+|---|---:|---:|---:|
+| Status da execução | 9 | 9 | 0 |
+| Status do diagnóstico | 10 | 10 | 0 |
+| Reserva e saldo de peça | 15 | 15 | 0 |
+| Saga (guardas, lápide e repetição do comando) | 10 | 10 | 0 |
+| Idempotência e concorrência | 6 | 6 | 0 |
+| Placa do veículo | 7 | 7 | 0 |
+| Validação do JWT | 12 | 11 | 1 |
+| Consumidor | 13 | 13 | 0 |
+| Relay e outbox | 10 | 10 | 0 |
+| **total** | **92** | **91** | **1** |
+
+- **Sobreviventes que viraram teste:** corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`); recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`); JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes); placa aceita com um dígito a mais ou a menos, porque o regex casava só o começo ou um formato mais curto (casos novos em `test_placa_invalida_sem_ecoar_o_valor`); e a execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+- **Equivalente:** `HS256` na lista de algoritmos do JWT. O PyJWT recusa HS256 com a chave RS256 do JWKS mesmo assim (`Token algorithm 'HS256' does not match the key's algorithm 'RS256'`); a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda as duas. O motivo fica no campo `equivalente` do `mutantes.toml`.
+- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 92 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
+
+Para refazer:
+
+```bash
+make mutacao
+make mutacao MUTANTES="E01 C03"
+```
+
+O alvo para de iniciar mutantes depois de `MUTACAO_PRAZO` segundos (900) e escreve a tabela em `reports/mutacao.md`. Antes do primeiro mutante de cada grupo de testes, o script roda o grupo na cópia sem mutante: se ele já reprova (ou estoura o tempo), os mutantes do grupo saem `erro`, porque um teste que já falha mataria qualquer um. A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela. O comando sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código, e com 1 se algum mutante sair `erro` (medida inválida, como o Docker fora); sobrevivente não reprova, porque não há gate (ADR-041). Com `erro` ou `nao rodado` o percentual vira `n/d`. Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container, e o que chega à integração sobe um PostgreSQL (e, na mensageria, um RabbitMQ); com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe. Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo) e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
 
 ## Integração contínua
 

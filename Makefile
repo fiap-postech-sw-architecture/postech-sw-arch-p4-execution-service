@@ -66,9 +66,10 @@ diff-cover:
 # o pacote fora de `src.`), entao sao mutantes escritos a mao em
 # scripts/mutantes.toml, aplicados um por vez numa copia do codigo (mutants/); o
 # relatorio sai em reports/mutacao.md. Para quando passa de MUTACAO_PRAZO
-# segundos (15 min); os testes de integracao sobem um PostgreSQL (e os de
-# mensageria um RabbitMQ) a cada mutante, a menos que TEST_DATABASE_URL aponte
-# para um banco *_test no ar (o RabbitMQ sobe sempre). MUTANTES="E01 C03" roda so esses.
+# segundos (15 min). Os testes de integracao sobem um PostgreSQL (e os de
+# mensageria, um RabbitMQ) a cada mutante que chega a eles; com
+# TEST_DATABASE_URL apontando para um banco *_test no ar, o PostgreSQL nao sobe.
+# MUTANTES="E01 C03" roda so esses.
 MUTACAO_PRAZO ?= 900
 MUTANTES ?=
 

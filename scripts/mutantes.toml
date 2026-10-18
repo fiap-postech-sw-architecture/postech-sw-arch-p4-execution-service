@@ -504,7 +504,7 @@ arquivo = "src/compartilhado/infraestrutura/jwks.py"
 testes = "jwt"
 de = 'algorithms=["RS256"],'
 para = 'algorithms=["RS256", "HS256"],'
-equivalente = "o PyJWT 2.15 recusa HS256 com a chave RS256 do JWKS mesmo com HS256 na lista (\"does not match the key's algorithm\"): a lista e a segunda barreira, e os testes da troca de algoritmo guardam as duas"
+equivalente = "o PyJWT 2.15 recusa HS256 com a chave RS256 do JWKS mesmo com HS256 na lista (\"Token algorithm 'HS256' does not match the key's algorithm 'RS256'\"): a lista e a segunda barreira, e test_algoritmo_simetrico_e_recusado guarda as duas"
 
 [[mutante]]
 id = "J02"
