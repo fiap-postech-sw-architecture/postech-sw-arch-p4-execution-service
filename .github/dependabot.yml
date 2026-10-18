@@ -73,11 +73,12 @@ updates:
       docker-patch-e-minor:
         update-types: ["minor", "patch"]
     # O Python sobe a mao, de uma vez em .python-version, python-version do
-    # security.yml, requires-python e python_version (mypy) do pyproject e nas
-    # duas imagens do Dockerfile: o venv do builder tem de rodar no Python do
-    # runtime. Sem isto o 3.14 -> 3.15 chegaria como "minor", dentro do grupo
-    # acima, e trocaria so a imagem do runtime. O patch do Python segue
-    # automatico.
+    # security.yml, requires-python e python_version (mypy) do pyproject,
+    # sonar.python.version do sonar-project.properties e nas duas imagens do
+    # Dockerfile: o venv do builder tem de rodar no Python do runtime. Sem isto
+    # o 3.14 -> 3.15 chegaria como "minor", dentro do grupo acima, e trocaria
+    # so a imagem do runtime. O patch vem do rebuild da tag movel do runtime
+    # (python:3.14-slim-trixie), sem PR.
     ignore:
       - dependency-name: "python"
         update-types:
