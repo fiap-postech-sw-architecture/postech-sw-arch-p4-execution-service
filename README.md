@@ -344,7 +344,7 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 
 Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), e o `diff-cover` do pull request vem logo abaixo.
 
-O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele seja mais novo que o código de `src/`: com o XML velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
+O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele exista e seja mais novo que o código de `src/`: com o XML ausente ou velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
 
 ## Mutação
 
