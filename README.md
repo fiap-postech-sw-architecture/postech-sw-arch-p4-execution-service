@@ -182,7 +182,7 @@ A raspagem direta, com o `make compose-up` no ar, é `curl http://127.0.0.1:8003
 
 ## API
 
-Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/api/openapi.json`](docs/api/openapi.json)) e a coleção Postman v2.1 ([`docs/api/execucao.postman_collection.json`](docs/api/execucao.postman_collection.json): uma requisição por rota, com corpo e resposta de exemplo e as variáveis `baseUrl`, `token`, `ordem_id` e `sku`) saem do próprio app pelo `make docs-api`, que não sobe servidor nem banco; o `make test` reprova se ficarem atrás do código. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
+Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/api/openapi.json`](docs/api/openapi.json)) e a coleção Postman v2.1 ([`docs/api/execucao.postman_collection.json`](docs/api/execucao.postman_collection.json): uma requisição por rota, com corpo e resposta de exemplo e as variáveis `baseUrl`, `token`, `ordem_id` e `sku`) saem do próprio app pelo `make docs-api`, que não sobe servidor nem banco; o `make test` reprova se ficarem atrás do código ou se a coleção perder o token bearer, o `noauth` das sondas, o `Content-Type` dos corpos, o `{{baseUrl}}` das URLs ou a resposta de exemplo de uma requisição. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
 
 | Método e rota | Papéis | O que faz |
 |---|---|---|

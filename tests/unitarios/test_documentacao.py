@@ -99,6 +99,69 @@ def test_colecao_postman_e_a_que_o_script_gera(
     assert colecao == gerador.colecao(openapi), "colecao atras do script: make docs-api"
 
 
+_TOKEN_DA_COLECAO = {
+    "type": "bearer",
+    "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}],
+}
+_CORPO_JSON = {"key": "Content-Type", "value": "application/json"}
+
+
+def _promessas_quebradas(openapi: dict[str, Any], colecao: dict[str, Any]) -> list[str]:
+    """O que o README promete da colecao e ela nao cumpre.
+
+    O token da colecao, herdado pelas rotas com 401, e ``noauth`` nas outras (as
+    sondas); ``Content-Type`` em todo corpo; a URL a partir de ``{{baseUrl}}``; e
+    uma resposta de exemplo por requisicao.
+    """
+    erros = []
+    if colecao.get("auth") != _TOKEN_DA_COLECAO:
+        erros.append("colecao sem o token {{token}} como bearer")
+    for item in _requisicoes(colecao):
+        pedido = item["request"]
+        metodo, rota = _par(pedido)
+        onde = f"{metodo.upper()} {rota}"
+        protegida = "401" in openapi["paths"][rota][metodo]["responses"]
+        if pedido.get("auth") != (None if protegida else {"type": "noauth"}):
+            erros.append(f"{onde}: auth fora do padrao (token so nas rotas com 401)")
+        if "body" in pedido and _CORPO_JSON not in pedido["header"]:
+            erros.append(f"{onde}: corpo sem Content-Type: application/json")
+        url = pedido["url"]
+        if url["host"] != ["{{baseUrl}}"] or not url["raw"].startswith("{{baseUrl}}/"):
+            erros.append(f"{onde}: URL sem a variavel baseUrl")
+        if not item["response"]:
+            erros.append(f"{onde}: sem resposta de exemplo")
+    return erros
+
+
+def test_colecao_versionada_e_a_do_script_cumprem_o_que_o_readme_promete(
+    openapi: dict[str, Any], gerador: ModuleType
+) -> None:
+    assert _promessas_quebradas(openapi, json.loads(COLECAO.read_text())) == []
+    assert _promessas_quebradas(openapi, gerador.colecao(openapi)) == []
+
+
+def test_colecao_que_quebra_cada_promessa_e_apontada(openapi: dict[str, Any]) -> None:
+    colecao = json.loads(COLECAO.read_text())
+    itens = {_par(item["request"]): item for item in _requisicoes(colecao)}
+    del colecao["auth"]
+    del itens["get", "/api/v1/saude"]["request"]["auth"]
+    itens["get", "/api/v1/fila"]["request"]["auth"] = {"type": "noauth"}
+    itens["post", "/api/v1/estoque"]["request"]["header"] = []
+    itens["get", "/api/v1/estoque"]["request"]["url"]["raw"] = (
+        "http://127.0.0.1:8003/api/v1/estoque?limit=20"
+    )
+    itens["delete", "/api/v1/estoque/{sku}"]["response"] = []
+
+    assert sorted(_promessas_quebradas(openapi, colecao)) == [
+        "DELETE /api/v1/estoque/{sku}: sem resposta de exemplo",
+        "GET /api/v1/estoque: URL sem a variavel baseUrl",
+        "GET /api/v1/fila: auth fora do padrao (token so nas rotas com 401)",
+        "GET /api/v1/saude: auth fora do padrao (token so nas rotas com 401)",
+        "POST /api/v1/estoque: corpo sem Content-Type: application/json",
+        "colecao sem o token {{token}} como bearer",
+    ]
+
+
 def test_exemplos_da_colecao_seguem_o_schema_da_rota(openapi: dict[str, Any]) -> None:
     erros: list[str] = []
     for item in _requisicoes(json.loads(COLECAO.read_text())):

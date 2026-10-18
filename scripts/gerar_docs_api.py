@@ -8,7 +8,9 @@
 Os dois saem juntos, do mesmo OpenAPI, para nao divergirem. O script so monta o
 app e le o OpenAPI dele: nao sobe servidor nem banco. ``tests/unitarios/
 test_documentacao.py`` reprova quando os arquivos ficam atras do codigo, quando
-falta exemplo para uma rota ou quando um exemplo sai do schema da rota.
+falta exemplo para uma rota, quando um exemplo sai do schema da rota ou quando a
+colecao perde o token, o ``noauth`` das sondas, o ``Content-Type`` dos corpos, o
+``{{baseUrl}}`` ou a resposta de exemplo.
 """
 
 from __future__ import annotations
