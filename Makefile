@@ -7,8 +7,8 @@ GIT_SHA := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 GIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 COMPOSE := GIT_SHA=$(GIT_SHA) GIT_DATE=$(GIT_DATE) docker compose
 
-.PHONY: install lock-check lint format typecheck security lint-arch test diff-cover check \
-	smoke manifests print-trivy-version kind-deploy compose-up compose-down compose-logs migrate seed run
+.PHONY: install lock-check lint format typecheck security lint-arch test diff-cover mutacao \
+	check smoke manifests print-trivy-version kind-deploy compose-up compose-down compose-logs migrate seed run
 
 install:
 	uv sync --frozen
@@ -59,6 +59,21 @@ diff-cover:
 	uvx diff-cover==$(DIFF_COVER_VERSION) coverage.xml --branch-coverage --include-untracked \
 		--compare-branch=$(COMPARAR_COM) --fail-under=$(DIFF_COVER_MINIMO) \
 		--format markdown:reports/diff-cover.md
+
+# Mutacao nos modulos criticos (status do diagnostico, da execucao e da reserva,
+# saga, idempotencia, consumidor, relay, placa do veiculo e JWT), sem gate e sem
+# pontuacao minima. O mutmut nao roda aqui (o pacote se chama `src`, e ele exige
+# o pacote fora de `src.`), entao sao mutantes escritos a mao em
+# scripts/mutantes.toml, aplicados um por vez numa copia do codigo (mutants/); o
+# relatorio sai em reports/mutacao.md. Para quando passa de MUTACAO_PRAZO
+# segundos (15 min); os testes de integracao sobem um PostgreSQL (e os de
+# mensageria um RabbitMQ) a cada mutante, a menos que TEST_DATABASE_URL aponte
+# para um banco *_test no ar (o RabbitMQ sobe sempre). MUTANTES="E01 C03" roda so esses.
+MUTACAO_PRAZO ?= 900
+MUTANTES ?=
+
+mutacao:
+	$(PY) python scripts/mutacao_manual.py --prazo $(MUTACAO_PRAZO) $(if $(MUTANTES),--so $(MUTANTES))
 
 check: lock-check lint lint-arch typecheck security test diff-cover
 	@echo "Todos os gates passaram"
