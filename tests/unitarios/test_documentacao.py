@@ -1,4 +1,4 @@
-"""Documentos do servico: docs/api (OpenAPI e colecao Postman)."""
+"""Documentos do servico: docs/api (OpenAPI e colecao Postman) e docs/arquitetura.md."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from jsonschema import Draft202012Validator
 
+import src.mapeamentos  # noqa: F401 - registra as tabelas de todos os contextos
+from src.compartilhado.infraestrutura.database import metadata
 from src.main import criar_app
 from tests.conftest import provedor_dos_testes
 
@@ -18,6 +20,8 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 RAIZ = Path(__file__).resolve().parents[2]
+README = RAIZ / "README.md"
+ARQUITETURA = RAIZ / "docs" / "arquitetura.md"
 OPENAPI = RAIZ / "docs" / "api" / "openapi.json"
 COLECAO = RAIZ / "docs" / "api" / "execucao.postman_collection.json"
 GERADOR = RAIZ / "scripts" / "gerar_docs_api.py"
@@ -119,3 +123,29 @@ def test_rota_nova_sem_exemplo_reprova_a_geracao(
 
     with pytest.raises(ValueError, match="faltam \\[\\('get', '/api/v1/nova'\\)\\]"):
         gerador.colecao(com_rota_nova)
+
+
+def test_arquitetura_existe_e_o_readme_a_linka() -> None:
+    assert ARQUITETURA.is_file()
+    assert "](docs/arquitetura.md)" in README.read_text()
+
+
+def _colunas_do_er(texto: str) -> dict[str, set[str]]:
+    """Tabela -> colunas do primeiro ``erDiagram`` do documento."""
+    er = re.search(r"```mermaid\nerDiagram\n(.*?)```", texto, flags=re.DOTALL)
+    assert er is not None, "docs/arquitetura.md sem o erDiagram do modelo"
+    return {
+        tabela: {linha.split()[1] for linha in corpo.strip().splitlines()}
+        for tabela, corpo in re.findall(
+            r"^\s*(\w+) \{\n(.*?)^\s*\}", er[1], re.M | re.S
+        )
+    }
+
+
+def test_er_da_arquitetura_tem_toda_tabela_e_coluna_do_mapeamento() -> None:
+    mapeado = {
+        tabela.name: {coluna.name for coluna in tabela.columns}
+        for tabela in metadata.sorted_tables
+    }
+
+    assert _colunas_do_er(ARQUITETURA.read_text()) == mapeado

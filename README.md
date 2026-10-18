@@ -6,7 +6,7 @@ Parte da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT
 
 Este repositório traz o domínio, os casos de uso, a API REST e os dois processos de mensageria do serviço: o relay da outbox para o RabbitMQ e o consumidor dos comandos da saga ([Mensageria](#mensageria)). A mesma imagem roda os três processos, com comandos diferentes.
 
-Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança).
+Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança). A arquitetura deste serviço, com o modelo de dados completo e os fluxos passo a passo em diagramas, está em [`docs/arquitetura.md`](docs/arquitetura.md); o OpenAPI e a coleção Postman, em [`docs/api/`](docs/api) ([API](#api)).
 
 ## Arquitetura
 
