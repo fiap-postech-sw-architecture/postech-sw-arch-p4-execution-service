@@ -1,10 +1,12 @@
-"""Documentos do servico: docs/api (OpenAPI e colecao Postman) e docs/arquitetura.md."""
+"""Documentos do servico: docs/api, o curl de cada rota no README e a arquitetura."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 import re
+import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -149,3 +151,117 @@ def test_er_da_arquitetura_tem_toda_tabela_e_coluna_do_mapeamento() -> None:
     }
 
     assert _colunas_do_er(ARQUITETURA.read_text()) == mapeado
+
+
+_SEPARADORES = ";&|()\n"
+
+
+def _comandos_curl(texto: str) -> list[list[str]]:
+    """Argumentos de cada ``curl`` dos blocos ``bash``, separados como no shell.
+
+    A quebra de linha com ``\\`` continua o comando; a quebra dentro de aspas (o
+    JSON do corpo em varias linhas) fica no argumento; ``|``, ``;``, ``)`` e a
+    quebra de linha comum terminam o comando.
+    """
+    comandos: list[list[str]] = []
+    for bloco in re.findall(r"```bash\n(.*?)```", texto, flags=re.DOTALL):
+        if "curl" not in bloco:
+            continue
+        lexer = shlex.shlex(
+            bloco.replace("\\\n", " "), posix=True, punctuation_chars=_SEPARADORES
+        )
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        atual: list[str] | None = None
+        for token in lexer:
+            if token == "curl":
+                atual = []
+                comandos.append(atual)
+            elif set(token) <= set(_SEPARADORES):
+                atual = None
+            elif atual is not None:
+                atual.append(token)
+    return comandos
+
+
+@dataclass(frozen=True)
+class _Curl:
+    metodo: str
+    caminho: str
+    corpo: str | None
+    cabecalhos: tuple[str, ...]
+
+
+def _curl(argumentos: list[str]) -> _Curl | None:
+    """Metodo, caminho a partir de ``/api/v1/``, corpo e cabecalhos de um ``curl``."""
+    metodo = corpo = url = None
+    cabecalhos: list[str] = []
+    restantes = iter(argumentos)
+    for argumento in restantes:
+        if argumento in {"-X", "--request"}:
+            metodo = next(restantes)
+        elif argumento in {"-d", "--data", "--data-raw"}:
+            corpo = next(restantes)
+        elif argumento in {"-H", "--header"}:
+            cabecalhos.append(next(restantes))
+        elif "/api/v1/" in argumento:
+            url = argumento
+    if url is None:
+        return None
+    caminho = url[url.index("/api/v1/") :].split("?")[0]
+    # Como o curl: sem -X, -d vira POST.
+    metodo = metodo or ("POST" if corpo is not None else "GET")
+    return _Curl(metodo, caminho, corpo, tuple(cabecalhos))
+
+
+def test_readme_tem_um_curl_por_rota_com_token_e_corpo_aceito(
+    openapi: dict[str, Any],
+) -> None:
+    curls = [c for a in _comandos_curl(README.read_text()) if (c := _curl(a))]
+    erros: list[str] = []
+    for rota, operacoes in openapi["paths"].items():
+        modelo = re.compile(re.sub(r"\{\w+\}", "[^/]+", rota))
+        for metodo, operacao in operacoes.items():
+            onde = f"{metodo.upper()} {rota}"
+            casados = [
+                c
+                for c in curls
+                if c.metodo == metodo.upper() and modelo.fullmatch(c.caminho)
+            ]
+            if not casados:
+                erros.append(f"{onde}: sem curl no README")
+            for curl in casados:
+                com_token = any(
+                    h.startswith("Authorization: Bearer ") for h in curl.cabecalhos
+                )
+                if "401" in operacao["responses"] and not com_token:
+                    erros.append(f"{onde}: curl sem o token")
+                if "requestBody" in operacao:
+                    corpo = json.loads(curl.corpo or "null")
+                    erros += _fora_do_schema(
+                        openapi, operacao["requestBody"], corpo, onde
+                    )
+                elif curl.corpo is not None:
+                    erros.append(f"{onde}: corpo numa rota sem requestBody")
+
+    assert erros == []
+
+
+def test_curl_em_varias_linhas_com_json_quebrado_e_lido_inteiro() -> None:
+    texto = (
+        "```bash\n"
+        'export ID=$(curl -sk "$B/api/v1/x?y=1" \\\n'
+        '  -H "Authorization: Bearer $T" | jq -r .id)\n'
+        'curl -sk -X PUT "$B/api/v1/x/$ID" -d \'{"a": 1,\n'
+        '   "b": 2}\'\n'
+        "curl -sk \"$B/api/v1/x\" -d '{}'\n"
+        "```\n"
+    )
+
+    curls = [_curl(argumentos) for argumentos in _comandos_curl(texto)]
+
+    assert curls == [
+        _Curl("GET", "/api/v1/x", None, ("Authorization: Bearer $T",)),
+        _Curl("PUT", "/api/v1/x/$ID", '{"a": 1,\n   "b": 2}', ()),
+        _Curl("POST", "/api/v1/x", "{}", ()),
+    ]
