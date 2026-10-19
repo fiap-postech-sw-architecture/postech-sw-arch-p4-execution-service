@@ -521,6 +521,22 @@ Exceções:
 
 Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0 (e o valor esperado em `tests/unitarios/test_scripts_ci.py` com ele). O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit, o SonarQube, o scanner dele (`scripts/sonar/analisar.sh`) e o diff-cover.
 
+## CD
+
+O [caller `cd.yml`](.github/workflows/cd.yml) conserva gatilhos, concorrência e os nove checks locais de CI e segurança. Depois dos dois gates verdes, o job `cd` chama o [workflow reutilizável do Platform](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/.github/workflows/cd-servico.yml), fixado em `3f7cca2eb555a038b0d2780058ef0e692f93ee8a` (S), com `servico: execution-service` e quatro inputs opcionais: `sha_platform`, `sha_os_service`, `sha_billing_service` e `sha_execution_service`. S escolhe a definição do workflow; `sha_platform` escolhe separadamente os scripts e manifests do deploy (P). O próprio serviço é sempre o commit do run, e seu input só aceita vazio ou esse SHA.
+
+O push na `main` e o dispatch iniciam o CD; fora da `main`, o reutilizável reprova antes de publicar imagem. Só há um run por repositório em curso, sem cancelá-lo; o GitHub mantém um único pendente, que o disparo seguinte pode substituir. O caller concede `contents: read`, `actions: read` e `packages: write`, sem herdar segredos; os jobs chamados reduzem essas permissões. A imagem, o kind e o gancho remoto são testados uma única vez no [teste compartilhado do Platform](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/tests/test_cd_servico_workflow.py).
+
+No reutilizável, `image` publica a imagem com tag do commit, SBOM SPDX e proveniência mínima sem payload do evento, confere o digest e salva o tar `linux/amd64`. `deploy-kind` sobe a plataforma e os três serviços num kind efêmero do runner, implanta esta imagem pelo tar, executa smoke e E2E, varre os relatórios e só então os publica. Os vizinhos e P usam o último CD verde de push/main; ausência de run verde ou workflow 404 usa a main com aviso, e demais erros da API reprovam. O artefato `imagem` dura 1 dia; `sbom-execution-service` e `e2e-kind` (somente `platform/reports/e2e/`, após varredura) duram 90 dias. O cluster some ao terminar o job.
+
+O primeiro CD deste caller na `main` ainda está pendente; os testes locais não substituem a prova real de imagem, SBOM, digest, kind, smoke, E2E, varredura e `remote-skipped`. O deploy remoto permanece desligado por `DEPLOY_REMOTO_HABILITADO`, sem provedor, `environment`, `id-token` ou `secrets: inherit` no caller. Uma habilitação futura exige alterar deliberadamente o reutilizável e seu teste, seguindo [Nuvem opcional](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/docs/operacao/nuvem-opcional.md), e atualizar S; não cabe adicionar steps ao job que usa `uses`. O script remoto executa a partir do checkout do serviço, implanta o overlay por digest e exige a plataforma previamente implantada; o smoke ocorre no kind do runner.
+
+Antes de publicar: `uv run pytest tests/unitarios/test_cd.py`, `make check`, actionlint com shellcheck nos workflows e `make smoke`. O contrato local exige caminho literal e SHA completo minúsculo, serviço/inputs, needs, permissões, gatilhos, concorrência e os nove checks. O Dependabot `github-actions` já cobre a raiz e o pin reutilizável; até haver prova de um bump reconhecido, a atualização de S é supervisionada. Para reexecutar pela main com a resolução padrão dos commits:
+
+```bash
+gh workflow run cd.yml --ref main
+```
+
 ## Repositórios da fase 4
 
 | Repositório | Papel |
