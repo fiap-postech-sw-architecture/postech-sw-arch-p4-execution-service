@@ -361,15 +361,17 @@ def test_o_configmap_liga_a_guarda_de_producao_e_o_prefixo_da_borda(
     assert dados["METRICS_PORT"] == "9100"
     # Sem a exportacao ligada, a saga do servico some do Jaeger.
     assert dados["OTEL_ENABLED"] == "true"
-    # Com o Jaeger fora e a fila cheia o SDK esperaria 30 s por lote e o pod levaria
-    # o grace period inteiro para sair: cada envio tem o prazo curto.
+    # Com o Jaeger fora e a fila cheia, o SDK aguarda o worker por ate 30 s
+    # no desligamento, podendo consumir o grace period inteiro.
+    # O OTLP limita a exportacao. O BSP fica configurado e e lido pelo SDK 1.45.1,
+    # mas nao e usado na exportacao.
     assert dados["OTEL_BSP_EXPORT_TIMEOUT"] == "2000"
     assert dados["OTEL_EXPORTER_OTLP_TIMEOUT"] == "2"
     assert "TRUSTED_PROXIES" not in dados  # o entrypoint usa --no-proxy-headers
 
 
 # Variaveis do ConfigMap que o codigo do servico nao le: o SDK do OpenTelemetry as le
-# do ambiente (prazo do lote e de cada envio OTLP).
+# do ambiente (BSP lido mas nao usado no SDK 1.45.1, e prazo de exportacao OTLP).
 LIDAS_PELO_SDK = {"OTEL_BSP_EXPORT_TIMEOUT", "OTEL_EXPORTER_OTLP_TIMEOUT"}
 
 
