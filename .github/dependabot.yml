@@ -5,7 +5,8 @@
 # O limite de 3 PRs abertos vale ate o congelamento do codigo em 06/11/2026.
 # Depois dele, trocar `open-pull-requests-limit` por 0 nos tres blocos: o 0
 # desliga so as atualizacoes de versao; os PRs de seguranca do Dependabot
-# (habilitados no repositorio) nao entram no limite e seguem abrindo.
+# (habilitados no repositorio) nao entram no limite e seguem abrindo. O valor
+# esperado do limite esta em tests/unitarios/test_scripts_ci.py.
 #
 # Sem `labels`: os PRs levam os rotulos padrao do Dependabot (`dependencies` e o
 # do ecossistema), que ele cria no repositorio se faltarem. Com `labels`
@@ -15,7 +16,7 @@
 # subida a mao: postgres e prometheuscommunity/postgres-exporter em k8s/ (README,
 # Implantacao), o PostgreSQL e o RabbitMQ do compose e dos testes de integracao,
 # o kubeconform, o trivy e o diff-cover (Makefile) e o gitleaks, o pip-audit e o
-# SonarQube (workflows).
+# SonarQube (workflows), e o scanner dele (scripts/sonar/analisar.sh).
 version: 2
 
 updates:
@@ -31,12 +32,15 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      # Leva tambem os opentelemetry-*, e os patches e minors da familia sobem
-      # juntos aqui: o SDK fixa opentelemetry-api e semantic-conventions na
-      # mesma versao, e subir so uma parte nao resolve. Um grupo so deles
-      # ficaria vazio, mesmo antes deste no arquivo: o Dependabot o trata como
-      # menos especifico que este. A major fica fora do grupo e atras do teto
-      # do pyproject.toml (<1.46 e <0.67).
+      # Leva tambem os opentelemetry-*, e os patches da familia sobem juntos
+      # aqui: o SDK fixa opentelemetry-api e semantic-conventions na mesma
+      # versao, e subir so uma parte nao resolve. Um grupo so deles ficaria
+      # vazio, mesmo antes deste no arquivo: o Dependabot o trata como menos
+      # especifico que este. A major fica fora do grupo e atras do teto do
+      # pyproject.toml (<1.46 e <0.67), que barra tambem a proxima minor:
+      # telemetria.py troca _status e _events de um span, atributos privados
+      # do SDK que uma minor nova pode mudar. Minor nova so entra com o teto
+      # subido, depois de ler o changelog.
       python-patch-e-minor:
         update-types: ["minor", "patch"]
 

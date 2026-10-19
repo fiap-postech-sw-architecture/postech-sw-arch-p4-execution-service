@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -218,6 +220,25 @@ def test_mutante_depois_do_prazo_sai_nao_rodado_sem_rodar_o_pytest(
     assert [(x["resultado"], x["teste"]) for x in linhas] == [("nao rodado", "")] * 2
 
 
+def test_prazo_corta_so_o_mutante_que_chega_depois_dele(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Relogio falso: o inicio e 100 s e cada mutante chega 0,5 s depois do
+    # anterior. Com prazo de 1 s, o 2o chega com 1 s decorrido (ainda roda) e o
+    # 3o com 1,5 s (nao roda); o prazo negativo do teste acima nao separa os dois.
+    horas = iter([100.0, 100.5, 101.0, 101.5])
+    monkeypatch.setattr(
+        mutacao_manual, "time", SimpleNamespace(monotonic=lambda: next(horas))
+    )
+    monkeypatch.setattr(mutacao_manual, "_resultado", lambda m, limpos: ("morto", "t"))
+
+    linhas = mutacao_manual.executar(
+        tuple(_mutante("return x * 3") for _ in range(3)), 1
+    )
+
+    assert [x["resultado"] for x in linhas] == ["morto", "morto", "nao rodado"]
+
+
 def _linhas(*resultados: str) -> list[dict[str, str]]:
     return [
         {"id": str(i), "area": "x", "arquivo": "a.py", "mudanca": "m", "teste": ""}
@@ -288,3 +309,39 @@ def test_main_so_sai_com_erro_quando_a_medida_e_invalida(
     assert mutacao_manual.main(["--so", "E01"]) == saida
     texto = (tmp_path / "reports" / "r.md").read_text(encoding="utf-8")
     assert texto.startswith("Mutantes manuais:")
+
+
+@pytest.fixture
+def execucao_falsa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+    """Troca a preparacao da copia e a execucao: o main so escolhe e relata."""
+    recebido: dict[str, Any] = {"resultados": ("morto",)}
+
+    def executar(mutantes: tuple[Any, ...], prazo: float) -> list[dict[str, str]]:
+        recebido["ids"] = [m.id for m in mutantes]
+        recebido["prazo"] = prazo
+        return _linhas(*recebido["resultados"])
+
+    monkeypatch.setattr(mutacao_manual, "RELATORIO", tmp_path / "reports" / "r.md")
+    monkeypatch.setattr(mutacao_manual, "preparar_copia", lambda copiar: None)
+    monkeypatch.setattr(mutacao_manual, "executar", executar)
+    return recebido
+
+
+def test_main_so_roda_so_os_ids_pedidos_e_sem_so_roda_todos(
+    execucao_falsa: dict[str, Any],
+) -> None:
+    todos = [m.id for m in mutacao_manual.carregar().mutantes]
+
+    assert mutacao_manual.main(["--so", todos[1], todos[0]]) == 0
+    assert execucao_falsa["ids"] == [todos[0], todos[1]]
+    assert execucao_falsa["prazo"] == 900
+
+    assert mutacao_manual.main([]) == 0
+    assert execucao_falsa["ids"] == todos
+
+
+def test_main_prazo_do_argumento_chega_ao_executar(
+    execucao_falsa: dict[str, Any],
+) -> None:
+    assert mutacao_manual.main(["--prazo", "12.5"]) == 0
+    assert execucao_falsa["prazo"] == 12.5

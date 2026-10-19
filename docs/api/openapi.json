@@ -1,0 +1,1843 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PytStop Execution Service",
+    "description": "Execucao e Producao do PytStop (fase 4): fila de diagnostico, fila de execucao e estoque de pecas (reserva, liberacao e baixa). Participante da saga orquestrada pelo OS Service; os eventos da saga saem pela outbox.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/saude": {
+      "get": {
+        "tags": [
+          "Saude"
+        ],
+        "summary": "Liveness (processo de pe, sem dependencias)",
+        "description": "Responde 200 com o processo de pe, sem tocar banco, JWKS ou Billing.\n\nE o HEALTHCHECK da imagem: dependencia fora nao deve reiniciar o pod (isso\ne papel da readiness, que so o tira do balanceamento). ``async`` de\nproposito (licao do p3): as rotas de negocio sao sync e rodam no\nthreadpool; sob carga que satura o pool, uma saude sync ficaria na fila e o\nkubelet reiniciaria o pod justamente no pico.",
+        "operationId": "saude_api_v1_saude_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Saude Api V1 Saude Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saude/pronto": {
+      "get": {
+        "tags": [
+          "Saude"
+        ],
+        "summary": "Readiness (banco respondendo)",
+        "description": "200 so com o banco respondendo ``SELECT 1`` em ate 2 s; senao 503.\n\nSo o banco: JWKS e Billing fora do ar nao tiram o pod do Service (as rotas\nrespondem 503 com ``Retry-After`` por conta propria).",
+        "operationId": "pronto_api_v1_saude_pronto_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Banco inacessivel ou acima de 2 s"
+          }
+        }
+      }
+    },
+    "/api/v1/estoque": {
+      "post": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Cadastra uma peca no estoque (admin)",
+        "description": "Cadastra o SKU com o saldo inicial; o mesmo SKU precisa existir no Billing.",
+        "operationId": "criar_item_api_v1_estoque_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CriarItemEstoqueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemEstoqueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Lista o estoque paginado (ordem de SKU)",
+        "operationId": "listar_itens_api_v1_estoque_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000000,
+              "minimum": 0,
+              "description": "Itens a pular (ate 1.000.000)",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Itens a pular (ate 1.000.000)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Tamanho da pagina (1 a 100)",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Tamanho da pagina (1 a 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pagina_ItemEstoqueResponse_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/estoque/{sku}": {
+      "get": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Consulta uma peca pelo SKU",
+        "operationId": "obter_item_api_v1_estoque__sku__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+              "examples": [
+                "PEC-VELA"
+              ],
+              "title": "Sku"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemEstoqueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Atualiza nome e situacao (ativo) de uma peca (admin)",
+        "description": "Nao mexe em quantidade; desativar exige a peca sem unidades reservadas.",
+        "operationId": "atualizar_item_api_v1_estoque__sku__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+              "examples": [
+                "PEC-VELA"
+              ],
+              "title": "Sku"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AtualizarItemEstoqueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemEstoqueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Desativa uma peca (soft delete, admin)",
+        "description": "A peca sai de novos diagnosticos e reservas; o historico fica.",
+        "operationId": "desativar_item_api_v1_estoque__sku__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+              "examples": [
+                "PEC-VELA"
+              ],
+              "title": "Sku"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/estoque/{sku}/quantidade": {
+      "patch": {
+        "tags": [
+          "Estoque"
+        ],
+        "summary": "Ajusta o saldo fisico de uma peca (admin)",
+        "description": "Define a quantidade disponivel absoluta (inventario); 409 abaixo do reservado.",
+        "operationId": "ajustar_quantidade_api_v1_estoque__sku__quantidade_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+              "examples": [
+                "PEC-VELA"
+              ],
+              "title": "Sku"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AjustarQuantidadeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemEstoqueResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/diagnosticos": {
+      "get": {
+        "tags": [
+          "Diagnosticos"
+        ],
+        "summary": "Fila de diagnosticos, com filtro opcional de status",
+        "description": "Ordem de chegada (mais antigo primeiro); ``?status=AGUARDANDO`` e a fila.",
+        "operationId": "listar_diagnosticos_api_v1_diagnosticos_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StatusDiagnostico"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000000,
+              "minimum": 0,
+              "description": "Itens a pular (ate 1.000.000)",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Itens a pular (ate 1.000.000)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Tamanho da pagina (1 a 100)",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Tamanho da pagina (1 a 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pagina_DiagnosticoResponse_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/diagnosticos/{ordem_id}/inicio": {
+      "post": {
+        "tags": [
+          "Diagnosticos"
+        ],
+        "summary": "Mecanico assume o diagnostico (emite DiagnosticoIniciado)",
+        "description": "O mecanico autenticado vira o responsavel; repetir por ele e idempotente.\n\nO admin tambem pode assumir (vira o responsavel), com log de auditoria.",
+        "operationId": "iniciar_diagnostico_api_v1_diagnosticos__ordem_id__inicio_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ordem_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ordem Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/diagnosticos/{ordem_id}/conclusao": {
+      "post": {
+        "tags": [
+          "Diagnosticos"
+        ],
+        "summary": "Registra servicos e pecas (emite DiagnosticoConcluido)",
+        "description": "Valida pecas no estoque local e codigos no Billing antes de concluir.\n\n422 lista os codigos recusados; 503 quando o Billing nao responde (ou o\ncircuito esta aberto); 502 quando ele recusa o pedido (4xx). So o mecanico\nque iniciou conclui (o admin conclui em nome dele). Repetir devolve o\ndiagnostico ja concluido, sem alterar itens.",
+        "operationId": "concluir_diagnostico_api_v1_diagnosticos__ordem_id__conclusao_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ordem_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ordem Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConclusaoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Dados recusados por regra de negocio (envelope `erro`) ou corpo invalido no schema (`detail` + `id_requisicao`, formato do p3)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "O Billing recusou a validacao (4xx) ou respondeu fora do contrato; repetir nao resolve",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependencia indisponivel (JWKS do OS Service ou Billing); o header `Retry-After` traz os segundos ate a proxima tentativa",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/fila": {
+      "get": {
+        "tags": [
+          "Execucao"
+        ],
+        "summary": "Fila de execucao com a posicao de cada ordem",
+        "description": "Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada.",
+        "operationId": "listar_fila_api_v1_fila_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000000,
+              "minimum": 0,
+              "description": "Itens a pular (ate 1.000.000)",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Itens a pular (ate 1.000.000)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Tamanho da pagina (1 a 100)",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Tamanho da pagina (1 a 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pagina_ItemDaFilaResponse_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{ordem_id}/inicio": {
+      "post": {
+        "tags": [
+          "Execucao"
+        ],
+        "summary": "Mecanico inicia o reparo (emite ExecucaoIniciada, pivot da saga)",
+        "description": "Exige a reserva de pecas ativa (409 sem ela): depois daqui a OS nao cancela.\n\nRepetir pelo mesmo mecanico e idempotente. O admin tambem pode iniciar (vira\no responsavel), com log de auditoria.",
+        "operationId": "iniciar_execucao_api_v1_execucoes__ordem_id__inicio_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ordem_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ordem Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/execucoes/{ordem_id}/finalizacao": {
+      "post": {
+        "tags": [
+          "Execucao"
+        ],
+        "summary": "Mecanico finaliza o reparo (baixa do estoque + ExecucaoFinalizada)",
+        "description": "Consome a reserva de pecas da ordem na mesma transacao.\n\nSo o mecanico que iniciou finaliza; o admin finaliza em nome dele.",
+        "operationId": "finalizar_execucao_api_v1_execucoes__ordem_id__finalizacao_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ordem_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ordem Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecucaoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credencial ausente, invalida ou expirada (uma resposta para toda falha)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Papel sem permissao ou usuario nao responsavel pelo objeto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso nao encontrado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Estado atual nao permite a operacao",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErroResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AjustarQuantidadeRequest": {
+        "properties": {
+          "quantidade_disponivel": {
+            "type": "integer",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Quantidade Disponivel",
+            "description": "Saldo fisico apos a contagem; nao pode ficar abaixo do reservado"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "quantidade_disponivel"
+        ],
+        "title": "AjustarQuantidadeRequest"
+      },
+      "AtualizarItemEstoqueRequest": {
+        "properties": {
+          "nome": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Nome"
+          },
+          "ativo": {
+            "type": "boolean",
+            "title": "Ativo"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "nome",
+          "ativo"
+        ],
+        "title": "AtualizarItemEstoqueRequest"
+      },
+      "ConclusaoRequest": {
+        "properties": {
+          "itens": {
+            "items": {
+              "$ref": "#/components/schemas/ItemDiagnosticoSchema"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Itens"
+          },
+          "observacoes": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Observacoes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "itens"
+        ],
+        "title": "ConclusaoRequest"
+      },
+      "CriarItemEstoqueRequest": {
+        "properties": {
+          "sku": {
+            "type": "string",
+            "maxLength": 50,
+            "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+            "title": "Sku",
+            "description": "Mesmo codigo da tabela de precos do Billing",
+            "examples": [
+              "PEC-OLEO-5W30"
+            ]
+          },
+          "nome": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Nome"
+          },
+          "quantidade_disponivel": {
+            "type": "integer",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Quantidade Disponivel"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sku",
+          "nome",
+          "quantidade_disponivel"
+        ],
+        "title": "CriarItemEstoqueRequest"
+      },
+      "DiagnosticoResponse": {
+        "properties": {
+          "ordem_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Ordem Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusDiagnostico"
+          },
+          "veiculo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VeiculoResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Retrato do veiculo; nulo so na lapide de um descarte adiantado"
+          },
+          "descricao_problema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descricao Problema"
+          },
+          "mecanico_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mecanico Id"
+          },
+          "itens": {
+            "items": {
+              "$ref": "#/components/schemas/ItemDiagnosticoSchema"
+            },
+            "type": "array",
+            "title": "Itens"
+          },
+          "observacoes": {
+            "type": "string",
+            "title": "Observacoes"
+          },
+          "solicitado_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Solicitado Em"
+          },
+          "iniciado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iniciado Em"
+          },
+          "concluido_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concluido Em"
+          },
+          "descartado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descartado Em"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ordem_id",
+          "status",
+          "veiculo",
+          "descricao_problema",
+          "mecanico_id",
+          "itens",
+          "observacoes",
+          "solicitado_em",
+          "iniciado_em",
+          "concluido_em",
+          "descartado_em"
+        ],
+        "title": "DiagnosticoResponse"
+      },
+      "Erro": {
+        "properties": {
+          "codigo": {
+            "type": "string",
+            "title": "Codigo"
+          },
+          "mensagem": {
+            "type": "string",
+            "title": "Mensagem"
+          },
+          "id_requisicao": {
+            "type": "string",
+            "title": "Id Requisicao"
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo",
+          "mensagem",
+          "id_requisicao"
+        ],
+        "title": "Erro"
+      },
+      "ErroResponse": {
+        "properties": {
+          "erro": {
+            "$ref": "#/components/schemas/Erro"
+          }
+        },
+        "type": "object",
+        "required": [
+          "erro"
+        ],
+        "title": "ErroResponse"
+      },
+      "ExecucaoResponse": {
+        "properties": {
+          "ordem_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Ordem Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusExecucao"
+          },
+          "prioridade": {
+            "$ref": "#/components/schemas/Prioridade"
+          },
+          "enfileirada_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enfileirada Em"
+          },
+          "veiculo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VeiculoResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mecanico_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mecanico Id"
+          },
+          "iniciada_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iniciada Em"
+          },
+          "finalizada_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalizada Em"
+          },
+          "cancelada_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelada Em"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ordem_id",
+          "status",
+          "prioridade",
+          "enfileirada_em",
+          "veiculo",
+          "mecanico_id",
+          "iniciada_em",
+          "finalizada_em",
+          "cancelada_em"
+        ],
+        "title": "ExecucaoResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ItemDaFilaResponse": {
+        "properties": {
+          "posicao": {
+            "type": "integer",
+            "title": "Posicao"
+          },
+          "ordem_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Ordem Id"
+          },
+          "prioridade": {
+            "$ref": "#/components/schemas/Prioridade"
+          },
+          "enfileirada_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enfileirada Em"
+          },
+          "veiculo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VeiculoResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Retrato do diagnostico, para achar o carro no patio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "posicao",
+          "ordem_id",
+          "prioridade",
+          "enfileirada_em",
+          "veiculo"
+        ],
+        "title": "ItemDaFilaResponse"
+      },
+      "ItemDiagnosticoSchema": {
+        "properties": {
+          "tipo": {
+            "$ref": "#/components/schemas/TipoItem"
+          },
+          "codigo": {
+            "type": "string",
+            "maxLength": 50,
+            "pattern": "^[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+            "title": "Codigo",
+            "description": "Codigo da tabela de precos do Billing (peca = SKU do estoque)",
+            "examples": [
+              "PEC-PASTILHA-FREIO"
+            ]
+          },
+          "quantidade": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Quantidade"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tipo",
+          "codigo",
+          "quantidade"
+        ],
+        "title": "ItemDiagnosticoSchema"
+      },
+      "ItemEstoqueResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sku": {
+            "type": "string",
+            "title": "Sku"
+          },
+          "nome": {
+            "type": "string",
+            "title": "Nome"
+          },
+          "quantidade_disponivel": {
+            "type": "integer",
+            "title": "Quantidade Disponivel",
+            "description": "Saldo fisico (inclui reservado)"
+          },
+          "quantidade_reservada": {
+            "type": "integer",
+            "title": "Quantidade Reservada",
+            "description": "Comprometido com reservas ativas"
+          },
+          "quantidade_livre": {
+            "type": "integer",
+            "title": "Quantidade Livre",
+            "description": "Livre para novas reservas (disponivel menos reservada)"
+          },
+          "ativo": {
+            "type": "boolean",
+            "title": "Ativo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "sku",
+          "nome",
+          "quantidade_disponivel",
+          "quantidade_reservada",
+          "quantidade_livre",
+          "ativo"
+        ],
+        "title": "ItemEstoqueResponse"
+      },
+      "Pagina_DiagnosticoResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticoResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "Pagina[DiagnosticoResponse]"
+      },
+      "Pagina_ItemDaFilaResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemDaFilaResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "Pagina[ItemDaFilaResponse]"
+      },
+      "Pagina_ItemEstoqueResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemEstoqueResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "Pagina[ItemEstoqueResponse]"
+      },
+      "Prioridade": {
+        "type": "string",
+        "enum": [
+          "normal",
+          "alta"
+        ],
+        "title": "Prioridade",
+        "description": "Prioridade do contrato ``AgendarExecucao``: ``alta`` passa na frente."
+      },
+      "StatusDiagnostico": {
+        "type": "string",
+        "enum": [
+          "AGUARDANDO",
+          "EM_ANDAMENTO",
+          "CONCLUIDO",
+          "DESCARTADO"
+        ],
+        "title": "StatusDiagnostico"
+      },
+      "StatusExecucao": {
+        "type": "string",
+        "enum": [
+          "AGUARDANDO",
+          "EM_EXECUCAO",
+          "FINALIZADA",
+          "CANCELADA"
+        ],
+        "title": "StatusExecucao"
+      },
+      "TipoItem": {
+        "type": "string",
+        "enum": [
+          "servico",
+          "peca"
+        ],
+        "title": "TipoItem"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VeiculoResponse": {
+        "properties": {
+          "placa": {
+            "type": "string",
+            "title": "Placa"
+          },
+          "marca": {
+            "type": "string",
+            "title": "Marca"
+          },
+          "modelo": {
+            "type": "string",
+            "title": "Modelo"
+          },
+          "ano": {
+            "type": "integer",
+            "title": "Ano"
+          }
+        },
+        "type": "object",
+        "required": [
+          "placa",
+          "marca",
+          "modelo",
+          "ano"
+        ],
+        "title": "VeiculoResponse",
+        "description": "Retrato do veiculo; anonimizado (LGPD), a placa vem ``ANONIMIZADO:{id}``."
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

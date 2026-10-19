@@ -1,0 +1,915 @@
+{
+  "info": {
+    "name": "PytStop Execution Service",
+    "description": "Uma requisicao por rota do Execution Service, com corpo e resposta de exemplo. baseUrl aponta para o Kong do kind (https://localhost/execucao; o certificado e autoassinado: desligue a verificacao de SSL do Postman) e pode ser trocada pelo compose do servico (http://127.0.0.1:8003), onde so as sondas respondem sem o OS Service. token e o access_token do POST /api/v1/autenticacao/login do OS Service (admin ou mecanico); ordem_id e uma ordem que o OS Service abriu (GET /api/v1/diagnosticos?status=AGUARDANDO a mostra); sku e a peca cadastrada pela requisicao de cadastro. Gerada por scripts/gerar_docs_api.py (make docs-api); o OpenAPI esta em docs/api/openapi.json.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://localhost/execucao"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "ordem_id",
+      "value": "3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55"
+    },
+    {
+      "key": "sku",
+      "value": "PEC-CORREIA-DENTADA"
+    }
+  ],
+  "item": [
+    {
+      "name": "Saude",
+      "item": [
+        {
+          "name": "Liveness (processo de pe, sem dependencias)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/saude",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saude"
+              ]
+            },
+            "description": "Responde 200 com o processo de pe, sem tocar banco, JWKS ou Billing.\n\nE o HEALTHCHECK da imagem: dependencia fora nao deve reiniciar o pod (isso\ne papel da readiness, que so o tira do balanceamento). ``async`` de\nproposito (licao do p3): as rotas de negocio sao sync e rodam no\nthreadpool; sob carga que satura o pool, uma saude sync ficaria na fila e o\nkubelet reiniciaria o pod justamente no pico.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/saude",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "saude"
+                  ]
+                },
+                "description": "Responde 200 com o processo de pe, sem tocar banco, JWKS ou Billing.\n\nE o HEALTHCHECK da imagem: dependencia fora nao deve reiniciar o pod (isso\ne papel da readiness, que so o tira do balanceamento). ``async`` de\nproposito (licao do p3): as rotas de negocio sao sync e rodam no\nthreadpool; sob carga que satura o pool, uma saude sync ficaria na fila e o\nkubelet reiniciaria o pod justamente no pico.",
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\"\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Readiness (banco respondendo)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/saude/pronto",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saude",
+                "pronto"
+              ]
+            },
+            "description": "200 so com o banco respondendo ``SELECT 1`` em ate 2 s; senao 503.\n\nSo o banco: JWKS e Billing fora do ar nao tiram o pod do Service (as rotas\nrespondem 503 com ``Retry-After`` por conta propria).",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/saude/pronto",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "saude",
+                    "pronto"
+                  ]
+                },
+                "description": "200 so com o banco respondendo ``SELECT 1`` em ate 2 s; senao 503.\n\nSo o banco: JWKS e Billing fora do ar nao tiram o pod do Service (as rotas\nrespondem 503 com ``Retry-After`` por conta propria).",
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\"\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Estoque",
+      "item": [
+        {
+          "name": "Cadastra uma peca no estoque (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque"
+              ]
+            },
+            "description": "Cadastra o SKU com o saldo inicial; o mesmo SKU precisa existir no Billing.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada\",\n  \"quantidade_disponivel\": 8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque"
+                  ]
+                },
+                "description": "Cadastra o SKU com o saldo inicial; o mesmo SKU precisa existir no Billing.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada\",\n  \"quantidade_disponivel\": 8\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"5f0c6b2e-8d1a-4c3b-9e7f-2a4b6c8d0e1f\",\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada\",\n  \"quantidade_disponivel\": 8,\n  \"quantidade_reservada\": 0,\n  \"quantidade_livre\": 8,\n  \"ativo\": true\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Lista o estoque paginado (ordem de SKU)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque"
+              ]
+            },
+            "description": "Lista o estoque paginado (ordem de SKU)"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque"
+                  ]
+                },
+                "description": "Lista o estoque paginado (ordem de SKU)"
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"5f0c6b2e-8d1a-4c3b-9e7f-2a4b6c8d0e1f\",\n      \"sku\": \"PEC-CORREIA-DENTADA\",\n      \"nome\": \"Correia dentada\",\n      \"quantidade_disponivel\": 8,\n      \"quantidade_reservada\": 0,\n      \"quantidade_livre\": 8,\n      \"ativo\": true\n    }\n  ],\n  \"total\": 1,\n  \"offset\": 0,\n  \"limit\": 20\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Consulta uma peca pelo SKU",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque",
+                "{{sku}}"
+              ]
+            },
+            "description": "Consulta uma peca pelo SKU"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque",
+                    "{{sku}}"
+                  ]
+                },
+                "description": "Consulta uma peca pelo SKU"
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"5f0c6b2e-8d1a-4c3b-9e7f-2a4b6c8d0e1f\",\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada\",\n  \"quantidade_disponivel\": 8,\n  \"quantidade_reservada\": 0,\n  \"quantidade_livre\": 8,\n  \"ativo\": true\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Ajusta o saldo fisico de uma peca (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}/quantidade",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque",
+                "{{sku}}",
+                "quantidade"
+              ]
+            },
+            "description": "Define a quantidade disponivel absoluta (inventario); 409 abaixo do reservado.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantidade_disponivel\": 12\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}/quantidade",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque",
+                    "{{sku}}",
+                    "quantidade"
+                  ]
+                },
+                "description": "Define a quantidade disponivel absoluta (inventario); 409 abaixo do reservado.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"quantidade_disponivel\": 12\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"5f0c6b2e-8d1a-4c3b-9e7f-2a4b6c8d0e1f\",\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada\",\n  \"quantidade_disponivel\": 12,\n  \"quantidade_reservada\": 0,\n  \"quantidade_livre\": 12,\n  \"ativo\": true\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Atualiza nome e situacao (ativo) de uma peca (admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque",
+                "{{sku}}"
+              ]
+            },
+            "description": "Nao mexe em quantidade; desativar exige a peca sem unidades reservadas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Correia dentada (kit)\",\n  \"ativo\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque",
+                    "{{sku}}"
+                  ]
+                },
+                "description": "Nao mexe em quantidade; desativar exige a peca sem unidades reservadas.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"nome\": \"Correia dentada (kit)\",\n  \"ativo\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"5f0c6b2e-8d1a-4c3b-9e7f-2a4b6c8d0e1f\",\n  \"sku\": \"PEC-CORREIA-DENTADA\",\n  \"nome\": \"Correia dentada (kit)\",\n  \"quantidade_disponivel\": 8,\n  \"quantidade_reservada\": 0,\n  \"quantidade_livre\": 8,\n  \"ativo\": true\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Desativa uma peca (soft delete, admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "estoque",
+                "{{sku}}"
+              ]
+            },
+            "description": "A peca sai de novos diagnosticos e reservas; o historico fica."
+          },
+          "response": [
+            {
+              "name": "204 No Content",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/estoque/{{sku}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "estoque",
+                    "{{sku}}"
+                  ]
+                },
+                "description": "A peca sai de novos diagnosticos e reservas; o historico fica."
+              },
+              "status": "No Content",
+              "code": 204,
+              "header": [],
+              "body": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Diagnosticos",
+      "item": [
+        {
+          "name": "Fila de diagnosticos, com filtro opcional de status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos?status=AGUARDANDO",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "AGUARDANDO"
+                }
+              ]
+            },
+            "description": "Ordem de chegada (mais antigo primeiro); ``?status=AGUARDANDO`` e a fila."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/diagnosticos?status=AGUARDANDO",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "diagnosticos"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "AGUARDANDO"
+                    }
+                  ]
+                },
+                "description": "Ordem de chegada (mais antigo primeiro); ``?status=AGUARDANDO`` e a fila."
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n      \"status\": \"AGUARDANDO\",\n      \"veiculo\": {\n        \"placa\": \"BRA2E19\",\n        \"marca\": \"Fiat\",\n        \"modelo\": \"Argo\",\n        \"ano\": 2022\n      },\n      \"descricao_problema\": \"Barulho ao frear\",\n      \"mecanico_id\": null,\n      \"itens\": [],\n      \"observacoes\": \"\",\n      \"solicitado_em\": \"2026-10-18T13:00:00Z\",\n      \"iniciado_em\": null,\n      \"concluido_em\": null,\n      \"descartado_em\": null\n    }\n  ],\n  \"total\": 1,\n  \"offset\": 0,\n  \"limit\": 20\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Mecanico assume o diagnostico (emite DiagnosticoIniciado)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{ordem_id}}/inicio",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{ordem_id}}",
+                "inicio"
+              ]
+            },
+            "description": "O mecanico autenticado vira o responsavel; repetir por ele e idempotente.\n\nO admin tambem pode assumir (vira o responsavel), com log de auditoria."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/diagnosticos/{{ordem_id}}/inicio",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "diagnosticos",
+                    "{{ordem_id}}",
+                    "inicio"
+                  ]
+                },
+                "description": "O mecanico autenticado vira o responsavel; repetir por ele e idempotente.\n\nO admin tambem pode assumir (vira o responsavel), com log de auditoria."
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n  \"status\": \"EM_ANDAMENTO\",\n  \"veiculo\": {\n    \"placa\": \"BRA2E19\",\n    \"marca\": \"Fiat\",\n    \"modelo\": \"Argo\",\n    \"ano\": 2022\n  },\n  \"descricao_problema\": \"Barulho ao frear\",\n  \"mecanico_id\": \"7b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e\",\n  \"itens\": [],\n  \"observacoes\": \"\",\n  \"solicitado_em\": \"2026-10-18T13:00:00Z\",\n  \"iniciado_em\": \"2026-10-18T13:05:00Z\",\n  \"concluido_em\": null,\n  \"descartado_em\": null\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Registra servicos e pecas (emite DiagnosticoConcluido)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/diagnosticos/{{ordem_id}}/conclusao",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diagnosticos",
+                "{{ordem_id}}",
+                "conclusao"
+              ]
+            },
+            "description": "Valida pecas no estoque local e codigos no Billing antes de concluir.\n\n422 lista os codigos recusados; 503 quando o Billing nao responde (ou o\ncircuito esta aberto); 502 quando ele recusa o pedido (4xx). So o mecanico\nque iniciou conclui (o admin conclui em nome dele). Repetir devolve o\ndiagnostico ja concluido, sem alterar itens.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"itens\": [\n    {\n      \"tipo\": \"servico\",\n      \"codigo\": \"SRV-FREIOS\",\n      \"quantidade\": 1\n    },\n    {\n      \"tipo\": \"peca\",\n      \"codigo\": \"PEC-PASTILHA-FREIO\",\n      \"quantidade\": 1\n    }\n  ],\n  \"observacoes\": \"Pastilhas dianteiras no limite\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/diagnosticos/{{ordem_id}}/conclusao",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "diagnosticos",
+                    "{{ordem_id}}",
+                    "conclusao"
+                  ]
+                },
+                "description": "Valida pecas no estoque local e codigos no Billing antes de concluir.\n\n422 lista os codigos recusados; 503 quando o Billing nao responde (ou o\ncircuito esta aberto); 502 quando ele recusa o pedido (4xx). So o mecanico\nque iniciou conclui (o admin conclui em nome dele). Repetir devolve o\ndiagnostico ja concluido, sem alterar itens.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"itens\": [\n    {\n      \"tipo\": \"servico\",\n      \"codigo\": \"SRV-FREIOS\",\n      \"quantidade\": 1\n    },\n    {\n      \"tipo\": \"peca\",\n      \"codigo\": \"PEC-PASTILHA-FREIO\",\n      \"quantidade\": 1\n    }\n  ],\n  \"observacoes\": \"Pastilhas dianteiras no limite\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n  \"status\": \"CONCLUIDO\",\n  \"veiculo\": {\n    \"placa\": \"BRA2E19\",\n    \"marca\": \"Fiat\",\n    \"modelo\": \"Argo\",\n    \"ano\": 2022\n  },\n  \"descricao_problema\": \"Barulho ao frear\",\n  \"mecanico_id\": \"7b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e\",\n  \"itens\": [\n    {\n      \"tipo\": \"servico\",\n      \"codigo\": \"SRV-FREIOS\",\n      \"quantidade\": 1\n    },\n    {\n      \"tipo\": \"peca\",\n      \"codigo\": \"PEC-PASTILHA-FREIO\",\n      \"quantidade\": 1\n    }\n  ],\n  \"observacoes\": \"Pastilhas dianteiras no limite\",\n  \"solicitado_em\": \"2026-10-18T13:00:00Z\",\n  \"iniciado_em\": \"2026-10-18T13:05:00Z\",\n  \"concluido_em\": \"2026-10-18T13:40:00Z\",\n  \"descartado_em\": null\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Execucao",
+      "item": [
+        {
+          "name": "Fila de execucao com a posicao de cada ordem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fila",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "fila"
+              ]
+            },
+            "description": "Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/fila",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "fila"
+                  ]
+                },
+                "description": "Ordens AGUARDANDO: ``alta`` antes de ``normal``, depois por chegada."
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"posicao\": 1,\n      \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n      \"prioridade\": \"normal\",\n      \"enfileirada_em\": \"2026-10-18T14:00:00Z\",\n      \"veiculo\": {\n        \"placa\": \"BRA2E19\",\n        \"marca\": \"Fiat\",\n        \"modelo\": \"Argo\",\n        \"ano\": 2022\n      }\n    }\n  ],\n  \"total\": 1,\n  \"offset\": 0,\n  \"limit\": 20\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Mecanico inicia o reparo (emite ExecucaoIniciada, pivot da saga)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/execucoes/{{ordem_id}}/inicio",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "execucoes",
+                "{{ordem_id}}",
+                "inicio"
+              ]
+            },
+            "description": "Exige a reserva de pecas ativa (409 sem ela): depois daqui a OS nao cancela.\n\nRepetir pelo mesmo mecanico e idempotente. O admin tambem pode iniciar (vira\no responsavel), com log de auditoria."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/execucoes/{{ordem_id}}/inicio",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "execucoes",
+                    "{{ordem_id}}",
+                    "inicio"
+                  ]
+                },
+                "description": "Exige a reserva de pecas ativa (409 sem ela): depois daqui a OS nao cancela.\n\nRepetir pelo mesmo mecanico e idempotente. O admin tambem pode iniciar (vira\no responsavel), com log de auditoria."
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n  \"status\": \"EM_EXECUCAO\",\n  \"prioridade\": \"normal\",\n  \"enfileirada_em\": \"2026-10-18T14:00:00Z\",\n  \"veiculo\": {\n    \"placa\": \"BRA2E19\",\n    \"marca\": \"Fiat\",\n    \"modelo\": \"Argo\",\n    \"ano\": 2022\n  },\n  \"mecanico_id\": \"7b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e\",\n  \"iniciada_em\": \"2026-10-18T14:10:00Z\",\n  \"finalizada_em\": null,\n  \"cancelada_em\": null\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        },
+        {
+          "name": "Mecanico finaliza o reparo (baixa do estoque + ExecucaoFinalizada)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/execucoes/{{ordem_id}}/finalizacao",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "execucoes",
+                "{{ordem_id}}",
+                "finalizacao"
+              ]
+            },
+            "description": "Consome a reserva de pecas da ordem na mesma transacao.\n\nSo o mecanico que iniciou finaliza; o admin finaliza em nome dele."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/execucoes/{{ordem_id}}/finalizacao",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "execucoes",
+                    "{{ordem_id}}",
+                    "finalizacao"
+                  ]
+                },
+                "description": "Consome a reserva de pecas da ordem na mesma transacao.\n\nSo o mecanico que iniciou finaliza; o admin finaliza em nome dele."
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"ordem_id\": \"3c9a7e10-5b2f-4f6d-8a41-0e2d9b7c6f55\",\n  \"status\": \"FINALIZADA\",\n  \"prioridade\": \"normal\",\n  \"enfileirada_em\": \"2026-10-18T14:00:00Z\",\n  \"veiculo\": {\n    \"placa\": \"BRA2E19\",\n    \"marca\": \"Fiat\",\n    \"modelo\": \"Argo\",\n    \"ano\": 2022\n  },\n  \"mecanico_id\": \"7b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e\",\n  \"iniciada_em\": \"2026-10-18T14:10:00Z\",\n  \"finalizada_em\": \"2026-10-18T16:30:00Z\",\n  \"cancelada_em\": null\n}",
+              "_postman_previewlanguage": "json"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

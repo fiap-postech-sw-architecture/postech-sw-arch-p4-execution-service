@@ -6,7 +6,7 @@ Parte da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT
 
 Este repositório traz o domínio, os casos de uso, a API REST e os dois processos de mensageria do serviço: o relay da outbox para o RabbitMQ e o consumidor dos comandos da saga ([Mensageria](#mensageria)). A mesma imagem roda os três processos, com comandos diferentes.
 
-Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança).
+Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança). A arquitetura deste serviço, com o modelo de dados completo e os fluxos passo a passo em diagramas, está em [`docs/arquitetura.md`](docs/arquitetura.md); o OpenAPI e a coleção Postman, em [`docs/api/`](docs/api) ([API](#api)).
 
 ## Arquitetura
 
@@ -98,7 +98,7 @@ PY
 
 ## Observabilidade
 
-Métricas no `/metrics` de cada processo (a API na porta 8000; o relay e o consumidor, na `METRICS_PORT`, 9100), traces pelo protocolo do OpenTelemetry (OTLP) para o Jaeger e logs JSON com `trace_id`, `span_id` e `correlation_id` ([ADR-043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/043-observabilidade-distribuida.md) e [RFC-004, seção 9](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md#9-observabilidade)). Os dashboards e os alertas ficam no `platform` (`observabilidade/`); aqui estão as séries e os spans que eles leem.
+Métricas no `/metrics` de cada processo (a API na porta 8000; o relay e o consumidor, na `METRICS_PORT`, 9100), traces pelo protocolo do OpenTelemetry (OTLP) para o Jaeger e logs JSON com `trace_id`, `span_id` e `correlation_id` ([ADR-043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/043-observabilidade-distribuida.md) e [RFC-004, seção 9](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/rfc/fase4/rfc-004-microsservicos-saga.md#9-observabilidade)). O `/metrics` fica fora da borda: o Kong responde 404 em `/execucao/metrics`, e o Prometheus raspa cada pod direto, pelas anotações do template. Os dashboards, os alertas e o catálogo de métricas dos três serviços estão no [`observabilidade/README.md`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/observabilidade/README.md#catálogo-de-métricas) do `platform`; aqui estão as séries, os spans e os logs deste serviço, que eles leem.
 
 ### Métricas
 
@@ -107,7 +107,7 @@ Métricas no `/metrics` de cada processo (a API na porta 8000; o relay e o consu
 | `http_request_duration_seconds` | histograma; `method`, `rota` (o template), `status` | api | Duração de cada requisição |
 | `pytstop_circuit_breaker_aberto` | gauge; `dependencia` (`billing`, `jwks`) | api | 1 aberto, 0,5 em meia-abertura, 0 fechado |
 | `pytstop_jwks_falhas_total` | contador | api | Buscas ao JWKS do OS Service que falharam |
-| `pytstop_outbox_mais_antiga_segundos` | gauge calculada na raspagem | api | Idade da linha pendente mais antiga da outbox; 0 sem pendente. Continua certa com o relay parado, e é o que o alerta de outbox parada vai ler (acima de 300 s por 5 min; no overlay `kind`, 30 s e 1 min). O alerta vem com o PR de dashboards do `platform`, não existe ainda |
+| `pytstop_outbox_mais_antiga_segundos` | gauge calculada na raspagem | api | Idade da linha pendente mais antiga da outbox; 0 sem pendente. Continua certa com o relay parado, e é o que o alerta Outbox parada do `platform` lê (`pytstop-outbox-parada`: acima de 300 s por 5 min; no overlay `kind`, 30 s e 1 min) |
 | `pytstop_execucao_duracao_media_segundos` | gauge calculada na raspagem; `servico` | api | Média, do início à finalização, das execuções finalizadas nos últimos 7 dias, uma vez por serviço do diagnóstico da ordem (RF-008). A ordem com dois serviços entra na média dos dois, com a duração inteira |
 | `pytstop_pecas_em_falta` | gauge calculada na raspagem; `sku` | api | Reservas recusadas nos últimos 7 dias em que o SKU faltou |
 | `pytstop_mensagens_publicadas_total` | contador; `tipo` | relay | Mensagens que o broker confirmou |
@@ -118,7 +118,7 @@ Métricas no `/metrics` de cada processo (a API na porta 8000; o relay e o consu
 - **Gauge calculada na raspagem** são as cinco que consultam o banco a cada raspagem: `outbox_pendentes` e `outbox_dead` no relay, e as três do coletor da API ([`src/coletor.py`](src/coletor.py)), que só a API registra. Relay e consumidor não leem as séries da API, e a API segue exportando com eles parados. Cada réplica repete o mesmo valor, e os painéis agregam com `max`. A janela de 7 dias é a constante `JANELA_DE_NEGOCIO`.
 - **Quanto o coletor da API pode demorar.** Cada raspagem abre uma conexão crua do driver, sem pool nem engine (o engine só empresta a URL e o dialeto) e fora do pool das requisições. Nada fica dividido com a raspagem anterior: os hooks de primeira conexão de um engine consultam o banco sob um mutex dele, e uma primeira conexão calada ali prenderia toda raspagem seguinte, mesmo com o banco de volta. A conexão abre em até 1 s (`connect_timeout`; a resolução do nome do banco o driver faz sem prazo) e roda as três consultas em sequência, em autocommit, cada uma com `statement_timeout` de 2 s nas opções da conexão (a espera por um lock inclusive). A raspagem tem um prazo total de 5 s (`PRAZO_DA_RASPAGEM_S`) contado de fora, com as consultas numa thread à parte: o timeout do banco não cobre o banco que cala com o socket aberto, e a raspagem esperaria para sempre. No prazo, o coletor derruba o socket da conexão que a thread ainda usa: a thread sai e o servidor vê a conexão terminar, então nada fica preso depois. A gauge que falhou ou não voltou até lá sai ausente, nunca em zero, e o resto do `/metrics` (latência HTTP, JWKS, circuitos, mensageria) sai como sempre. O pior caso é de 5 s, abaixo dos 10 s do `scrape_timeout` padrão do Prometheus. Medido num uvicorn de verdade, com um proxy TCP na frente do banco: todas as conexões mudas, 1,0 s (o `connect_timeout`); banco a 300 ms por pacote, 1,0 s; conexão que cala no meio da raspagem, inclusive a primeira do processo, 5,0 s (o prazo total) e, com o banco de volta, a raspagem seguinte em 0,01 s; três tabelas travadas, 5,0 s; sempre sem as gauges que não vieram e com o resto do `/metrics`. Linha que o domínio não produz mas o banco aceita (execução finalizada sem início, item de serviço sem código, faltante sem SKU) fica fora das consultas, e não derruba a família.
 - **Série de rótulo fechado nasce com zero no boot** (`tipo` e `resultado` do consumo, incluindo o `desconhecido`; `tipo` da publicação, os dez eventos do AsyncAPI; `componente`): sem isso o `increase()` dos painéis perde o primeiro evento de cada uma.
-- **Rótulo aberto que vem do banco** (`servico`, `sku`) é código do catálogo, que o Billing e o estoque já validaram: nunca placa, documento, nome ou texto livre. O `rota` das requisições é o template (`/api/v1/execucoes/{ordem_id}/inicio`), e a requisição sem rota casada agrega em `nao_roteada`. O `method` do `http_request_duration_seconds` também é aberto (é o que o cliente mandou) e não vem do banco; fechá-lo num conjunto fica para o PR de hardening.
+- **Rótulo aberto que vem do banco** (`servico`, `sku`) é código do catálogo, que o Billing e o estoque já validaram: nunca placa, documento, nome ou texto livre. O `rota` das requisições é o template (`/api/v1/execucoes/{ordem_id}/inicio`), e a requisição sem rota casada agrega em `nao_roteada`. O `method` do `http_request_duration_seconds` também é aberto (é o que o cliente mandou) e não vem do banco; fechá-lo num conjunto de métodos ainda está por fazer.
 
 ### Traces
 
@@ -139,6 +139,10 @@ Os spans `publish` e `process` levam também `messaging.operation.type` (`send` 
 O amostrador (`AmostradorDeRaiz`) é o `ParentBased` do SDK com uma raiz que descarta o span de cliente sem pai: o poll de 5 s do relay, as contagens do `/metrics` e a limpeza da retenção só abrem esse tipo de span, e cada um viraria um trace raiz no Jaeger (as consultas do coletor da API correm numa conexão crua do driver, fora do SQLAlchemy, e não abrem span nenhum). A consulta de uma requisição ou de uma mensagem tem pai e segue a decisão dele (um `traceparent` do chamador sem o bit de amostragem derruba a requisição e as consultas dela). O amostrador é fixo no código, e `OTEL_TRACES_SAMPLER` não o troca. A API instala o mesmo provider do relay e do consumidor ([`telemetria.py`](src/compartilhado/infraestrutura/mensageria/telemetria.py)), passa-o ao FastAPI, ao engine e ao cliente do Billing em [`instrumentacao.py`](src/compartilhado/infraestrutura/instrumentacao.py) e o encerra no fim do `lifespan`, o que descarrega os spans que esperam no lote: o SDK só o faria no `atexit`, que não roda quando o uvicorn re-levanta o SIGTERM fora do PID 1.
 
 Saída do pod com o Jaeger fora do ar: sem prazo próprio o SDK espera 30 s por lote (e 10 s por envio), e a API levaria os 30 s do `terminationGracePeriodSeconds` para sair. `OTEL_BSP_EXPORT_TIMEOUT=2000` e `OTEL_EXPORTER_OTLP_TIMEOUT=2`, no ConfigMap e no compose, levam a saída a cerca de 4 s (medido em contêiner, com o uvicorn como PID 1 e 4.000 requisições na fila do exportador).
+
+### Logs
+
+Uma linha JSON por evento no stdout de cada processo, com o nome do evento em inglês (`http_request`, `message_published`, `command_ignored`, `audit`), o `trace_id` e o `span_id` do span corrente, o `correlation_id` (a ordem de serviço; no `AnonimizarVeiculo`, o veículo) e, na API, o `request_id` (o `X-Request-ID` que o Kong gera, devolvido na resposta). O access log é o `http_request` do middleware, com método, caminho, status e duração; o do uvicorn fica desligado (`--no-access-log`). Antes de sair, toda linha passa pelo mascaramento de dados pessoais: as chaves sensíveis (placa, descrição do problema, observações, `motivo`, token, senha) viram `***`, e CPF, CNPJ, e-mail, telefone e placa são mascarados dentro de qualquer texto ([`logging.py`](src/compartilhado/infraestrutura/logging.py)). No cluster, o Promtail do `platform` leva o stdout dos pods ao Loki, que o Grafana consulta.
 
 ### O que não é exportado, e por quê
 
@@ -178,7 +182,7 @@ A raspagem direta, com o `make compose-up` no ar, é `curl http://127.0.0.1:8003
 
 ## API
 
-Swagger em `/docs`. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
+Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/api/openapi.json`](docs/api/openapi.json)) e a coleção Postman v2.1 ([`docs/api/execucao.postman_collection.json`](docs/api/execucao.postman_collection.json): uma requisição por rota, com corpo e resposta de exemplo e as variáveis `baseUrl`, `token`, `ordem_id` e `sku`) saem do próprio app pelo `make docs-api`, que não sobe servidor nem banco; o `make test` reprova se ficarem atrás do código ou se a coleção perder o token bearer, o `noauth` das sondas, o `Content-Type` dos corpos, o `{{baseUrl}}` das URLs ou a resposta de exemplo de uma requisição. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
 
 | Método e rota | Papéis | O que faz |
 |---|---|---|
@@ -195,20 +199,66 @@ Swagger em `/docs`. Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "i
 | `GET /api/v1/saude/pronto` | — | Readiness: 200 só com o banco respondendo `SELECT 1` em até 2 s, senão 503 |
 | `GET /metrics` | — | Métricas Prometheus: `http_request_duration_seconds{method,rota,status}`, `pytstop_circuit_breaker_aberto{dependencia}` (1 aberto, 0,5 em meia-abertura, 0 fechado; `billing` e `jwks`), `pytstop_jwks_falhas_total` e as três gauges do coletor da [Observabilidade](#observabilidade); fica fora da borda |
 
-Exemplos (com `TOKEN` emitido pelo OS Service; os códigos são os do seed do Billing):
+### Exemplos com `curl`
+
+Um bloco por fluxo, com o método e a rota do OpenAPI. Os comandos rodam contra a stack completa no kind, pela borda (o Kong do `platform`, com certificado autoassinado, daí o `-k`), porque as rotas autenticadas validam o token no JWKS do OS Service; com o `make compose-up` sozinho só as sondas respondem, em `http://127.0.0.1:8003`.
+
+Preparação: o token do admin, que pode agir em todas as rotas, pelo login do OS Service. O e-mail do admin é a chave `ADMIN_EMAIL` do ConfigMap do OS Service, achado pela chave e não pelo nome, como no [runbook da saga](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/operacao/runbook-saga.md) do `platform`; a senha fica no Secret `os-admin`, e o `printf`, embutido no shell, a entrega ao `curl` pela entrada padrão, fora da lista de processos. Um mecânico cadastrado pelo admin no OS Service (`POST /api/v1/autenticacao/registrar`) usa o próprio token nas mesmas rotas de diagnóstico e execução.
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:8003/api/v1/diagnosticos?status=AGUARDANDO"
+export BASE_URL=https://localhost/execucao
+email=$(kubectl --context kind-pytstop-p4 -n pytstop-os get configmaps -o json | jq -r 'first(.items[].data.ADMIN_EMAIL // empty)')
+senha=$(kubectl --context kind-pytstop-p4 -n pytstop-os get secret os-admin -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d)
+export TOKEN=$(printf '{"email": "%s", "senha": "%s"}' "$email" "$senha" \
+  | curl -sk https://localhost/os/api/v1/autenticacao/login -H 'Content-Type: application/json' --data @- \
+  | jq -r .access_token)
+```
 
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+**Saúde**, sem token (o `/metrics` não está no OpenAPI e fica fora da borda: [Observabilidade](#observabilidade)):
+
+```bash
+curl -sk "$BASE_URL/api/v1/saude"
+curl -sk "$BASE_URL/api/v1/saude/pronto"
+```
+
+**Estoque**: escrita só do admin; leitura também do mecânico e do atendente. O SKU novo precisa existir também na tabela de preços do Billing, dono dos códigos, e o `DELETE` desativa a peça sem apagar o histórico:
+
+```bash
+export SKU=PEC-CORREIA-DENTADA
+curl -sk -X POST "$BASE_URL/api/v1/estoque" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"sku": "PEC-CORREIA-DENTADA", "nome": "Correia dentada", "quantidade_disponivel": 8}'
+curl -sk "$BASE_URL/api/v1/estoque?limit=20" -H "Authorization: Bearer $TOKEN"
+curl -sk "$BASE_URL/api/v1/estoque/$SKU" -H "Authorization: Bearer $TOKEN"
+curl -sk -X PATCH "$BASE_URL/api/v1/estoque/$SKU/quantidade" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"quantidade_disponivel": 12}'
+curl -sk -X PUT "$BASE_URL/api/v1/estoque/$SKU" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"nome": "Correia dentada (kit)", "ativo": true}'
+curl -sk -X DELETE "$BASE_URL/api/v1/estoque/$SKU" -H "Authorization: Bearer $TOKEN"
+```
+
+**Diagnóstico**, pelo mecânico ou pelo admin. A ordem chega pela saga: uma OS aberta no OS Service (`POST /os/api/v1/ordens-de-servico`, no [README dele](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-os-service#readme)) aparece na fila do mecânico, de onde sai o `ORDEM_ID`. Os códigos da conclusão são os do seed do Billing:
+
+```bash
+export ORDEM_ID=$(curl -sk "$BASE_URL/api/v1/diagnosticos?status=AGUARDANDO" \
+  -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].ordem_id')
+curl -sk -X POST "$BASE_URL/api/v1/diagnosticos/$ORDEM_ID/inicio" -H "Authorization: Bearer $TOKEN"
+curl -sk -X POST "$BASE_URL/api/v1/diagnosticos/$ORDEM_ID/conclusao" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
   -d '{"itens": [{"tipo": "servico", "codigo": "SRV-FREIOS", "quantidade": 1},
                  {"tipo": "peca", "codigo": "PEC-PASTILHA-FREIO", "quantidade": 1}],
-       "observacoes": "pastilhas no limite"}' \
-  http://localhost:8003/api/v1/diagnosticos/$ORDEM_ID/conclusao
-
-curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"quantidade_disponivel": 12}' http://localhost:8003/api/v1/estoque/PEC-VELA/quantidade
+       "observacoes": "Pastilhas dianteiras no limite"}'
 ```
+
+**Execução**, pelo mecânico ou pelo admin (a fila, também pelo atendente). Com o orçamento aprovado, a saga reserva as peças e, com o pagamento confirmado, agenda a execução, e a ordem entra na fila. O início é o pivot da saga e exige a reserva ativa; a finalização dá baixa nas peças:
+
+```bash
+curl -sk "$BASE_URL/api/v1/fila" -H "Authorization: Bearer $TOKEN"
+curl -sk -X POST "$BASE_URL/api/v1/execucoes/$ORDEM_ID/inicio" -H "Authorization: Bearer $TOKEN"
+curl -sk -X POST "$BASE_URL/api/v1/execucoes/$ORDEM_ID/finalizacao" -H "Authorization: Bearer $TOKEN"
+```
+
+O `make test` confere que cada método e rota do OpenAPI tem um `curl` aqui, com o token nas rotas autenticadas e, nas rotas com corpo, o `Content-Type: application/json` e um corpo que o schema da rota aceita ([`test_documentacao.py`](tests/unitarios/test_documentacao.py)).
 
 ## Configuração
 
@@ -331,18 +381,47 @@ O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e d
 
 ## Cobertura
 
-**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.437 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+O gate é de 95% no total, com linhas e ramos somados (`fail_under` no `.coveragerc`), e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+
+A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_resumo.py`](scripts/cobertura_resumo.py) a escreve entre os marcadores a partir do `coverage.xml` de um run do CI (artefato `relatorios-de-teste` do job `test`) e põe o link desse run no fim, e o `make test` reprova o trecho que sair do formato do script, com as contas erradas, com a taxa de linhas diferente da do total, com o gate fora do intervalo entre as duas taxas ou com um pacote que não existe ([`test_cobertura_resumo.py`](tests/unitarios/test_cobertura_resumo.py)). O CI repete a mesma tabela no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), com o `diff-cover` do pull request logo abaixo.
+
+<!-- cobertura:inicio -->
+### Cobertura de testes: 100.0% no gate (linhas e ramos)
+
+100.0% de linhas e 100.0% de ramos.
 
 | Pacote | Linhas | Cobertas | Cobertura |
 |---|---:|---:|---:|
-| `src` (módulos da raiz: processos, coletor, mapeamentos e `banco`) | 318 | 318 | 100,0% |
-| `src/compartilhado` | 1.763 | 1.763 | 100,0% |
-| `src/diagnostico` | 523 | 523 | 100,0% |
-| `src/estoque` | 599 | 599 | 100,0% |
-| `src/execucao` | 478 | 478 | 100,0% |
-| **total** | 3.681 | 3.681 | 100,0% |
+| `src` | 318 | 318 | 100.0% |
+| `src/compartilhado/aplicacao` | 59 | 59 | 100.0% |
+| `src/compartilhado/dominio` | 144 | 144 | 100.0% |
+| `src/compartilhado/infraestrutura` | 1324 | 1324 | 100.0% |
+| `src/compartilhado/interfaces` | 236 | 236 | 100.0% |
+| `src/diagnostico/aplicacao` | 127 | 127 | 100.0% |
+| `src/diagnostico/dominio` | 177 | 177 | 100.0% |
+| `src/diagnostico/infraestrutura` | 127 | 127 | 100.0% |
+| `src/diagnostico/interfaces` | 92 | 92 | 100.0% |
+| `src/estoque/aplicacao` | 155 | 155 | 100.0% |
+| `src/estoque/dominio` | 226 | 226 | 100.0% |
+| `src/estoque/infraestrutura` | 105 | 105 | 100.0% |
+| `src/estoque/interfaces` | 113 | 113 | 100.0% |
+| `src/execucao/aplicacao` | 173 | 173 | 100.0% |
+| `src/execucao/dominio` | 122 | 122 | 100.0% |
+| `src/execucao/infraestrutura` | 99 | 99 | 100.0% |
+| `src/execucao/interfaces` | 84 | 84 | 100.0% |
+| **total** | 3681 | 3681 | 100.0% |
 
-Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), e o `diff-cover` do pull request vem logo abaixo.
+Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39106764174 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39106764174).
+<!-- cobertura:fim -->
+
+Para refazer a tabela com o `coverage.xml` de outro run, com o número dele em `RUN`:
+
+```bash
+destino=$(mktemp -d)
+gh run download "$RUN" -n relatorios-de-teste -D "$destino"
+uv run python scripts/cobertura_resumo.py "$destino/coverage.xml" README.md \
+  "https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/$RUN"
+```
 
 O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele exista e seja mais novo que o código de `src/`: com o XML ausente ou velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
 
@@ -396,8 +475,9 @@ Como o alvo se comporta:
 - Antes do primeiro mutante de cada grupo de testes, roda o grupo na cópia sem mutante. Se ele já reprova ou estoura o tempo, os mutantes do grupo saem `erro`: um teste que já falha mataria qualquer um.
 - A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela.
 - Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container. O que chega à integração sobe um PostgreSQL, e na mensageria também um RabbitMQ. Com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe.
-- Sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
-- Sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- O script sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
+- O script sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- São os códigos do script. Com falha, o `make mutacao` mostra `Error 1` ou `Error 2` e sai com 2 (o `make` troca o código do script pelo dele); sem falha, sai com 0.
 - Com `erro` ou `nao rodado`, o percentual vira `n/d`.
 - Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo), e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
 
@@ -430,11 +510,11 @@ Regras dos três:
 Exceções:
 
 - **uv**: o `required-version` do `pyproject.toml` só tem piso (`>=0.11`), como no Billing. O atualizador do Dependabot roda um uv mais novo (0.12 em outubro de 2026), e com teto o `uv lock` dele recusaria o projeto. A imagem do uv no `Dockerfile` sobe pelo bloco do Docker; o piso e os Requisitos de [Como rodar](#como-rodar) sobem juntos, à mão, quando o serviço passar a exigir um uv mais novo.
-- **OpenTelemetry**: sem grupo próprio. O Dependabot põe as bibliotecas `opentelemetry-*` no grupo de patch e minor do bloco uv, que ele trata como mais específico que um grupo por nome, e os patches e minors da família sobem juntos nele: o SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão, e subir só uma parte não resolve. A major fica fora do grupo.
-- **Teto do OpenTelemetry**: o SDK e o exportador têm teto `<1.46` no `pyproject.toml`, e as instrumentações `<0.67`, como no OS e no Billing. O `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar.
+- **OpenTelemetry**: sem grupo próprio. O Dependabot põe as bibliotecas `opentelemetry-*` no grupo de patch e minor do bloco uv, que ele trata como mais específico que um grupo por nome, e os patches da família sobem juntos nele: o SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão, e subir só uma parte não resolve. A minor e a major ficam atrás do teto, abaixo.
+- **Teto do OpenTelemetry**: o SDK e o exportador têm teto `<1.46` no `pyproject.toml`, e as instrumentações `<0.67`, como no OS e no Billing. O teto barra também a próxima minor, porque o `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que uma minor nova pode mudar. Uma minor nova só entra com o teto subido, depois de ler o changelog.
 - **Python**: no bloco do Docker, major e minor ficam de fora. A versão sobe à mão, de uma vez, em `.python-version`, no `python-version` do `security.yml`, no `requires-python` e no `python_version` (mypy) do `pyproject.toml`, no `sonar.python.version` do `sonar-project.properties` e nas duas imagens do `Dockerfile`. Sem isso, o 3.14 → 3.15 chegaria como minor e trocaria só a imagem do runtime. O patch não passa pelo Dependabot: vem do rebuild da tag móvel `python:3.14-slim-trixie`.
 
-Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0. O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit, o SonarQube e o diff-cover.
+Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0 (e o valor esperado em `tests/unitarios/test_scripts_ci.py` com ele). O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit, o SonarQube, o scanner dele (`scripts/sonar/analisar.sh`) e o diff-cover.
 
 ## Repositórios da fase 4
 
