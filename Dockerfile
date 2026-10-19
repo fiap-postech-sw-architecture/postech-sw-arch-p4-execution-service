@@ -3,7 +3,7 @@
 # Python (3.14): o venv copiado carrega bytecode e wheels compilados contra a
 # glibc e o Python do builder. O uv da imagem sobe pelo Dependabot e fica no
 # piso do `required-version` do pyproject (0.11) ou acima dele.
-FROM ghcr.io/astral-sh/uv:0.11-python3.14-trixie-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.13-python3.14-trixie-slim AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
