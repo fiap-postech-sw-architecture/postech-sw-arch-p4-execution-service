@@ -1,7 +1,8 @@
 """Scripts do CI (``scripts/ci/``) e a excecao do trivy (KSV-0109): a conferencia
 que a estreita ao ConfigMap do ``papeis.sql``, o relatorio das imagens de
 terceiros, que nunca reprova o job, o registro da saida do pip-audit e do trivy
-no summary e os nomes das variaveis do ``make kind-deploy``."""
+no summary, os nomes das variaveis do ``make kind-deploy``, a guarda de frescor
+do ``make diff-cover`` e o ``dependabot.yml``."""
 
 from __future__ import annotations
 
@@ -488,6 +489,51 @@ def test_o_security_yml_registra_o_pip_audit_e_o_trivy_no_summary(
     assert titulo in comandos[0].split(ferramenta)[0]
 
 
+def test_dependabot_tem_agenda_prefixo_grupos_e_ignore_de_cada_bloco() -> None:
+    config = yaml.safe_load(
+        (RAIZ / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+    blocos = {bloco["package-ecosystem"]: bloco for bloco in config["updates"]}
+    agenda = {
+        "interval": "weekly",
+        "day": "monday",
+        "time": "06:00",
+        "timezone": "America/Sao_Paulo",
+    }
+    patch_e_minor = {"update-types": ["minor", "patch"]}
+    # O Python sobe a mao; o uv da imagem sobe pelo Dependabot, sem ignore.
+    so_patch_do_python = [
+        {
+            "dependency-name": "python",
+            "update-types": [
+                "version-update:semver-major",
+                "version-update:semver-minor",
+            ],
+        }
+    ]
+    # Um grupo por nome (o do OpenTelemetry) ficaria vazio: o Dependabot prefere
+    # o de update-types, entao cada bloco tem so o de patch e minor.
+    esperado = {
+        "uv": ("chore(deps)", {"python-patch-e-minor": patch_e_minor}, []),
+        "github-actions": ("ci", {"actions-patch-e-minor": patch_e_minor}, []),
+        "docker": (
+            "chore(deps)",
+            {"docker-patch-e-minor": patch_e_minor},
+            so_patch_do_python,
+        ),
+    }
+
+    assert set(blocos) == set(esperado)
+    for nome, (prefixo, grupos, ignore) in esperado.items():
+        bloco = blocos[nome]
+        assert bloco["directory"] == "/", nome
+        assert bloco["schedule"] == agenda, nome
+        assert bloco["open-pull-requests-limit"] == 3, nome
+        assert bloco["commit-message"] == {"prefix": prefixo}, nome
+        assert bloco["groups"] == grupos, nome
+        assert bloco.get("ignore", []) == ignore, nome
+
+
 PADRAO = "../postech-sw-arch-p4-platform"
 
 
@@ -521,3 +567,78 @@ def test_kind_deploy_aceita_platform_dir_e_kind_overlay(
     comando = " ".join(resultado.stdout.replace("\\\n", " ").split())
     assert comando.startswith(f"{platform}/scripts/ci/implantar-servicos.sh")
     assert f" --overlay {overlay} execution-service=" in comando
+
+
+def _diff_cover(
+    tmp_path: Path, xml_mais_novo: bool, *, sem_xml: bool = False
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """``make diff-cover`` numa arvore minuscula, com um ``uvx`` falso no PATH que
+    so registra os argumentos."""
+    shutil.copy(RAIZ / "Makefile", tmp_path / "Makefile")
+    (tmp_path / "src").mkdir()
+    codigo, xml = tmp_path / "src" / "modulo.py", tmp_path / "coverage.xml"
+    codigo.write_text("X = 1\n", encoding="utf-8")
+    xml.write_text("<coverage/>", encoding="utf-8")
+    os.utime(codigo, (2_000_000_000, 2_000_000_000))
+    do_xml = 2_000_000_100 if xml_mais_novo else 1_999_999_900
+    os.utime(xml, (do_xml, do_xml))
+    if sem_xml:
+        xml.unlink()
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    argumentos = tmp_path / "argumentos-do-uvx"
+    falso = bin_ / "uvx"
+    falso.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$@" > {argumentos}\n', encoding="utf-8"
+    )
+    falso.chmod(0o755)
+    ambiente = {
+        chave: valor for chave, valor in os.environ.items() if chave != "MAKEFLAGS"
+    }
+    resultado = subprocess.run(
+        ["make", "--no-print-directory", "diff-cover"],  # noqa: S607
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+        env={**ambiente, "PATH": f"{bin_}:{ambiente['PATH']}", "MAKELEVEL": "1"},
+    )
+    return resultado, argumentos
+
+
+def test_diff_cover_recusa_coverage_xml_mais_velho_que_o_codigo(
+    tmp_path: Path,
+) -> None:
+    resultado, argumentos = _diff_cover(tmp_path, xml_mais_novo=False)
+
+    assert resultado.returncode != 0
+    assert "coverage.xml is older than src/, run make test first" in resultado.stderr
+    assert not argumentos.exists()
+
+
+def test_diff_cover_sem_coverage_xml_manda_rodar_o_make_test(tmp_path: Path) -> None:
+    # Sem o XML o `find -newer` nao imprime nada e so a primeira guarda o pega.
+    resultado, argumentos = _diff_cover(tmp_path, xml_mais_novo=True, sem_xml=True)
+
+    assert resultado.returncode != 0
+    assert "coverage.xml missing, run make test first" in resultado.stderr
+    assert not argumentos.exists()
+
+
+def test_diff_cover_com_xml_fresco_mede_tambem_o_arquivo_novo(
+    tmp_path: Path,
+) -> None:
+    resultado, argumentos = _diff_cover(tmp_path, xml_mais_novo=True)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert argumentos.read_text(encoding="utf-8").split() == [
+        "diff-cover==10.6.0",
+        "coverage.xml",
+        "--branch-coverage",
+        "--include-untracked",
+        "--compare-branch=origin/main",
+        "--fail-under=90",
+        "--format",
+        "markdown:reports/diff-cover.md",
+    ]

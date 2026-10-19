@@ -737,6 +737,33 @@ def test_comando_fora_do_estado_loga_command_ignored_com_o_codigo(
     assert "MARCADOR-DA-MENSAGEM" not in saida
 
 
+@pytest.mark.parametrize(
+    "erro",
+    [
+        pytest.param(ValorInvalidoError("MARCADOR-DO-DADO"), id="dominio-recusa"),
+        pytest.param(
+            RespostaInvalidaDaDependenciaException("MARCADOR-DO-DADO"),
+            id="dependencia-recusa",
+        ),
+    ],
+)
+def test_recusa_permanente_loga_so_a_classe_do_erro(
+    log_capturado: io.StringIO, erro: Exception
+) -> None:
+    # A mensagem do erro pode ecoar o dado do comando (placa, texto livre): a
+    # recusa vai para a DLQ com o log so da classe, sem a mensagem nem o
+    # traceback do erro nao classificado.
+    _consumir(_Handler(erro))
+    saida = log_capturado.getvalue()
+    (recusa,) = [
+        json.loads(linha)
+        for linha in saida.splitlines()
+        if '"command_rejected_by_domain"' in linha
+    ]
+    assert recusa["error"] == type(erro).__name__
+    assert "MARCADOR-DO-DADO" not in saida
+
+
 _ANINHADO = b'{"id":' + b'{"a":' * 10_000 + b"1" + b"}" * 10_000 + b"}"
 
 
@@ -781,6 +808,18 @@ def test_erro_inesperado_no_parse_vai_para_a_dlq(
 def test_corpo_acima_do_teto_nem_chega_ao_parse(log_capturado: io.StringIO) -> None:
     _consumir(_Handler(), corpo=b" " * (64 * 1024 + 1))
     assert "corpo acima de 65536 bytes" in log_capturado.getvalue()
+
+
+def test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse(
+    log_capturado: io.StringIO,
+) -> None:
+    # So acima de 64 KiB e recusado pelo tamanho: o corpo de espacos com 64 KiB
+    # cravados chega ao parse e cai como JSON ilegivel.
+    canal = _consumir(_Handler(), corpo=b" " * (64 * 1024))
+    log = log_capturado.getvalue()
+    assert "corpo acima de 65536 bytes" not in log
+    assert "corpo ilegivel (JSONDecodeError)" in log
+    assert canal.passos == ["reject"]
 
 
 @pytest.mark.parametrize(

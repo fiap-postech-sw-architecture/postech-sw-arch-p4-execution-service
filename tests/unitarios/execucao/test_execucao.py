@@ -116,6 +116,34 @@ def test_depois_de_iniciada_nao_cancela() -> None:
         execucao.cancelar(AGORA)
 
 
+def _finalizada() -> Execucao:
+    execucao = _iniciada()
+    execucao.finalizar(MECANICO, AGORA)
+    return execucao
+
+
+def _cancelada() -> Execucao:
+    execucao = _agendada()
+    execucao.cancelar(AGORA)
+    return execucao
+
+
+@pytest.mark.parametrize(
+    ("montar", "esperado"),
+    [
+        pytest.param(_agendada, True, id="na-fila"),
+        pytest.param(_iniciada, True, id="em-execucao"),
+        pytest.param(_finalizada, False, id="finalizada"),
+        pytest.param(_cancelada, False, id="cancelada"),
+    ],
+)
+def test_em_andamento_vale_na_fila_e_em_execucao(
+    montar: Callable[[], Execucao], esperado: bool
+) -> None:
+    # O aviso da eliminacao LGPD com registro ainda aberto depende disto.
+    assert montar().em_andamento is esperado
+
+
 def test_lapide_nasce_cancelada_fora_da_fila() -> None:
     ordem_id = uuid4()
     lapide = Execucao.lapide(ordem_id=ordem_id, agora=AGORA)

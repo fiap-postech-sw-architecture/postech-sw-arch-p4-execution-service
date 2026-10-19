@@ -231,7 +231,7 @@ O boot falha com mensagem clara se faltar uma variável obrigatória, se `JWKS_U
 
 ## Como rodar
 
-Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 (instala o Python 3.14 do `.python-version`) e Docker (compose e os testes de integração com testcontainers).
+Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 ou mais novo (instala o Python 3.14 do `.python-version`) e Docker (compose e os testes de integração com testcontainers).
 
 ```bash
 make compose-up
@@ -240,7 +240,7 @@ make check
 make compose-down
 ```
 
-O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`); o `make compose-logs` acompanha o log da API; o `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit e os testes com gate de cobertura (90%); o `make compose-down` derruba a stack e apaga o volume.
+O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`); o `make compose-logs` acompanha o log da API; o `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit, os testes com gate de cobertura (95%) e o `diff-cover` (90% no código que a branch muda em relação à `origin/main`); o `make compose-down` derruba a stack e apaga o volume.
 
 Fora do compose, `.env.example` traz as variáveis com os valores de demonstração (`cp .env.example .env`, depois `set -a; . ./.env; set +a; make run`).
 
@@ -327,7 +327,79 @@ O primeiro comando cria o cluster, sobe a plataforma e gera os Secrets. O `make 
 - **Concorrência**: a disputa pela última unidade de uma peça, cada lock pessimista, cópias simultâneas dos comandos da saga e réplicas migrando juntas.
 - **Implantação**: o PostgreSQL 16.15 com o ambiente do StatefulSet e o `papeis.sql` dos manifestos, como o usuário 999 e com a raiz somente leitura (o dono migra, a API sobe com `execucao_app`, que não faz DDL, o exporter não lê tabela, ninguém entra como `postgres` sem senha e nenhuma senha chega ao log do servidor, gravando todo comando); o `entrypoint.sh` com o `ROOT_PATH`; e o uvicorn com o prefixo da borda, servindo o Swagger sob ele e as sondas sem ele.
 
-O gate de cobertura (ramos incluídos) é de 90%, no `.coveragerc`. O teste da cópia dos contratos precisa de rede (marcador `rede`).
+O gate de cobertura (ramos incluídos) é de 95% no total, no `.coveragerc`, e de 90% no código novo, no `make diff-cover`, que o job `test` roda em todo pull request ([Cobertura](#cobertura)). O teste da cópia dos contratos precisa de rede (marcador `rede`).
+
+## Cobertura
+
+**100,00% no gate** (linhas e ramos somados): 3.681 linhas e 492 ramos, nenhum perdido, com 1.437 testes (unitários e de integração com PostgreSQL e RabbitMQ reais). O gate é de 95% (`fail_under` no `.coveragerc`) e o código novo precisa de 90% (`make diff-cover`), como pede o ADR-041. Medido em 18/10/2026 com `make test`, no pull request que trouxe o gate de 95% (a `main` 301052a, antes dele, media o mesmo com 1.399 testes). Ficam fora da medição só o `if __name__ == "__main__"` dos processos (`exclude_also`), os `__init__.py` dos pacotes (o único não vazio só tem a docstring) e os `Protocol` puros dos repositórios, das portas do diagnóstico e da unidade de trabalho (`omit` do `.coveragerc`).
+
+| Pacote | Linhas | Cobertas | Cobertura |
+|---|---:|---:|---:|
+| `src` (módulos da raiz: processos, coletor, mapeamentos e `banco`) | 318 | 318 | 100,0% |
+| `src/compartilhado` | 1.763 | 1.763 | 100,0% |
+| `src/diagnostico` | 523 | 523 | 100,0% |
+| `src/estoque` | 599 | 599 | 100,0% |
+| `src/execucao` | 478 | 478 | 100,0% |
+| **total** | 3.681 | 3.681 | 100,0% |
+
+Por camada: `dominio` 669 linhas, `aplicacao` 514, `infraestrutura` 1.655 e `interfaces` 525, todas em 100,0%. Para refazer: `make test` e `uv run python scripts/cobertura_resumo.py coverage.xml`; o CI repete a tabela por contexto e camada no summary do job `test` de cada run ([Actions → CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/ci.yml)), e o `diff-cover` do pull request vem logo abaixo.
+
+O `make diff-cover` lê o `coverage.xml` do `make test` e exige que ele exista e seja mais novo que o código de `src/`: com o XML ausente ou velho recusa e manda rodar o `make test` antes, em vez de passar sem medir nada. Mede também o arquivo novo que ainda não foi para o git (`--include-untracked`). O `make check` já roda os dois na ordem certa.
+
+## Mutação
+
+Cobertura diz que a linha rodou; mutação diz se a suíte percebe quando ela está errada (ADR-041). Não é gate de CI e não tem pontuação mínima.
+
+O `mutmut` não roda em pacote chamado `src`, o caso deste serviço: a versão 3.8.0 espera o pacote em `src/<pacote>` e tira o prefixo `src.` do nome do módulo, e a primeira função mutada que os testes chamam reprova com
+
+```text
+AssertionError: Failed trampoline hit. Module name starts with `src.`, which is invalid
+```
+
+(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 95 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
+
+**Resultado** em 18/10/2026: 94 de 94 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
+
+| Área | Mutantes | Mortos | Equivalentes |
+|---|---:|---:|---:|
+| Status da execução | 9 | 9 | 0 |
+| Status do diagnóstico | 10 | 10 | 0 |
+| Reserva e saldo de peça | 15 | 15 | 0 |
+| Saga (guardas, lápide e repetição do comando) | 10 | 10 | 0 |
+| Idempotência e concorrência | 6 | 6 | 0 |
+| Placa do veículo | 8 | 8 | 0 |
+| Validação do JWT | 14 | 13 | 1 |
+| Consumidor | 13 | 13 | 0 |
+| Relay e outbox | 10 | 10 | 0 |
+| **total** | **95** | **94** | **1** |
+
+- **Limites que só a mutação mostrou, hoje com teste:**
+  - corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`);
+  - recusa permanente do domínio que, sem o `ValorInvalidoError` em `_PERMANENTES`, ia para a DLQ do mesmo jeito, mas com o traceback e a mensagem do erro no log (`test_recusa_permanente_loga_so_a_classe_do_erro`);
+  - JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes);
+  - memória da falha do JWKS diferente de 5 s e `Retry-After` do 503 arredondado para baixo (`test_falha_memorizada_responde_na_hora_sem_buscar_de_novo`, que prende a constante e espera 2,5 s);
+  - placa aceita com um dígito a mais ou a menos, nos dois formatos, porque o regex casava só o começo ou um formato mais curto (casos em `test_placa_invalida_sem_ecoar_o_valor`);
+  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+- **Equivalente:** `HS256` na lista de algoritmos do JWT (J01), e só enquanto valem duas condições: o PyJWT amarra a chave ao algoritmo dela (na 2.15, o `decode` com um `PyJWK` recusa `Token algorithm 'HS256' does not match the key's algorithm 'RS256'`) e o validador passa um `PyJWK` ao `decode`. Com elas, a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda o desfecho; sem elas, a lista `RS256` do ADR-039 é a única barreira, e nenhum teste a prende. O motivo fica no campo `equivalente` do `mutantes.toml`.
+- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 95 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
+
+Para refazer:
+
+```bash
+make mutacao
+make mutacao MUTANTES="E01 C03"
+```
+
+Como o alvo se comporta:
+
+- Para de iniciar mutantes depois de `MUTACAO_PRAZO` segundos (900); os que sobram saem `nao rodado`. A tabela vai para `reports/mutacao.md`.
+- Antes do primeiro mutante de cada grupo de testes, roda o grupo na cópia sem mutante. Se ele já reprova ou estoura o tempo, os mutantes do grupo saem `erro`: um teste que já falha mataria qualquer um.
+- A cópia leva também o `alembic.ini`, as `migrations/` e os `contratos/` (`[config]` do `mutantes.toml`), que os testes de integração leem a partir da raiz dela.
+- Em cada grupo o teste unitário vem antes do de integração: o mutante que o unitário mata não sobe container. O que chega à integração sobe um PostgreSQL, e na mensageria também um RabbitMQ. Com `TEST_DATABASE_URL` apontando para um banco `*_test` no ar, o PostgreSQL não sobe.
+- Sai com 2 se um id de `MUTANTES` não existir (a mensagem lista os válidos) ou se o `.toml` não bater com o código.
+- Sai com 1 se algum mutante sair `erro`, que é medida inválida, como o Docker fora. Sobrevivente não reprova, porque não há gate (ADR-041).
+- Com `erro` ou `nao rodado`, o percentual vira `n/d`.
+- Um mutante novo entra com o trecho exato (`de`, uma ocorrência no arquivo), e `tests/unitarios/test_mutacao_manual.py` reprova se a lista envelhecer.
 
 ## Integração contínua
 
@@ -335,10 +407,34 @@ Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os ch
 
 | Workflow | Jobs | O que garante |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 90% (o summary mostra o número do gate, que soma linhas e ramos, e o detalhe por pacote; `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`), os manifestos do Kubernetes (`make manifests`: os três overlays no kubeconform, contra os schemas do Kubernetes 1.35 e com `Secret` recusado, e no `trivy config`, sem achado HIGH ou CRITICAL, com a única exceção e o motivo em [`k8s/trivy-ignore.rego`](k8s/trivy-ignore.rego) e a conferência de que todo `PASSWORD` do `papeis.sql` vem de variável do `psql` lida por `\getenv`, que a exceção do trivy não enxerga) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, sem o aviso da telemetria automática do FastAPI no boot (o compose leva o endpoint OTLP no ambiente da API, como o cluster), contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis, o consumidor assinado na `execucao.comandos`, as famílias e as séries do `/metrics` de cada processo logo depois do boot (`scripts/smoke_metricas.py`: as gauges da API; os dez tipos publicados, as reconexões e as gauges da outbox do relay; os sete comandos e o `desconhecido` vezes os cinco resultados do consumidor) e a senha de demonstração recusada com `ENVIRONMENT=production`) |
+| `CI` (`.github/workflows/ci.yml`) | `lint`, `type-check`, `security`, `test`, `sonarqube`, `build` | `uv.lock` em dia, ruff + import-linter, mypy strict, bandit, testes com gate de 95% e, no pull request, 90% no código novo (`make diff-cover`; o summary mostra o número do gate, que soma linhas e ramos, o detalhe por pacote e o resultado do `diff-cover`; `coverage.xml`/`htmlcov` como artefato), quality gate do SonarQube Community efêmero (`.sonar/quality-gate.json`), os manifestos do Kubernetes (`make manifests`: os três overlays no kubeconform, contra os schemas do Kubernetes 1.35 e com `Secret` recusado, e no `trivy config`, sem achado HIGH ou CRITICAL, com a única exceção e o motivo em [`k8s/trivy-ignore.rego`](k8s/trivy-ignore.rego) e a conferência de que todo `PASSWORD` do `papeis.sql` vem de variável do `psql` lida por `\getenv`, que a exceção do trivy não enxerga) e smoke da imagem pelo compose (`make smoke`: entrypoint real com migração e seed, imagem como `1001:1001`, readiness 200, 401 sem token, sem header `server`, sem access log do uvicorn, sem o aviso da telemetria automática do FastAPI no boot (o compose leva o endpoint OTLP no ambiente da API, como o cluster), contratos de mensageria na imagem e a topologia do RabbitMQ fora dela, relay e consumidor saudáveis, o consumidor assinado na `execucao.comandos`, as famílias e as séries do `/metrics` de cada processo logo depois do boot (`scripts/smoke_metricas.py`: as gauges da API; os dez tipos publicados, as reconexões e as gauges da outbox do relay; os sete comandos e o `desconhecido` vezes os cinco resultados do consumidor) e a senha de demonstração recusada com `ENVIRONMENT=production`) |
 | `Security` (`.github/workflows/security.yml`) | `pip-audit`, `gitleaks`, `trivy` | CVE nas dependências de runtime, segredos em todo o histórico do commit testado (um segredo commitado e apagado no commit seguinte também reprova; a regra de URI de banco e de broker com senha tem teste negativo, `scripts/ci/testa-gitleaks.sh`, que reprova a senha gerada num manifesto) e CVE HIGH/CRITICAL com correção na imagem (as imagens de terceiros dos manifestos entram só como relatório no summary); o resultado do `pip-audit` e o do `trivy` da imagem vão também para o summary do job (`scripts/ci/registra-no-summary.sh`, que mantém o código de saída da ferramenta); roda também toda segunda-feira |
 
 `make check` roda localmente os mesmos gates de código do job `CI`, e `make manifests` e `make smoke`, os do job `build`.
+
+## Dependências automatizadas
+
+O Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)) abre pull requests toda segunda às 06:00 (São Paulo), em três blocos:
+
+- **uv**: `pyproject.toml` e `uv.lock`, com o prefixo `chore(deps)`.
+- **Actions** dos workflows, com o prefixo `ci`, como no OS e no Billing.
+- **Docker**: as imagens base do `Dockerfile`, com o prefixo `chore(deps)`.
+
+Regras dos três:
+
+- Patch e minor chegam agrupados num PR só por bloco; major abre PR próprio, para ser lido com o changelog.
+- No máximo 3 PRs abertos por bloco.
+- O PR leva os rótulos padrão do Dependabot (`dependencies` e o do ecossistema), que ele cria no repositório se faltarem.
+- Cada PR passa pelos mesmos nove checks dos dois workflows, inclusive o `pip-audit`, o trivy e o gate de cobertura.
+
+Exceções:
+
+- **uv**: o `required-version` do `pyproject.toml` só tem piso (`>=0.11`), como no Billing. O atualizador do Dependabot roda um uv mais novo (0.12 em outubro de 2026), e com teto o `uv lock` dele recusaria o projeto. A imagem do uv no `Dockerfile` sobe pelo bloco do Docker; o piso e os Requisitos de [Como rodar](#como-rodar) sobem juntos, à mão, quando o serviço passar a exigir um uv mais novo.
+- **OpenTelemetry**: sem grupo próprio. O Dependabot põe as bibliotecas `opentelemetry-*` no grupo de patch e minor do bloco uv, que ele trata como mais específico que um grupo por nome, e os patches e minors da família sobem juntos nele: o SDK fixa `opentelemetry-api` e `opentelemetry-semantic-conventions` na mesma versão, e subir só uma parte não resolve. A major fica fora do grupo.
+- **Teto do OpenTelemetry**: o SDK e o exportador têm teto `<1.46` no `pyproject.toml`, e as instrumentações `<0.67`, como no OS e no Billing. O `mensageria/telemetria.py` troca `_status` e `_events` de um span, atributos privados do SDK que um minor novo pode mudar.
+- **Python**: no bloco do Docker, major e minor ficam de fora. A versão sobe à mão, de uma vez, em `.python-version`, no `python-version` do `security.yml`, no `requires-python` e no `python_version` (mypy) do `pyproject.toml`, no `sonar.python.version` do `sonar-project.properties` e nas duas imagens do `Dockerfile`. Sem isso, o 3.14 → 3.15 chegaria como minor e trocaria só a imagem do runtime. O patch não passa pelo Dependabot: vem do rebuild da tag móvel `python:3.14-slim-trixie`.
+
+Depois do congelamento do código em 06/11/2026, o `open-pull-requests-limit` de cada bloco passa de 3 para 0. O 0 desliga só as atualizações de versão: os PRs de segurança do Dependabot, habilitados no repositório, não entram no limite e seguem abrindo. Sobem à mão, porque o Dependabot não os enxerga ou a versão está fixada de propósito: `postgres` e `prometheuscommunity/postgres-exporter` (a cada release do serviço, junto da tabela do `platform`, seção [Implantação](#implantação)), o PostgreSQL e o RabbitMQ do compose e dos testes de integração, o kubeconform, o trivy, o gitleaks, o pip-audit, o SonarQube e o diff-cover.
 
 ## Repositórios da fase 4
 

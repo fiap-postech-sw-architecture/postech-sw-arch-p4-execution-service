@@ -1,0 +1,86 @@
+# Atualizacao automatica de dependencias: uma vez por semana (segunda, 06:00 em
+# Sao Paulo), com patch e minor de cada ecossistema agrupados num PR so. Major
+# abre PR proprio, para ser lido com o changelog.
+#
+# O limite de 3 PRs abertos vale ate o congelamento do codigo em 06/11/2026.
+# Depois dele, trocar `open-pull-requests-limit` por 0 nos tres blocos: o 0
+# desliga so as atualizacoes de versao; os PRs de seguranca do Dependabot
+# (habilitados no repositorio) nao entram no limite e seguem abrindo.
+#
+# Sem `labels`: os PRs levam os rotulos padrao do Dependabot (`dependencies` e o
+# do ecossistema), que ele cria no repositorio se faltarem. Com `labels`
+# explicito, rotulo que nao existe no repositorio e ignorado.
+#
+# O que o Dependabot nao cobre e a versao ficou fixada de proposito, a ser
+# subida a mao: postgres e prometheuscommunity/postgres-exporter em k8s/ (README,
+# Implantacao), o PostgreSQL e o RabbitMQ do compose e dos testes de integracao,
+# o kubeconform, o trivy e o diff-cover (Makefile) e o gitleaks, o pip-audit e o
+# SonarQube (workflows).
+version: 2
+
+updates:
+  # pyproject.toml e uv.lock (o CI exige `uv lock --check` e `--frozen`).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Leva tambem os opentelemetry-*, e os patches e minors da familia sobem
+      # juntos aqui: o SDK fixa opentelemetry-api e semantic-conventions na
+      # mesma versao, e subir so uma parte nao resolve. Um grupo so deles
+      # ficaria vazio, mesmo antes deste no arquivo: o Dependabot o trata como
+      # menos especifico que este. A major fica fora do grupo e atras do teto
+      # do pyproject.toml (<1.46 e <0.67).
+      python-patch-e-minor:
+        update-types: ["minor", "patch"]
+
+  # Actions dos workflows (por tag, ou por SHA com a versao no comentario).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-patch-e-minor:
+        update-types: ["minor", "patch"]
+
+  # Imagens base do Dockerfile (uv e python). A do uv sobe por aqui: o
+  # required-version do pyproject.toml so tem piso, porque o atualizador do
+  # bloco uv acima roda um uv mais novo, e com teto o `uv lock` dele recusaria
+  # o projeto. O piso e os Requisitos do README sobem juntos, a mao.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      docker-patch-e-minor:
+        update-types: ["minor", "patch"]
+    # O Python sobe a mao, de uma vez em .python-version, python-version do
+    # security.yml, requires-python e python_version (mypy) do pyproject,
+    # sonar.python.version do sonar-project.properties e nas duas imagens do
+    # Dockerfile: o venv do builder tem de rodar no Python do runtime. Sem isto
+    # o 3.14 -> 3.15 chegaria como "minor", dentro do grupo acima, e trocaria
+    # so a imagem do runtime. O patch vem do rebuild da tag movel do runtime
+    # (python:3.14-slim-trixie), sem PR.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"

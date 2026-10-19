@@ -13,8 +13,9 @@ omit =
     src/compartilhado/aplicacao/unit_of_work.py
 
 [report]
-# Minimo da fase 4 por servico: 90% (o enunciado exige 80%).
-fail_under = 90
+# Gate do servico: 95% de linhas e ramos no total (ADR-041; o enunciado exige
+# 80%). O diff-cover (make diff-cover) exige 90% no codigo novo.
+fail_under = 95
 show_missing = True
 exclude_also =
     if __name__ == .__main__.:

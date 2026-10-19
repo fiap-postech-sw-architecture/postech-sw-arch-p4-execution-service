@@ -32,6 +32,7 @@ sonar-project.properties
 coverage.xml
 htmlcov/
 reports/
+mutants/
 .venv
 .env*
 .DS_Store

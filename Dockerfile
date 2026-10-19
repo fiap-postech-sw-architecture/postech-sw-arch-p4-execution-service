@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # Builder e runtime na MESMA distro (Debian 13, trixie) e na mesma minor do
 # Python (3.14): o venv copiado carrega bytecode e wheels compilados contra a
-# glibc e o Python do builder. O uv e o mesmo do `required-version` do
-# pyproject (0.11), o que o CI usa.
+# glibc e o Python do builder. O uv da imagem sobe pelo Dependabot e fica no
+# piso do `required-version` do pyproject (0.11) ou acima dele.
 FROM ghcr.io/astral-sh/uv:0.11-python3.14-trixie-slim AS builder
 
 ENV UV_LINK_MODE=copy \

@@ -1,0 +1,809 @@
+# Mutantes manuais dos modulos criticos (scripts/mutacao_manual.py, make mutacao).
+#
+# Cada [[mutante]] troca o trecho `de` (uma ocorrencia exata no arquivo) por
+# `para` e roda so os testes do grupo `testes`; o teste esperado e o que deveria
+# pegar o defeito. `equivalente` marca o mutante que nao muda o comportamento:
+# se sobreviver, nao conta contra a suite.
+
+[config]
+# O que o script copia do repositorio para mutants/ (arquivos e pastas): tudo
+# que os testes dos grupos abaixo importam ou leem. Os de integracao aplicam as
+# migracoes do Alembic (alembic.ini e migrations/, lidos a partir da raiz da
+# copia) num PostgreSQL do testcontainers, e os de mensageria sobem tambem o
+# RabbitMQ com a topologia de contratos/rabbitmq; com TEST_DATABASE_URL
+# apontando para um banco *_test no ar, poupam o container do PostgreSQL.
+copiar = ["src", "tests", "contratos", "migrations", "alembic.ini", "pyproject.toml"]
+
+[testes]
+execucao = ["tests/unitarios/execucao/test_execucao.py", "tests/unitarios/test_maquinas_de_estado.py", "tests/unitarios/execucao/test_use_cases_execucao.py"]
+diagnostico = ["tests/unitarios/diagnostico/test_dominio_diagnostico.py", "tests/unitarios/test_maquinas_de_estado.py", "tests/unitarios/diagnostico/test_use_cases_diagnostico.py"]
+estoque = ["tests/unitarios/estoque/test_dominio_estoque.py", "tests/unitarios/estoque/test_services.py", "tests/unitarios/test_maquinas_de_estado.py", "tests/unitarios/estoque/test_use_cases_estoque.py"]
+saga = ["tests/unitarios/execucao/test_use_cases_execucao.py", "tests/unitarios/estoque/test_use_cases_estoque.py", "tests/unitarios/diagnostico/test_use_cases_diagnostico.py"]
+idempotencia = ["tests/unitarios/compartilhado/test_idempotencia.py", "tests/unitarios/compartilhado/test_database.py"]
+concorrencia = ["tests/integracao/test_concorrencia.py"]
+veiculo = ["tests/unitarios/compartilhado/test_veiculo.py"]
+jwt = ["tests/unitarios/compartilhado/test_autenticacao.py", "tests/unitarios/compartilhado/test_jwks.py"]
+consumidor = ["tests/unitarios/compartilhado/test_mensageria.py", "tests/integracao/test_mensageria.py"]
+relay = ["tests/unitarios/compartilhado/test_relay.py", "tests/integracao/test_relay.py"]
+
+
+# --- Status da execucao -------------------------------------------------------
+
+[[mutante]]
+id = "E01"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "StatusExecucao.EM_EXECUCAO: frozenset({StatusExecucao.FINALIZADA}),"
+para = "StatusExecucao.EM_EXECUCAO: frozenset({StatusExecucao.FINALIZADA, StatusExecucao.CANCELADA}),"
+
+[[mutante]]
+id = "E02"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "{StatusExecucao.EM_EXECUCAO, StatusExecucao.CANCELADA}"
+para = "{StatusExecucao.EM_EXECUCAO}"
+
+[[mutante]]
+id = "E03"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if self._status is StatusExecucao.EM_EXECUCAO and not self.iniciada_por("
+para = "if False and not self.iniciada_por("
+
+[[mutante]]
+id = "E04"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if self._mecanico_id != mecanico_id:"
+para = "if False:"
+
+[[mutante]]
+id = "E05"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if iniciada != (self._mecanico_id is not None):"
+para = "if False:"
+
+[[mutante]]
+id = "E06"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if self._status is StatusExecucao.CANCELADA:"
+para = "if False:"
+
+[[mutante]]
+id = "E07"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if self.iniciada_por(mecanico_id):"
+para = "if False:"
+
+[[mutante]]
+id = "E08"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "return self._status in {StatusExecucao.AGUARDANDO, StatusExecucao.EM_EXECUCAO}"
+para = "return self._status is StatusExecucao.AGUARDANDO"
+
+[[mutante]]
+id = "E09"
+area = "Status da execucao"
+arquivo = "src/execucao/dominio/execucao.py"
+testes = "execucao"
+de = "if self._veiculo is None or self._veiculo.anonimizado:"
+para = "if self._veiculo is None:"
+
+# --- Status do diagnostico ----------------------------------------------------
+
+[[mutante]]
+id = "D01"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "StatusDiagnostico.CONCLUIDO: frozenset({StatusDiagnostico.DESCARTADO}),"
+para = "StatusDiagnostico.CONCLUIDO: frozenset(),"
+
+[[mutante]]
+id = "D02"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "{StatusDiagnostico.CONCLUIDO, StatusDiagnostico.DESCARTADO}"
+para = "{StatusDiagnostico.CONCLUIDO}"
+
+[[mutante]]
+id = "D03"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if self._mecanico_id == mecanico_id:"
+para = "if True:"
+
+[[mutante]]
+id = "D04"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if self._mecanico_id != mecanico_id:"
+para = "if False:"
+
+[[mutante]]
+id = "D05"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if len(chaves) != len(set(chaves)):"
+para = "if False:"
+
+[[mutante]]
+id = "D06"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "    if not itens:"
+para = "    if False:"
+
+[[mutante]]
+id = "D07"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if self._status is StatusDiagnostico.DESCARTADO:"
+para = "if False:"
+
+[[mutante]]
+id = "D08"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if status is StatusDiagnostico.AGUARDANDO and mecanico_id is not None:"
+para = "if False:"
+
+[[mutante]]
+id = "D09"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if self._observacoes:"
+para = "if False:"
+
+[[mutante]]
+id = "D10"
+area = "Status do diagnostico"
+arquivo = "src/diagnostico/dominio/diagnostico.py"
+testes = "diagnostico"
+de = "if self.concluido_por(mecanico_id):"
+para = "if False:"
+
+# --- Reserva e saldo de peca --------------------------------------------------
+
+[[mutante]]
+id = "R01"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/reserva.py"
+testes = "estoque"
+de = "StatusReserva.ATIVA: frozenset({StatusReserva.LIBERADA, StatusReserva.CONSUMIDA}),"
+para = "StatusReserva.ATIVA: frozenset({StatusReserva.LIBERADA}),"
+
+[[mutante]]
+id = "R02"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/reserva.py"
+testes = "estoque"
+de = "StatusReserva.CONSUMIDA: frozenset(),"
+para = "StatusReserva.CONSUMIDA: frozenset({StatusReserva.LIBERADA}),"
+
+[[mutante]]
+id = "R03"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/reserva.py"
+testes = "estoque"
+de = "if self._status in {StatusReserva.LIBERADA, StatusReserva.RECUSADA}:"
+para = "if self._status is StatusReserva.LIBERADA:"
+
+[[mutante]]
+id = "R04"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/reserva.py"
+testes = "estoque"
+de = "if not 0 <= self.disponivel < self.solicitado:"
+para = "if not 0 <= self.disponivel <= self.solicitado:"
+
+[[mutante]]
+id = "R05"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/reserva.py"
+testes = "estoque"
+de = "if (self._status is StatusReserva.RECUSADA) != bool(self._faltantes):"
+para = "if False:"
+
+[[mutante]]
+id = "R06"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "if self.quantidade_livre < quantidade:"
+para = "if self.quantidade_livre <= quantidade:"
+
+[[mutante]]
+id = "R07"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "if not self._ativo:"
+para = "if False:"
+
+[[mutante]]
+id = "R08"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "return self._quantidade_disponivel - self._quantidade_reservada"
+para = "return self._quantidade_disponivel"
+
+[[mutante]]
+id = "R09"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "self._quantidade_disponivel -= quantidade"
+para = "pass"
+
+[[mutante]]
+id = "R10"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "if quantidade_disponivel < self._quantidade_reservada:"
+para = "if quantidade_disponivel <= self._quantidade_reservada:"
+
+[[mutante]]
+id = "R11"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/item_estoque.py"
+testes = "estoque"
+de = "if self._quantidade_reservada > 0:"
+para = "if self._quantidade_reservada > 1:"
+
+[[mutante]]
+id = "R12"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/services.py"
+testes = "estoque"
+de = "livre = item.quantidade_livre if item is not None and item.ativo else 0"
+para = "livre = item.quantidade_livre if item is not None else 0"
+
+[[mutante]]
+id = "R13"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/services.py"
+testes = "estoque"
+de = "if livre < peca.quantidade:"
+para = "if livre <= peca.quantidade:"
+
+[[mutante]]
+id = "R14"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/services.py"
+testes = "estoque"
+de = "    if faltantes:"
+para = "    if False:"
+
+[[mutante]]
+id = "R15"
+area = "Reserva e saldo de peca"
+arquivo = "src/estoque/dominio/services.py"
+testes = "estoque"
+de = "if reserva.liberar(agora):"
+para = "if reserva.liberar(agora) or True:"
+
+# --- Saga: guardas, lapide e repeticao do comando -----------------------------
+
+[[mutante]]
+id = "S01"
+area = "Saga"
+arquivo = "src/execucao/aplicacao/use_cases.py"
+testes = "saga"
+de = "if not self._estoque.tem_reserva_ativa(ordem_id):\n                    raise _sem_reserva()\n                self._repo.salvar(execucao)"
+para = "self._repo.salvar(execucao)"
+
+[[mutante]]
+id = "S02"
+area = "Saga"
+arquivo = "src/execucao/aplicacao/use_cases.py"
+testes = "saga"
+de = "if not self._estoque.tem_reserva_ativa(ordem_id):\n                raise _sem_reserva()\n            execucao.iniciar(mecanico_id, agora)"
+para = "execucao.iniciar(mecanico_id, agora)"
+
+[[mutante]]
+id = "S03"
+area = "Saga"
+arquivo = "src/execucao/aplicacao/use_cases.py"
+testes = "saga"
+de = "elif execucao.status is not StatusExecucao.AGUARDANDO:"
+para = "elif False:"
+
+[[mutante]]
+id = "S04"
+area = "Saga"
+arquivo = "src/execucao/aplicacao/use_cases.py"
+testes = "saga"
+de = "execucao = Execucao.lapide(ordem_id=ordem_id, agora=agora)"
+para = "return"
+
+[[mutante]]
+id = "S05"
+area = "Saga"
+arquivo = "src/estoque/aplicacao/use_cases.py"
+testes = "saga"
+de = "if existente.status in _RESERVA_ENCERRADA:"
+para = "if False:"
+
+[[mutante]]
+id = "S06"
+area = "Saga"
+arquivo = "src/estoque/aplicacao/use_cases.py"
+testes = "saga"
+de = "_RESERVA_ENCERRADA = frozenset({StatusReserva.LIBERADA, StatusReserva.CONSUMIDA})"
+para = "_RESERVA_ENCERRADA = frozenset({StatusReserva.LIBERADA})"
+
+[[mutante]]
+id = "S07"
+area = "Saga"
+arquivo = "src/estoque/aplicacao/use_cases.py"
+testes = "saga"
+de = "if existente.status is StatusReserva.RECUSADA:"
+para = "if False:"
+
+[[mutante]]
+id = "S08"
+area = "Saga"
+arquivo = "src/estoque/aplicacao/use_cases.py"
+testes = "saga"
+de = "self._reservas.salvar(Reserva.lapide(ordem_id=ordem_id, agora=agora))"
+para = "pass"
+
+[[mutante]]
+id = "S09"
+area = "Saga"
+arquivo = "src/diagnostico/aplicacao/use_cases.py"
+testes = "saga"
+de = "diagnostico = Diagnostico.lapide(ordem_id=ordem_id, agora=agora)"
+para = "return"
+
+[[mutante]]
+id = "S10"
+area = "Saga"
+arquivo = "src/execucao/aplicacao/use_cases.py"
+testes = "saga"
+de = "if pecas is None:"
+para = "if False:"
+
+# --- Idempotencia e concorrencia ----------------------------------------------
+
+[[mutante]]
+id = "I01"
+area = "Idempotencia e concorrencia"
+arquivo = "src/compartilhado/aplicacao/idempotencia.py"
+testes = "idempotencia"
+de = "except EntidadeDuplicadaException:\n            return executar(*args, **kwargs)"
+para = "except EntidadeDuplicadaException:\n            raise"
+
+[[mutante]]
+id = "I02"
+area = "Idempotencia e concorrencia"
+arquivo = "src/compartilhado/infraestrutura/database.py"
+testes = "idempotencia"
+de = "if not violacao_de_unicidade(exc):"
+para = "if False:"
+
+[[mutante]]
+id = "I03"
+area = "Idempotencia e concorrencia"
+arquivo = "src/estoque/infraestrutura/repository.py"
+testes = "concorrencia"
+de = "            .order_by(itens_estoque_table.c.sku)\n            .with_for_update()"
+para = "            .order_by(itens_estoque_table.c.sku)"
+
+[[mutante]]
+id = "I04"
+area = "Idempotencia e concorrencia"
+arquivo = "src/estoque/infraestrutura/repository.py"
+testes = "concorrencia"
+de = "if com_lock:\n            stmt = stmt.with_for_update()"
+para = "if com_lock:\n            stmt = stmt"
+
+[[mutante]]
+id = "I05"
+area = "Idempotencia e concorrencia"
+arquivo = "src/execucao/infraestrutura/repository.py"
+testes = "concorrencia"
+de = "stmt = stmt.with_for_update().execution_options(populate_existing=True)"
+para = "stmt = stmt.execution_options(populate_existing=True)"
+
+[[mutante]]
+id = "I06"
+area = "Idempotencia e concorrencia"
+arquivo = "src/compartilhado/infraestrutura/outbox_mapping.py"
+testes = "consumidor"
+de = '.on_conflict_do_nothing(index_elements=["mensagem_id"])'
+para = ""
+
+# --- Placa do veiculo (objeto de valor) ---------------------------------------
+
+[[mutante]]
+id = "V01"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = '_PLACA_MERCOSUL = re.compile(r"[A-Z]{3}\d[A-Z]\d{2}")'
+para = '_PLACA_MERCOSUL = re.compile(r"[A-Z]{3}\d[A-Z]\d{1,2}")'
+
+[[mutante]]
+id = "V02"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = "if not (_PLACA_ANTIGA.fullmatch(placa) or"
+para = "if not (_PLACA_ANTIGA.match(placa) or"
+
+[[mutante]]
+id = "V03"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = 'placa = self.placa.strip().upper().replace("-", "")'
+para = 'placa = self.placa.strip().replace("-", "")'
+
+[[mutante]]
+id = "V04"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = "if not ANO_PRIMEIRO_CARRO < self.ano <= ano_maximo:"
+para = "if not ANO_PRIMEIRO_CARRO <= self.ano <= ano_maximo:"
+
+[[mutante]]
+id = "V05"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = "ano_maximo = agora.year + 1"
+para = "ano_maximo = agora.year"
+
+[[mutante]]
+id = "V06"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = "return self.placa.startswith(PREFIXO_ANONIMIZADO)"
+para = "return False"
+
+[[mutante]]
+id = "V07"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = 'placa = self.placa if self.anonimizado else f"{self.placa[:2]}*****"'
+para = "placa = self.placa"
+
+[[mutante]]
+id = "V08"
+area = "Placa do veiculo"
+arquivo = "src/compartilhado/dominio/veiculo.py"
+testes = "veiculo"
+de = '_PLACA_ANTIGA = re.compile(r"[A-Z]{3}\d{4}")'
+para = '_PLACA_ANTIGA = re.compile(r"[A-Z]{3}\d{3,4}")'
+
+# --- Validacao do JWT ---------------------------------------------------------
+
+[[mutante]]
+id = "J01"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = 'algorithms=["RS256"],'
+para = 'algorithms=["RS256", "HS256"],'
+equivalente = "so enquanto valem duas condicoes: o PyJWT amarra a chave ao algoritmo dela (na 2.15, jwt/api_jws.py, o decode com um PyJWK recusa \"Token algorithm 'HS256' does not match the key's algorithm 'RS256'\") e o validador passa um PyJWK ao decode. Com elas, HS256 na lista nao muda o desfecho, e test_algoritmo_simetrico_e_recusado o guarda; sem elas, a lista RS256 do ADR-039 e a unica barreira, e nenhum teste a prende"
+
+[[mutante]]
+id = "J02"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "issuer=EMISSOR,"
+para = "issuer=None,"
+
+[[mutante]]
+id = "J03"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = 'options={"require": ["exp", "iss", "aud", "sub"]},'
+para = 'options={"require": ["exp", "iss", "aud"]},'
+
+[[mutante]]
+id = "J04"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "leeway=LEEWAY_SEGUNDOS,"
+para = "leeway=0,"
+
+[[mutante]]
+id = "J05"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "LEEWAY_SEGUNDOS: Final = 10"
+para = "LEEWAY_SEGUNDOS: Final = 60"
+
+[[mutante]]
+id = "J06"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "if self._relogio() - copia.obtida_em >= FRESCO_SEGUNDOS:"
+para = "if self._relogio() - copia.obtida_em > FRESCO_SEGUNDOS:"
+
+[[mutante]]
+id = "J07"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "if copia is not None and agora - copia.obtida_em < VELHO_MAXIMO_SEGUNDOS:\n            return copia.chaves"
+para = "if copia is not None and agora - copia.obtida_em <= VELHO_MAXIMO_SEGUNDOS:\n            return copia.chaves"
+
+[[mutante]]
+id = "J08"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "and agora - self._falhou_em < MEMORIA_DA_FALHA_SEGUNDOS"
+para = "and agora - self._falhou_em <= MEMORIA_DA_FALHA_SEGUNDOS"
+
+[[mutante]]
+id = "J09"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "return idade >= _INTERVALO_BUSCA_POR_KID_SEGUNDOS"
+para = "return True"
+
+[[mutante]]
+id = "J10"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "self._breaker.registrar_falha()"
+para = "pass"
+
+[[mutante]]
+id = "J11"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/interfaces/autenticacao.py"
+testes = "jwt"
+de = 'if claims.get("type") != "access":'
+para = 'if claims.get("type") == "refresh":'
+
+[[mutante]]
+id = "J12"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/interfaces/autenticacao.py"
+testes = "jwt"
+de = "permitidos = frozenset({Papel.ADMIN, *papeis})"
+para = "permitidos = frozenset(papeis)"
+
+[[mutante]]
+id = "J13"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "MEMORIA_DA_FALHA_SEGUNDOS: Final = 5"
+para = "MEMORIA_DA_FALHA_SEGUNDOS: Final = 6"
+
+[[mutante]]
+id = "J14"
+area = "Validacao do JWT"
+arquivo = "src/compartilhado/infraestrutura/jwks.py"
+testes = "jwt"
+de = "retry_after=max(1, math.ceil(espera))"
+para = "retry_after=max(1, math.floor(espera))"
+
+# --- Consumidor ---------------------------------------------------------------
+
+[[mutante]]
+id = "C01"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "not 0 <= tentativa <= len(NIVEIS_DE_RETRY)"
+para = "not 0 <= tentativa < len(NIVEIS_DE_RETRY)"
+
+[[mutante]]
+id = "C02"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "if type(tentativa) is not int or"
+para = "if not isinstance(tentativa, int) or"
+
+[[mutante]]
+id = "C03"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "if len(corpo) > _CORPO_MAXIMO:"
+para = "if len(corpo) >= _CORPO_MAXIMO:"
+
+[[mutante]]
+id = "C04"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "esperado = self._usuario if tentativa else produtor(tipo)"
+para = "esperado = produtor(tipo)"
+
+[[mutante]]
+id = "C05"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "if user_id != esperado:"
+para = "if False:"
+
+[[mutante]]
+id = "C06"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "self._banco_suspeito = True"
+para = "self._banco_suspeito = False"
+
+[[mutante]]
+id = "C07"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "esgotou = tentativa >= len(NIVEIS_DE_RETRY)"
+para = "esgotou = tentativa > len(NIVEIS_DE_RETRY)"
+
+[[mutante]]
+id = "C08"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "DependenciaIndisponivelException,\n    EntidadeDuplicadaException,\n)"
+para = "DependenciaIndisponivelException,\n)"
+
+[[mutante]]
+id = "C09"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "_PERMANENTES: Final = (ValorInvalidoError, RespostaInvalidaDaDependenciaException)"
+para = "_PERMANENTES: Final = (RespostaInvalidaDaDependenciaException,)"
+
+[[mutante]]
+id = "C10"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "requeue=False"
+para = "requeue=True"
+
+[[mutante]]
+id = "C11"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "mandatory=True,"
+para = "mandatory=False,"
+
+[[mutante]]
+id = "C12"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "return Resultado.IGNORADA if transacao.descartado else Resultado.PROCESSADA"
+para = "return Resultado.PROCESSADA"
+
+[[mutante]]
+id = "C13"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "consumidor"
+de = "if not registrar_processada(conexao, comando_id):"
+para = "if False:"
+
+# --- Relay e outbox -----------------------------------------------------------
+
+[[mutante]]
+id = "O01"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "if tentativas > len(atrasos):"
+para = "if tentativas >= len(atrasos):"
+
+[[mutante]]
+id = "O02"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "return atrasos[tentativas - 1]"
+para = "return atrasos[0]"
+
+[[mutante]]
+id = "O03"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = '"AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.correlation_id = "'
+para = '"AND NOT EXISTS (SELECT 1 FROM outbox p WHERE FALSE AND p.correlation_id = "'
+
+[[mutante]]
+id = "O04"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = '''    "ultimo_erro = NULL "
+    "WHERE id = :id AND status = 'pendente' AND proxima_tentativa_em = :lease_ate"'''
+para = '''    "ultimo_erro = NULL "
+    "WHERE id = :id AND status = 'pendente'"'''
+
+[[mutante]]
+id = "O05"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "return alteradas == 1"
+para = "return True"
+
+[[mutante]]
+id = "O06"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "tentativas = linha.tentativas + 1"
+para = "tentativas = linha.tentativas"
+
+[[mutante]]
+id = "O07"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/relay.py"
+testes = "relay"
+de = "if broker.bloqueada:\n                    self._liberar(linhas[indice:])"
+para = "if False:\n                    self._liberar(linhas[indice:])"
+
+[[mutante]]
+id = "O08"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/relay.py"
+testes = "relay"
+de = "self._liberar(linhas[indice:])\n                    raise"
+para = "raise"
+
+[[mutante]]
+id = "O09"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/relay.py"
+testes = "relay"
+de = 'if self._outbox.marcar_dead(linha, "envelope fora do contrato"):'
+para = 'if self._outbox.registrar_falha(linha, "envelope fora do contrato") == "dead":'
+
+[[mutante]]
+id = "O10"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/relay.py"
+testes = "relay"
+de = "except (UnroutableError, NackError, ChannelClosedByBroker) as falha:"
+para = "except (UnroutableError, NackError) as falha:"

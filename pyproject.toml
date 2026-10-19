@@ -22,9 +22,11 @@ dependencies = [
     "jsonschema>=4.26.0",
     "rfc3339-validator>=0.1.4",
     # Contexto W3C pela outbox e pelo AMQP; exportacao OTLP/gRPC para o Jaeger
-    # (ADR-043), ligada por OTEL_ENABLED.
-    "opentelemetry-sdk>=1.45.1,<2",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1,<2",
+    # (ADR-043), ligada por OTEL_ENABLED. Teto no minor, como no OS e no
+    # Billing: o mensageria/telemetria.py troca _status e _events de um span,
+    # atributos privados do SDK, e um minor novo pode mudar isso.
+    "opentelemetry-sdk>=1.45.1,<1.46",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45.1,<1.46",
     "pyyaml>=6.0.3",
     # Instrumentacao da API, do banco e do cliente HTTP do Billing. Par casado com
     # o SDK 1.45.x: o SDK exige opentelemetry-semantic-conventions==0.66bN, entao
@@ -50,8 +52,11 @@ dev = [
 ]
 
 [tool.uv]
-# Mesmo uv do builder do Dockerfile; o setup-uv do CI le esta faixa.
-required-version = ">=0.11,<0.12"
+# So o piso, como no Billing: o atualizador do Dependabot roda um uv mais novo
+# (0.12 em out/2026), e com teto o `uv lock` dele recusaria o projeto. O
+# setup-uv do CI le esta faixa; a imagem do uv no Dockerfile sobe pelo
+# Dependabot. O piso e os Requisitos do README sobem juntos, a mao.
+required-version = ">=0.11"
 
 [build-system]
 requires = ["setuptools>=83.0.0"]
