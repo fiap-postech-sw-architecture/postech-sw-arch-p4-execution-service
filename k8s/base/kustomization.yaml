@@ -51,8 +51,9 @@ configMapGenerator:
       - OTEL_ENABLED=true
       - OTEL_SERVICE_NAME=execution-service
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger.pytstop-plataforma.svc.cluster.local:4317
-      # Prazo de cada envio ao Jaeger: sem eles o SDK espera 30 s por lote, e com o
-      # Jaeger fora do ar o pod leva todo o terminationGracePeriodSeconds para sair.
+      # O prazo OTLP limita cada exportacao ao Jaeger, incluindo tentativas (padrao de 10 s).
+      # No desligamento o SDK aguarda ate 30 s pelo worker, podendo consumir o grace period.
+      # O BSP fica configurado, mas o SDK 1.45.1 le esse valor sem usa-lo na exportacao.
       - OTEL_BSP_EXPORT_TIMEOUT=2000
       - OTEL_EXPORTER_OTLP_TIMEOUT=2
       - RUN_MIGRATIONS_ON_STARTUP=false
