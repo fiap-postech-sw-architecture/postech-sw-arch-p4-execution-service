@@ -10,6 +10,7 @@ Consolidado em 2026-10-07: as 103 entradas anteriores estao em `MEMORY.archive.m
 
 ## Recent decisions
 
+- 2026-10-20 - O topo do README abre com os três contextos do serviço (Diagnóstico, Execução e Estoque, as pastas `src/diagnostico`, `src/execucao` e `src/estoque`), como o código e o `docs/arquitetura.md`. O singular "o contexto Execução" vinha dos ADRs e do glossário do platform (corrigido lá). Início curto com o que é, o papel na saga, como rodar e testar, links de arquitetura, API, cobertura e CD, e o índice único da entrega; nenhum conteúdo saiu - docs/readme-da-entrega
 - 2026-10-19 - O caller CD da Execução usa o reutilizável do Platform por SHA integrado `3f7cca2eb555a038b0d2780058ef0e692f93ee8a` (S), mantendo gatilhos, concorrência e os nove checks locais. Os quatro inputs escolhem commits de assets/vizinhos separadamente de S; execution-service é sempre o commit do run. O caller não herda segredos e os jobs chamados reduzem a união de permissões.
 - 2026-10-19 - A cópia canônica aponta ORIGEM para o Platform `15dd827b95a95d2dd717414fb5104ac9768b32ac` (C): apenas asyncapi.yaml mudou e os outros 41 arquivos copiados permaneceram idênticos. A prova runtime deste caller depende do primeiro CD main verde, e a publicação é posterior ao canário OS verde e conferência da coordenação.
 
