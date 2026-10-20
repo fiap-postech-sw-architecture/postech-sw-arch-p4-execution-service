@@ -43,6 +43,14 @@ updates:
       # subido, depois de ler o changelog.
       python-patch-e-minor:
         update-types: ["minor", "patch"]
+    # O teto do pyproject.toml nao segura o Dependabot: ele o alarga (o
+    # sqlalchemy <2.1 virou <2.2 e trouxe a 2.1, que muda o driver do
+    # PostgreSQL). Minor nova destes so entra a mao, depois do changelog.
+    ignore:
+      - dependency-name: "sqlalchemy"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "opentelemetry-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # Actions dos workflows (por tag, ou por SHA com a versao no comentario).
   - package-ecosystem: "github-actions"
