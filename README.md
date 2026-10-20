@@ -163,7 +163,7 @@ Uma linha JSON por evento no stdout de cada processo, com o nome do evento em in
 | Spans do cliente AMQP e do psycopg2 | O `PikaInstrumentor` duplicaria os spans e injetaria o contexto do relay em vez do gravado na outbox, e o SQLAlchemy já cobre o psycopg2 | Os spans de publicação e de consumo são do próprio serviço |
 | Métrica com placa, documento, nome ou texto livre em rótulo | Cardinalidade e dado pessoal | Os rótulos abertos que vêm do banco são só `servico` e `sku`, códigos do catálogo (e o `method`, que vem do cliente: ver [Métricas](#métricas)) |
 
-O que só os testes provam, e não um cluster: a continuação do `traceparent` no SERVER do Billing e o CLIENT do Billing ao Mercado Pago (o ensaio final de observabilidade, depois do merge dos três serviços, fecha), e o prazo de saída do pod pelo kubelet (provado em contêiner, com o uvicorn como PID 1).
+A continuação do `traceparent` no SERVER do Billing já foi vista num cluster: o ensaio de observabilidade do platform guardou um trace com os três serviços, inclusive o CLIENT da Execução e o SERVER do Billing em `/api/v1/precos/validacao` ([evidência](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/entrega/fase4/evidencias/observabilidade.md)). O que só os testes provam, e não um cluster: o CLIENT do Billing ao Mercado Pago real, que depende da prova na sandbox do provedor, e o prazo de saída do pod pelo kubelet (provado em contêiner, com o uvicorn como PID 1).
 
 ### Como ver
 
