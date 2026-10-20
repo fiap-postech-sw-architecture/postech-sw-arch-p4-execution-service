@@ -1,12 +1,22 @@
 # PytStop fase 4: Execution Service
 
-Serviço de execução e produção da oficina: fila de diagnóstico, fila de execução, apontamentos do mecânico e estoque físico de peças (reserva, liberação e baixa). Banco próprio: PostgreSQL 16 (`execucao`). Participa da saga de atendimento orquestrada pelo OS Service.
+[![CD](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/cd.yml/badge.svg?branch=main)](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/cd.yml)
 
-Parte da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT): o PytStop, sistema de gestão de oficina mecânica das fases anteriores, refatorado em microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes.
+Serviço de execução e produção da oficina PytStop. Reúne três contextos: Diagnóstico (a fila de diagnóstico e os apontamentos do mecânico), Execução (a fila de execução e a finalização do reparo) e Estoque (o estoque físico de peças, com reserva, liberação e baixa). Banco próprio: PostgreSQL 16 (`execucao`).
 
-Este repositório traz o domínio, os casos de uso, a API REST e os dois processos de mensageria do serviço: o relay da outbox para o RabbitMQ e o consumidor dos comandos da saga ([Mensageria](#mensageria)). A mesma imagem roda os três processos, com comandos diferentes.
+Este repositório é um dos quatro da entrega da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT). Nessa fase o PytStop, sistema de gestão de oficina mecânica das fases anteriores, virou microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes. O [índice da entrega](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/INDICE-DA-ENTREGA.md) liga os quatro repositórios, os requisitos e as evidências.
 
-Arquitetura da fase 4: [RFC-004 e ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) no repositório `platform` (divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança). A arquitetura deste serviço, com o modelo de dados completo e os fluxos passo a passo em diagramas, está em [`docs/arquitetura.md`](docs/arquitetura.md); o OpenAPI e a coleção Postman, em [`docs/api/`](docs/api) ([API](#api)).
+## Em poucas linhas
+
+- **Na saga:** participa da saga orquestrada pelo OS Service. O processo `consumidor` recebe da fila `execucao.comandos` os comandos de diagnóstico, de reserva de peças e de execução, e o `relay` publica as respostas no exchange `pytstop.eventos`. O início do reparo (`ExecucaoIniciada`) é o pivot da saga: depois dele a OS não cancela ([Participação na saga](#participação-na-saga) e [Mensageria](#mensageria)).
+- **Como rodar:** `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL e o RabbitMQ, e `make compose-down` derruba tudo. A mesma imagem roda os três processos, cada um com o seu comando. Sem o OS Service no ar, as rotas autenticadas respondem 401 ou 503; a stack completa vem do `platform` ([Como rodar](#como-rodar)).
+- **Como testar:** `make check` roda lint, tipos, segurança e os testes com gate de cobertura de 95%, e `make smoke` prova a imagem pelo entrypoint real. Os dois pedem Docker ([Testes](#testes) e [Integração contínua](#integração-contínua)).
+- **Arquitetura (RNF-051):** responsabilidades, camadas e módulos dos três contextos (`src/diagnostico`, `src/execucao` e `src/estoque`), modelo de dados completo e fluxos passo a passo em diagramas, em [`docs/arquitetura.md`](docs/arquitetura.md) ([Arquitetura](#arquitetura)).
+- **API (RNF-052):** OpenAPI e coleção Postman em [`docs/api`](docs/api) (o `make docs-api` os gera de novo a partir do app), um `curl` por rota em [Exemplos com `curl`](#exemplos-com-curl) e Swagger em `/docs` ([API](#api)). A coleção do fluxo completo, que roda com newman, é do platform.
+- **Cobertura (RNF-050):** tabela por contexto e camada, gerada do `coverage.xml` de um run do CI, em [Cobertura](#cobertura).
+- **CD:** o [`cd.yml`](.github/workflows/cd.yml) chama o workflow reutilizável do platform, que publica a imagem no GHCR e implanta num kind efêmero (Kubernetes dentro de contêineres do runner), com smoke e E2E da saga ([CD](#cd)).
+
+A arquitetura global da fase 4 está na [RFC-004 e nos ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) do repositório `platform`: divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança. Os entregáveis RNF-050 a RNF-052 vêm da [gap analysis da fase](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/requisitos/fase4/gap-analysis-fase-4.md).
 
 ## Arquitetura
 
