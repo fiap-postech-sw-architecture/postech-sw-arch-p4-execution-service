@@ -135,8 +135,9 @@ class _Broker:
         except (UnroutableError, NackError, ChannelClosedByBroker) as falha:
             # Sem rota e nack mantem o canal; a recusa (403, 404, 406) o fecha.
             self._reabrir_canal()
+            nome = type(falha).__name__
             codigo = getattr(falha, "reply_code", None)
-            return type(falha).__name__ + (f" ({codigo})" if codigo else "")
+            return f"{nome} ({codigo})" if codigo else nome
         except (AMQPError, OSError) as exc:
             raise BrokerIndisponivelError from exc
         return None
