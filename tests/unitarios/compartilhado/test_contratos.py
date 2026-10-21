@@ -216,8 +216,10 @@ def test_quebra_de_linha_no_fim_do_valor_e_recusada(
     """O ``$`` de um pattern aceita ``\\n`` no fim e o ``format`` do jsonschema
     tambem: os patterns do contrato terminam em ``(?![\\s\\S])``. O motivo e o
     do campo (o ``tipo`` do envelope nao passa por "tipo sem contrato")."""
+    envelope = _com_quebra_de_linha_no_fim(tipo, caminho)
+
     with pytest.raises(MensagemInvalidaError) as erro:
-        validar(_com_quebra_de_linha_no_fim(tipo, caminho))
+        validar(envelope)
 
     assert str(erro.value) == f"{onde} (pattern)"
 
@@ -252,8 +254,10 @@ def _reservar_com_sku(sku: str) -> dict[str, Any]:
 
 @pytest.mark.parametrize("sku", _SKUS_FORA_DO_FORMATO)
 def test_sku_do_reservar_pecas_fora_do_formato_do_billing_e_recusado(sku: str) -> None:
+    comando = _reservar_com_sku(sku)
+
     with pytest.raises(MensagemInvalidaError, match=r"\$\.pecas\[0\]\.sku"):
-        validar(_reservar_com_sku(sku))
+        validar(comando)
 
 
 @pytest.mark.parametrize("sku", _SKUS_NO_FORMATO)

@@ -213,8 +213,9 @@ def test_queda_do_broker_na_publicacao_nao_e_falha_da_linha(
     monkeypatch: pytest.MonkeyPatch, erro: Exception
 ) -> None:
     broker, _ = _broker(monkeypatch, _Canal(erro))
+    linha = _linha()
     with pytest.raises(BrokerIndisponivelError):
-        broker.publicar(_linha())
+        broker.publicar(linha)
 
 
 @pytest.mark.parametrize(
@@ -328,8 +329,9 @@ def test_canal_que_nao_reabre_e_broker_indisponivel(
         raise StreamLostError("caiu junto")
 
     monkeypatch.setattr(conexao, "channel", sem_canal)
+    linha = _linha()
     with pytest.raises(BrokerIndisponivelError):
-        broker.publicar(_linha())
+        broker.publicar(linha)
 
 
 # --- abertura da conexao no laco do relay -----------------------------------
@@ -444,8 +446,9 @@ def test_oserror_na_abertura_que_nao_e_broker_fora_derruba_o_relay(
     tmp_path: Path, erro: OSError, mensagem: str
 ) -> None:
     # Nem broker fora nem banco fora: reconectar em laco esconderia o defeito.
+    conecta = _falha(erro)
     with pytest.raises(OSError, match=mensagem):
-        _rodar_relay(tmp_path, _falha(erro))
+        _rodar_relay(tmp_path, conecta)
 
 
 def test_disco_no_arquivo_de_prontidao_derruba_o_relay_em_vez_de_virar_banco_fora(
