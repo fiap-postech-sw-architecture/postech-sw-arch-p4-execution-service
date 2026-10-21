@@ -1055,23 +1055,28 @@ def test_bloqueio_no_meio_do_lote_devolve_as_linhas_que_sobraram(
         broker_falso.bloqueada = True
 
     broker_falso.ao_publicar.append(bloqueia_depois_da_primeira)
+
+    def vencidas() -> int:
+        with engine.connect() as conexao:
+            return int(
+                conexao.execute(
+                    text(
+                        "SELECT count(*) FROM outbox WHERE status = 'pendente' "
+                        "AND proxima_tentativa_em <= now()"
+                    )
+                ).scalar_one()
+            )
+
     with EmSegundoPlano(_relay_falso(engine, sinais)):
         esperar_ate(lambda: len(broker_falso.publicadas) == 1)
-        # As duas que sobraram voltam a valer ja, sem tentativa.
-        esperar_ate(
-            lambda: (
-                [(r["status"], r["tentativas"]) for r in outbox()][1:]
-                == [("pendente", 0), ("pendente", 0)]
-            )
-        )
-        with engine.connect() as conexao:
-            vencidas = conexao.execute(
-                text(
-                    "SELECT count(*) FROM outbox WHERE status = 'pendente' "
-                    "AND proxima_tentativa_em <= now()"
-                )
-            ).scalar_one()
-        assert vencidas == 2
+        # As duas que sobraram voltam a valer ja, sem tentativa. O claim so
+        # empurra o prazo (status e tentativas nao mudam), entao a espera e
+        # pelo prazo devolvido, e nao pelo status.
+        esperar_ate(lambda: vencidas() == 2)
+        assert [(r["status"], r["tentativas"]) for r in outbox()][1:] == [
+            ("pendente", 0),
+            ("pendente", 0),
+        ]
         broker_falso.ao_publicar.clear()
         broker_falso.bloqueada = False
         esperar_ate(lambda: len(broker_falso.publicadas) == 3)
