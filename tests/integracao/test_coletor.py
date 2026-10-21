@@ -64,10 +64,11 @@ def _threads_do_coletor() -> list[threading.Thread]:
 def _esperar_a_thread_do_coletor() -> None:
     """A raspagem devolve assim que a ultima consulta volta; a thread ainda fecha a
     conexao."""
-    try:
-        esperar_ate(lambda: not _threads_do_coletor(), prazo_s=10)
-    except AssertionError:
-        pytest.fail("a thread do coletor nao terminou")
+    esperar_ate(
+        lambda: not _threads_do_coletor(),
+        prazo_s=10,
+        motivo="a thread do coletor nao terminou",
+    )
 
 
 def _conexoes_da_raspagem(engine: Engine) -> int:
@@ -90,10 +91,11 @@ def _nenhuma_raspagem_sobra(engine: Engine) -> Iterator[None]:
     """
     yield
     _esperar_a_thread_do_coletor()
-    try:
-        esperar_ate(lambda: _conexoes_da_raspagem(engine) == 0, prazo_s=10)
-    except AssertionError:
-        pytest.fail("o servidor ainda tem a conexao da raspagem")
+    esperar_ate(
+        lambda: _conexoes_da_raspagem(engine) == 0,
+        prazo_s=10,
+        motivo="o servidor ainda tem a conexao da raspagem",
+    )
 
 
 @pytest.fixture
