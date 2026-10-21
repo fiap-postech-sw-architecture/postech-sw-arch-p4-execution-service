@@ -149,8 +149,9 @@ def _gravar(uow: SQLAlchemyUnitOfWork, evento: IntegrationEvent) -> None:
 
 def test_evento_fora_do_contrato_nao_e_gravado() -> None:
     uow, sessao = _uow()
+    evento = ForaDoContratoEvent(ordem_id=uuid4())
     with pytest.raises(MensagemInvalidaError, match="tipo sem contrato"):
-        _gravar(uow, ForaDoContratoEvent(ordem_id=uuid4()))
+        _gravar(uow, evento)
     assert sessao.chamadas == [("rollback",), ("close",)]
 
 
@@ -271,8 +272,9 @@ def test_tentativa_com_excecao_volta_ao_savepoint_e_perde_os_eventos() -> None:
 
 def test_resposta_fora_do_contrato_desfaz_a_tentativa() -> None:
     transacao, sessao, _ = _transacao()
+    evento = ForaDoContratoEvent(ordem_id=uuid4())
     with pytest.raises(MensagemInvalidaError), transacao:
-        transacao.registrar_evento(ForaDoContratoEvent(ordem_id=uuid4()))
+        transacao.registrar_evento(evento)
     assert sessao.chamadas == [("savepoint",), ("voltar ao savepoint",)]
 
 

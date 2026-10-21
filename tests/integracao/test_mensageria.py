@@ -1270,12 +1270,13 @@ def test_lock_alem_do_teto_da_mensagem_e_cortado_em_3_s(
     ) -> None:
         sessao.execute(trava)
 
+    instancia = consumidor({"ReservarPecas": espera_o_lock})
     with engine.connect() as dono:
         transacao = dono.begin()
         dono.execute(trava)
         inicio = time.monotonic()
         with pytest.raises(OperationalError) as erro:
-            consumidor({"ReservarPecas": espera_o_lock})._rodar_handler(comando)
+            instancia._rodar_handler(comando)
         espera = time.monotonic() - inicio
         transacao.rollback()
     assert getattr(erro.value.orig, "pgcode", None) == "55P03"  # lock_not_available

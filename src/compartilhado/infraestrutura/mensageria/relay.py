@@ -135,8 +135,9 @@ class _Broker:
         except (UnroutableError, NackError, ChannelClosedByBroker) as falha:
             # Sem rota e nack mantem o canal; a recusa (403, 404, 406) o fecha.
             self._reabrir_canal()
+            nome = type(falha).__name__
             codigo = getattr(falha, "reply_code", None)
-            return type(falha).__name__ + (f" ({codigo})" if codigo else "")
+            return f"{nome} ({codigo})" if codigo else nome
         except (AMQPError, OSError) as exc:
             raise BrokerIndisponivelError from exc
         return None
@@ -374,7 +375,7 @@ class Relay:
                     # O lease renovado e o desta linha: o _drenar libera as outras.
                     self._liberar([linha])
                     raise
-                except Exception as exc:  # noqa: BLE001 - a linha falha, o relay segue
+                except Exception as exc:  # noqa: BLE001 - a linha falha e o relay segue
                     falha = f"falha ao publicar ({type(exc).__name__})"
                 if falha is not None:
                     # Texto fixo (classe e codigo do broker), em atributo: o

@@ -554,8 +554,9 @@ def test_copia_de_retry_sem_canal_deixa_a_original_sem_ack_e_sem_reject(
 ) -> None:
     # Canal fechado ou conexao perdida: a original volta na reconexao.
     canal = _Canal(erro_na_copia=erro)
+    handler = _Handler(OSError())
     with pytest.raises(type(erro)):
-        _consumir(_Handler(OSError()), canal=canal)
+        _consumir(handler, canal=canal)
     assert (canal.acks, canal.rejeicoes) == ([], [])
 
 
@@ -1166,8 +1167,9 @@ def test_assinatura_que_falha_fecha_a_conexao_antes_de_levantar(
         "abrir_canal",
         lambda *_a, **_k: (conexao, _CanalQueRecusa()),
     )
+    consumidor = _consumidor(_Handler())
     with pytest.raises(ChannelClosedByBroker):
-        _consumidor(_Handler())._assinar()
+        consumidor._assinar()
     assert not conexao.is_open
 
 
@@ -1376,12 +1378,14 @@ def test_oserror_que_nao_e_broker_fora_derruba_o_consumidor(
 
     monkeypatch.setattr(modulo_consumidor, "abrir_canal", abrir)
     backoff = _BackoffGravado()
+    consumidor = Consumidor(
+        _engine_falsa(),
+        _URL,
+        {},
+        processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / pronto),
+        backoff,
+    )
+    parar = threading.Event()
     with pytest.raises(OSError, match=mensagem):
-        Consumidor(
-            _engine_falsa(),
-            _URL,
-            {},
-            processo.SinaisDoProcesso(tmp_path / "hb", tmp_path / pronto),
-            backoff,
-        ).executar(threading.Event())
+        consumidor.executar(parar)
     assert backoff.esperas == 0

@@ -290,8 +290,9 @@ def test_a_causa_do_log_e_a_primeira_linha_do_erro_do_driver(
     def esperar(_segundos: float) -> None:
         raise _EsperaInterrompidaError
 
+    banco = BancoFora()
     with pytest.raises(_EsperaInterrompidaError):
-        aguardar(BancoFora(), esperar=esperar)  # type: ignore[arg-type]
+        aguardar(banco, esperar=esperar)  # type: ignore[arg-type]
 
     [evento] = _eventos(log_capturado)
     assert evento["cause"] == causa

@@ -270,19 +270,18 @@ def test_erro_do_banco_nao_leva_o_detail_do_driver_ao_span(
 ) -> None:
     # O CHECK reprova a linha, e o PostgreSQL devolve "Failing row contains" com
     # a placa: o texto do driver nao pode ir para o status do span.
+    inserir = text(
+        "INSERT INTO diagnosticos (ordem_id, status, veiculo, itens, "
+        "observacoes, solicitado_em) VALUES (:id, 'INVALIDO', "
+        "CAST(:veiculo AS jsonb), '[]', '', now())"
+    )
+    parametros = {"id": uuid4(), "veiculo": json.dumps({"placa": PLACA})}
     with (
         pytest.raises(IntegrityError, match=PLACA),
         tracer.start_as_current_span("requisicao", kind=SpanKind.SERVER),
         api.app.state.session_factory() as sessao,
     ):
-        sessao.execute(
-            text(
-                "INSERT INTO diagnosticos (ordem_id, status, veiculo, itens, "
-                "observacoes, solicitado_em) VALUES (:id, 'INVALIDO', "
-                "CAST(:veiculo AS jsonb), '[]', '', now())"
-            ),
-            {"id": uuid4(), "veiculo": json.dumps({"placa": PLACA})},
-        )
+        sessao.execute(inserir, parametros)
 
     (insercao,) = [
         s for s in _por_tipo(spans, SpanKind.CLIENT) if s.name.startswith("INSERT")

@@ -64,16 +64,23 @@ _MONTAGENS = {
 
 
 def esperar_ate(
-    condicao: Callable[[], Any], prazo_s: float = 20.0, intervalo_s: float = 0.05
+    condicao: Callable[[], Any],
+    prazo_s: float = 20.0,
+    intervalo_s: float = 0.05,
+    *,
+    motivo: str = "condicao nao satisfeita",
 ) -> Any:
-    """Repete ``condicao`` ate ela devolver algo verdadeiro (ou estoura o prazo)."""
+    """Repete ``condicao`` ate ela devolver algo verdadeiro (ou estoura o prazo).
+
+    No prazo estourado levanta ``AssertionError`` com ``motivo`` na mensagem.
+    """
     fim = time.monotonic() + prazo_s
     while True:
         resultado = condicao()
         if resultado:
             return resultado
         if time.monotonic() > fim:
-            msg = f"condicao nao satisfeita em {prazo_s} s"
+            msg = f"{motivo} em {prazo_s} s"
             raise AssertionError(msg)
         time.sleep(intervalo_s)
 

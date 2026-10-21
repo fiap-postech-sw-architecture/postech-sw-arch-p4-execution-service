@@ -27,7 +27,7 @@ podia parecer do futuro e o ``NOTIFY`` que acordou o relay se perdia ate o poll.
 
 from __future__ import annotations
 
-import dataclasses
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -170,7 +170,9 @@ class Outbox:
             ).scalar_one_or_none()
         if renovada is None:
             return None
-        return dataclasses.replace(linha, lease_ate=renovada)
+        # copy.replace e nao dataclasses.replace: o SonarQube tipa o retorno da
+        # segunda como DataclassInstance e acusa S5886 contra a anotacao acima.
+        return copy.replace(linha, lease_ate=renovada)
 
     def marcar_entregue(self, linha: LinhaDaOutbox) -> bool:
         return self._marcar(_ENTREGUE, linha)
