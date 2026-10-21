@@ -375,7 +375,7 @@ class Relay:
                     # O lease renovado e o desta linha: o _drenar libera as outras.
                     self._liberar([linha])
                     raise
-                except Exception as exc:  # noqa: BLE001 - a linha falha, o relay segue
+                except Exception as exc:  # noqa: BLE001 - a linha falha e o relay segue
                     falha = f"falha ao publicar ({type(exc).__name__})"
                 if falha is not None:
                     # Texto fixo (classe e codigo do broker), em atributo: o
