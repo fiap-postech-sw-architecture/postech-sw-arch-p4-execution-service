@@ -26,9 +26,10 @@ No kind, com o `platform` clonado ao lado deste repositório:
 ```bash
 make -C ../postech-sw-arch-p4-platform kind-up deploy
 make kind-deploy
+../postech-sw-arch-p4-platform/scripts/ci/smoke-servicos.sh execution-service
 ```
 
-O `make kind-deploy` constrói a imagem deste checkout, carrega-a no kind e aplica o overlay `kind`. Objetos, sondas e smoke: [docs/implantacao.md](docs/implantacao.md).
+O `make kind-deploy` constrói a imagem deste checkout, carrega-a no kind e aplica o overlay `kind`, e o smoke confere o Job, os rollouts e a API pela borda (`https://localhost/execucao/api/v1/saude`). Objetos, sondas e smoke: [docs/implantacao.md](docs/implantacao.md).
 
 ## Como testar
 
