@@ -9,9 +9,9 @@ escrita na ``alembic_version`` e privilegio alem do DML nao, o exporter le
 estatisticas e nenhuma tabela, e ninguem entra como ``postgres`` sem senha.
 
 Num servidor que grava o texto de todo comando (por comando, por duracao e por
-amostragem), o script e o procedimento de troca de senha do README deixam as
-senhas fora do log, e cada um dos cinco ``SET`` que as protegem, retirado, as
-deixa vazar.
+amostragem), o script e o procedimento de troca de senha de
+``docs/seguranca.md`` deixam as senhas fora do log, e cada um dos cinco ``SET``
+que as protegem, retirado, as deixa vazar.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ _PAPEIS_DO_SERVICO = ("execucao", "execucao_app", "execucao_exporter")
 
 # Os cinco parametros que gravam o texto do comando, e portanto a senha que o psql
 # ja trocou na variavel: cada um desligado no inicio do script e do procedimento
-# de troca de senha do README.
+# de troca de senha de docs/seguranca.md.
 _SETS_DE_LOG = (
     "log_statement",
     "log_min_error_statement",
@@ -532,14 +532,14 @@ _SEM_UM_SET = [
 
 
 def _sql_da_troca_de_senha() -> str:
-    """O SQL do passo 2 da troca de senha do README, o que vai ao ``psql``."""
-    readme = (_RAIZ / "README.md").read_text()
-    # O bloco esta num item de lista: recuado no README, a margem sai ao colar.
-    [sql] = re.findall(r"<<'SQL'\n(.*?)\n *SQL\n", readme, flags=re.DOTALL)
+    """O SQL do passo 2 da troca de senha de docs/seguranca.md, o que vai ao psql."""
+    documento = (_RAIZ / "docs" / "seguranca.md").read_text()
+    # O bloco esta num item de lista: recuado no documento, a margem sai ao colar.
+    [sql] = re.findall(r"<<'SQL'\n(.*?)\n *SQL\n", documento, flags=re.DOTALL)
     return textwrap.dedent(sql) + "\n"
 
 
-def test_script_e_readme_desligam_os_mesmos_cinco_parametros_de_log() -> None:
+def test_script_e_procedimento_desligam_os_mesmos_cinco_parametros_de_log() -> None:
     papeis = (_RAIZ / "k8s" / "base" / "papeis.sql").read_text()
 
     assert _sets_de_log(papeis) == list(_SETS_DE_LOG)
@@ -574,7 +574,7 @@ def test_papeis_sql_deixa_as_senhas_fora_do_log_so_com_os_cinco_set(
 
 
 @pytest.mark.parametrize("sem", [*_COM_TODOS_OS_SET, *_SEM_UM_SET])
-def test_troca_de_senha_do_readme_deixa_a_senha_fora_do_log_so_com_os_cinco_set(
+def test_troca_de_senha_documentada_deixa_a_senha_fora_do_log_so_com_os_cinco_set(
     servidor_que_grava_tudo: BancoDosManifestos, sem: str | None
 ) -> None:
     servidor = servidor_que_grava_tudo
