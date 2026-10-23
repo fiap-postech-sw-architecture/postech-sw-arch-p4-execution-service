@@ -450,9 +450,9 @@ O `mutmut` não roda em pacote chamado `src`, o caso deste serviço: a versão 3
 AssertionError: Failed trampoline hit. Module name starts with `src.`, which is invalid
 ```
 
-(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 95 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
+(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 97 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
 
-**Resultado** em 18/10/2026: 94 de 94 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
+**Resultado** em 23/10/2026: 96 de 96 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
 
 | Área | Mutantes | Mortos | Equivalentes |
 |---|---:|---:|---:|
@@ -463,9 +463,9 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
 | Idempotência e concorrência | 6 | 6 | 0 |
 | Placa do veículo | 8 | 8 | 0 |
 | Validação do JWT | 14 | 13 | 1 |
-| Consumidor | 13 | 13 | 0 |
-| Relay e outbox | 10 | 10 | 0 |
-| **total** | **95** | **94** | **1** |
+| Consumidor | 14 | 14 | 0 |
+| Relay e outbox | 11 | 11 | 0 |
+| **total** | **97** | **96** | **1** |
 
 - **Limites que só a mutação mostrou, hoje com teste:**
   - corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`);
@@ -473,9 +473,10 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
   - JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes);
   - memória da falha do JWKS diferente de 5 s e `Retry-After` do 503 arredondado para baixo (`test_falha_memorizada_responde_na_hora_sem_buscar_de_novo`, que prende a constante e espera 2,5 s);
   - placa aceita com um dígito a mais ou a menos, nos dois formatos, porque o regex casava só o começo ou um formato mais curto (casos em `test_placa_invalida_sem_ecoar_o_valor`);
-  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`);
+  - janela de retenção de 30 dias trocada por 31, nas mensagens processadas (C14) e nas `dead` da outbox (O11): os testes antigos usavam linhas de 31 e de 29 dias, e a de 31 sai também com a janela de 31, porque a limpeza roda alguns milissegundos depois da gravação. A linha de 30,5 dias sai e a de 29,5 fica (`test_processada_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica` e `test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica`).
 - **Equivalente:** `HS256` na lista de algoritmos do JWT (J01), e só enquanto valem duas condições: o PyJWT amarra a chave ao algoritmo dela (na 2.15, o `decode` com um `PyJWK` recusa `Token algorithm 'HS256' does not match the key's algorithm 'RS256'`) e o validador passa um `PyJWK` ao `decode`. Com elas, a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda o desfecho; sem elas, a lista `RS256` do ADR-039 é a única barreira, e nenhum teste a prende. O motivo fica no campo `equivalente` do `mutantes.toml`.
-- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 95 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
+- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 97 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
 
 Para refazer:
 

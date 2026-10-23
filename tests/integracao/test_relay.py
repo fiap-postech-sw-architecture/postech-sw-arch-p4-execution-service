@@ -490,6 +490,34 @@ def test_dead_sai_30_dias_depois_de_morrer_e_pendente_antiga_nunca_sai(
     ]
 
 
+def test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica(engine: Engine) -> None:
+    # Os 31 e os 29 dias do teste de cima nao separam 30 de 31: a linha de 31
+    # dias tem alguns ms a mais quando a limpeza roda e sai tambem com a janela
+    # de 31. Os 30,5 so saem com a de 30.
+    velha, nova = uuid4(), uuid4()
+    with engine.begin() as conexao:
+        for mensagem_id, idade in (
+            (velha, timedelta(days=30, hours=12)),
+            (nova, timedelta(days=29, hours=12)),
+        ):
+            conexao.execute(
+                text(
+                    "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
+                    "routing_key, envelope, status, proxima_tentativa_em) VALUES "
+                    "(:id, 'DiagnosticoConcluido', gen_random_uuid(), "
+                    "'pytstop.eventos', 'evento.execucao.diagnostico_concluido', "
+                    "'{}', 'dead', now() - :idade)"
+                ),
+                {"id": mensagem_id, "idade": idade},
+            )
+
+    assert Outbox(engine).limpar() == 1
+
+    with engine.connect() as conexao:
+        restantes = conexao.execute(text("SELECT mensagem_id FROM outbox")).scalars()
+        assert list(restantes) == [nova]
+
+
 def test_limpeza_das_processadas_tambem_apaga_em_lotes(
     broker: Broker,
     engine: Engine,
@@ -522,6 +550,34 @@ def test_limpeza_das_processadas_tambem_apaga_em_lotes(
             text("SELECT count(*) FROM mensagens_processadas")
         ).scalar_one()
     assert restantes == 0
+
+
+def test_processada_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica(
+    engine: Engine, consumidor: Callable[..., Consumidor]
+) -> None:
+    # Pelo mesmo motivo do teste da `dead`: so os 30,5 dias separam a janela de
+    # 30 dias da de 31, e os 29,5 impedem que a limpeza apague tudo.
+    velha, nova = uuid4(), uuid4()
+    with engine.begin() as conexao:
+        for mensagem_id, idade in (
+            (velha, timedelta(days=30, hours=12)),
+            (nova, timedelta(days=29, hours=12)),
+        ):
+            conexao.execute(
+                text(
+                    "INSERT INTO mensagens_processadas (mensagem_id, processada_em) "
+                    "VALUES (:id, now() - :idade)"
+                ),
+                {"id": mensagem_id, "idade": idade},
+            )
+
+    consumidor()._limpar_processadas_antigas()
+
+    with engine.connect() as conexao:
+        restantes = conexao.execute(
+            text("SELECT mensagem_id FROM mensagens_processadas")
+        ).scalars()
+        assert list(restantes) == [nova]
 
 
 def test_limpeza_apaga_em_lotes_de_transacao_curta(engine: Engine) -> None:
