@@ -491,9 +491,10 @@ def test_dead_sai_30_dias_depois_de_morrer_e_pendente_antiga_nunca_sai(
 
 
 def test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica(engine: Engine) -> None:
-    # Os 31 e os 29 dias do teste de cima nao separam 30 de 31: a linha de 31
-    # dias tem alguns ms a mais quando a limpeza roda e sai tambem com a janela
-    # de 31. Os 30,5 so saem com a de 30.
+    # Os 31 e os 29 dias de
+    # `test_dead_sai_30_dias_depois_de_morrer_e_pendente_antiga_nunca_sai` nao
+    # separam 30 de 31: a linha de 31 dias tem alguns ms a mais quando a limpeza
+    # roda e sai tambem com a janela de 31. Os 30,5 so saem com a de 30.
     velha, nova = uuid4(), uuid4()
     with engine.begin() as conexao:
         for mensagem_id, idade in (
@@ -583,8 +584,9 @@ def test_limpeza_das_processadas_tambem_apaga_em_lotes(
 def test_processada_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica(
     engine: Engine, consumidor: Callable[..., Consumidor]
 ) -> None:
-    # Pelo mesmo motivo do teste da `dead`: so os 30,5 dias separam a janela de
-    # 30 dias da de 31, e os 29,5 impedem que a limpeza apague tudo.
+    # Pelo mesmo motivo de `test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica`:
+    # so os 30,5 dias separam a janela de 30 dias da de 31, e os 29,5 impedem que
+    # a limpeza apague tudo.
     velha, nova = uuid4(), uuid4()
     with engine.begin() as conexao:
         for mensagem_id, idade in (
