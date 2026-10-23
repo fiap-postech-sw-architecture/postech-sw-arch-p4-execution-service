@@ -86,7 +86,7 @@ Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [r
 
 ## API
 
-Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/api/openapi.json`](docs/api/openapi.json)) e a coleção Postman v2.1 ([`docs/api/execucao.postman_collection.json`](docs/api/execucao.postman_collection.json): uma requisição por rota, com corpo e resposta de exemplo e as variáveis `baseUrl`, `token`, `ordem_id` e `sku`) saem do próprio app pelo `make docs-api`, e o `make test` reprova se ficarem atrás do código (RNF-052). A coleção do fluxo completo, que roda com newman, é do [`platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/api/fluxo-completo.postman_collection.json). Erros no envelope do p3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada do p3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
+Swagger em `/docs` (pela borda, `/execucao/docs`). O OpenAPI exportado ([`docs/api/openapi.json`](docs/api/openapi.json)) e a coleção Postman v2.1 ([`docs/api/execucao.postman_collection.json`](docs/api/execucao.postman_collection.json): uma requisição por rota, com corpo e resposta de exemplo e as variáveis `baseUrl`, `token`, `ordem_id` e `sku`) saem do próprio app pelo `make docs-api`, e o `make test` reprova se ficarem atrás do código (RNF-052). A coleção do fluxo completo, que roda com newman, é do [`platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/api/fluxo-completo.postman_collection.json). Erros no envelope da fase 3, `{"erro": {"codigo", "mensagem", "id_requisicao"}}`; a exceção, também herdada da fase 3, é o 422 de validação de schema do FastAPI, que responde `{"detail": [{"type", "loc", "msg"}], "id_requisicao"}` (sem ecoar o valor recebido).
 
 Rotas principais, com o prefixo `/api/v1`:
 
@@ -156,7 +156,7 @@ A arquitetura global da fase 4 está na [RFC-004 e nos ADRs 034 a 043](https://g
 
 ### Proveniência
 
-`src/compartilhado` e o contexto `estoque` partem do [p3 no commit `08dcffe`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p3/tree/08dcffe6365ece594f438cdbc4c5eef1d88ebfb1) (base de entidades, UoW, outbox, logging com mascaramento de PII, handlers de erro, padrões de teste, Dockerfile), enxugados ao que este serviço usa.
+`src/compartilhado` e o contexto `estoque` partem da [fase 3 (`postech-sw-arch-p3`) no commit `08dcffe`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p3/tree/08dcffe6365ece594f438cdbc4c5eef1d88ebfb1) (base de entidades, UoW, outbox, logging com mascaramento de PII, handlers de erro, padrões de teste, Dockerfile), enxugados ao que este serviço usa.
 
 ### Repositórios da fase 4
 
