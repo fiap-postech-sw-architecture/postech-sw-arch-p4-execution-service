@@ -11,6 +11,8 @@ from prometheus_client import REGISTRY
 from src.compartilhado.infraestrutura.metrics import configurar_metricas
 from src.compartilhado.interfaces.middleware import SecurityHeadersMiddleware
 
+_METODOS_CONHECIDOS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
 
 def _app() -> TestClient:
     app = FastAPI()
@@ -111,6 +113,41 @@ class TestMetricas:
         antes = _contagem("/explode", "500")
         assert _app().get("/explode").status_code == 500
         assert _contagem("/explode", "500") == antes + 1
+
+    @pytest.mark.parametrize("metodo", _METODOS_CONHECIDOS)
+    def test_metodo_conhecido_vira_o_proprio_rotulo(self, metodo: str) -> None:
+        antes = _contagem("nao_roteada", "404", metodo)
+        _app().request(metodo, "/qualquer/coisa")
+        assert _contagem("nao_roteada", "404", metodo) == antes + 1
+
+    @pytest.mark.parametrize(
+        "metodo", ["TRACE", "CONNECT", "PROPFIND", "FOO", "BREW-1"]
+    )
+    @pytest.mark.parametrize(
+        ("caminho", "rota", "status"),
+        [
+            ("/itens/1", "/itens/{item_id}", "405"),
+            ("/qualquer/coisa", "nao_roteada", "404"),
+        ],
+        ids=["rota-casada", "sem-rota"],
+    )
+    def test_metodo_fora_dos_conhecidos_agrega_em_outro(
+        self, metodo: str, caminho: str, rota: str, status: str
+    ) -> None:
+        # O metodo vem do chamador. O httptools da imagem responde 400 a `FOO` e
+        # `BREW-1` antes do app, mas deixa chegar `PROPFIND`, `TRACE` e `CONNECT`,
+        # e cada um abriria uma serie; com `--http h11` os cinco chegam. O
+        # TestClient nao tem parser, entao aqui os cinco chegam ao app.
+        antes = _contagem(rota, status, "OUTRO")
+        _app().request(metodo, caminho)
+        assert _contagem(rota, status, "OUTRO") == antes + 1
+        assert (
+            REGISTRY.get_sample_value(
+                "http_request_duration_seconds_count",
+                {"method": metodo, "rota": rota, "status": status},
+            )
+            is None
+        )
 
     def test_metrics_responde_direto_no_formato_prometheus(self) -> None:
         cliente = _app()

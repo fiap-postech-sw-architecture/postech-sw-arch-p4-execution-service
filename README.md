@@ -118,7 +118,7 @@ O Jaeger do platform usa `MEMORY_MAX_TRACES=250`: o trace mais antigo sai quando
 
 | Série | Tipo e rótulos | Processo | O que mede |
 |---|---|---|---|
-| `http_request_duration_seconds` | histograma; `method`, `rota` (o template), `status` | api | Duração de cada requisição |
+| `http_request_duration_seconds` | histograma; `method` (um dos sete métodos conhecidos ou `OUTRO`), `rota` (o template), `status` | api | Duração de cada requisição |
 | `pytstop_circuit_breaker_aberto` | gauge; `dependencia` (`billing`, `jwks`) | api | 1 aberto, 0,5 em meia-abertura, 0 fechado |
 | `pytstop_jwks_falhas_total` | contador | api | Buscas ao JWKS do OS Service que falharam |
 | `pytstop_outbox_mais_antiga_segundos` | gauge calculada na raspagem | api | Idade da linha pendente mais antiga da outbox; 0 sem pendente. Continua certa com o relay parado, e é o que o alerta Outbox parada do `platform` lê (`pytstop-outbox-parada`: acima de 300 s por 5 min; no overlay `kind`, 30 s e 1 min) |
@@ -132,7 +132,7 @@ O Jaeger do platform usa `MEMORY_MAX_TRACES=250`: o trace mais antigo sai quando
 - **Gauge calculada na raspagem** são as cinco que consultam o banco a cada raspagem: `outbox_pendentes` e `outbox_dead` no relay, e as três do coletor da API ([`src/coletor.py`](src/coletor.py)), que só a API registra. Relay e consumidor não leem as séries da API, e a API segue exportando com eles parados. Cada réplica repete o mesmo valor, e os painéis agregam com `max`. A janela de 7 dias é a constante `JANELA_DE_NEGOCIO`.
 - **Quanto o coletor da API pode demorar.** Cada raspagem abre uma conexão crua do driver, sem pool nem engine (o engine só empresta a URL e o dialeto) e fora do pool das requisições. Nada fica dividido com a raspagem anterior: os hooks de primeira conexão de um engine consultam o banco sob um mutex dele, e uma primeira conexão calada ali prenderia toda raspagem seguinte, mesmo com o banco de volta. A conexão abre em até 1 s (`connect_timeout`; a resolução do nome do banco o driver faz sem prazo) e roda as três consultas em sequência, em autocommit, cada uma com `statement_timeout` de 2 s nas opções da conexão (a espera por um lock inclusive). A raspagem tem um prazo total de 5 s (`PRAZO_DA_RASPAGEM_S`) contado de fora, com as consultas numa thread à parte: o timeout do banco não cobre o banco que cala com o socket aberto, e a raspagem esperaria para sempre. No prazo, o coletor derruba o socket da conexão que a thread ainda usa: a thread sai e o servidor vê a conexão terminar, então nada fica preso depois. A gauge que falhou ou não voltou até lá sai ausente, nunca em zero, e o resto do `/metrics` (latência HTTP, JWKS, circuitos, mensageria) sai como sempre. O pior caso é de 5 s, abaixo dos 10 s do `scrape_timeout` padrão do Prometheus. Medido num uvicorn de verdade, com um proxy TCP na frente do banco: todas as conexões mudas, 1,0 s (o `connect_timeout`); banco a 300 ms por pacote, 1,0 s; conexão que cala no meio da raspagem, inclusive a primeira do processo, 5,0 s (o prazo total) e, com o banco de volta, a raspagem seguinte em 0,01 s; três tabelas travadas, 5,0 s; sempre sem as gauges que não vieram e com o resto do `/metrics`. Linha que o domínio não produz mas o banco aceita (execução finalizada sem início, item de serviço sem código, faltante sem SKU) fica fora das consultas, e não derruba a família.
 - **Série de rótulo fechado nasce com zero no boot** (`tipo` e `resultado` do consumo, incluindo o `desconhecido`; `tipo` da publicação, os dez eventos do AsyncAPI; `componente`): sem isso o `increase()` dos painéis perde o primeiro evento de cada uma.
-- **Rótulo aberto que vem do banco** (`servico`, `sku`) é código do catálogo, que o Billing e o estoque já validaram: nunca placa, documento, nome ou texto livre. O `rota` das requisições é o template (`/api/v1/execucoes/{ordem_id}/inicio`), e a requisição sem rota casada agrega em `nao_roteada`. O `method` do `http_request_duration_seconds` também é aberto (é o que o cliente mandou) e não vem do banco; fechá-lo num conjunto de métodos ainda está por fazer.
+- **Rótulo aberto que vem do banco** (`servico`, `sku`) é código do catálogo, que o Billing e o estoque já validaram: nunca placa, documento, nome ou texto livre. O `rota` das requisições é o template (`/api/v1/execucoes/{ordem_id}/inicio`), e a requisição sem rota casada agrega em `nao_roteada`. O `method` do `http_request_duration_seconds` é o que o cliente mandou e não vem do banco, então só GET, POST, PUT, PATCH, DELETE, HEAD e OPTIONS viram rótulo, e qualquer outro método agrega em `OUTRO`, o mesmo rótulo do OS Service.
 
 ### Traces
 
@@ -171,7 +171,7 @@ Uma linha JSON por evento no stdout de cada processo, com o nome do evento em in
 | A mensagem e o stack trace das exceções, e a descrição do status de erro | O erro do driver traz o `DETAIL` do PostgreSQL com a linha inteira (placa, descrição do problema, observações), e o instrumentador do SQLAlchemy o grava no status do span | O `_SemTextoDeErro` envolve o exportador e limpa todo span, do serviço ou do instrumentador (fica o tipo da exceção). O motivo de uma falha de publicação vai em `pytstop.falha`, texto fixo (a classe do erro ou o código do broker) |
 | Os spans de `receive` e `send` do ASGI | Multiplicariam os spans de cada requisição sem dizer nada que o SERVER não diga | `exclude_spans=["receive", "send"]` |
 | Spans do cliente AMQP e do psycopg2 | O `PikaInstrumentor` duplicaria os spans e injetaria o contexto do relay em vez do gravado na outbox, e o SQLAlchemy já cobre o psycopg2 | Os spans de publicação e de consumo são do próprio serviço |
-| Métrica com placa, documento, nome ou texto livre em rótulo | Cardinalidade e dado pessoal | Os rótulos abertos que vêm do banco são só `servico` e `sku`, códigos do catálogo (e o `method`, que vem do cliente: ver [Métricas](#métricas)) |
+| Métrica com placa, documento, nome ou texto livre em rótulo | Cardinalidade e dado pessoal | Os rótulos abertos que vêm do banco são só `servico` e `sku`, códigos do catálogo. O `method`, que vem do cliente, só aceita sete métodos e `OUTRO` (ver [Métricas](#métricas)) |
 
 A continuação do `traceparent` no SERVER do Billing já foi vista num cluster: o ensaio de observabilidade do platform guardou um trace com os três serviços, inclusive o CLIENT da Execução e o SERVER do Billing em `/api/v1/precos/validacao` ([evidência](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/entrega/fase4/evidencias/observabilidade.md)). O que só os testes provam, e não um cluster: o CLIENT do Billing ao Mercado Pago real, que depende da prova na sandbox do provedor, e o prazo de saída do pod pelo kubelet (provado em contêiner, com o uvicorn como PID 1).
 
@@ -410,7 +410,7 @@ A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_
 | `src` | 318 | 318 | 100.0% |
 | `src/compartilhado/aplicacao` | 59 | 59 | 100.0% |
 | `src/compartilhado/dominio` | 144 | 144 | 100.0% |
-| `src/compartilhado/infraestrutura` | 1324 | 1324 | 100.0% |
+| `src/compartilhado/infraestrutura` | 1329 | 1329 | 100.0% |
 | `src/compartilhado/interfaces` | 236 | 236 | 100.0% |
 | `src/diagnostico/aplicacao` | 127 | 127 | 100.0% |
 | `src/diagnostico/dominio` | 177 | 177 | 100.0% |
@@ -424,9 +424,9 @@ A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_
 | `src/execucao/dominio` | 122 | 122 | 100.0% |
 | `src/execucao/infraestrutura` | 99 | 99 | 100.0% |
 | `src/execucao/interfaces` | 84 | 84 | 100.0% |
-| **total** | 3681 | 3681 | 100.0% |
+| **total** | 3686 | 3686 | 100.0% |
 
-Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39235791515 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39235791515).
+Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
 <!-- cobertura:fim -->
 
 Para refazer a tabela com o `coverage.xml` de outro run, com o número dele em `RUN`:
@@ -450,9 +450,9 @@ O `mutmut` não roda em pacote chamado `src`, o caso deste serviço: a versão 3
 AssertionError: Failed trampoline hit. Module name starts with `src.`, which is invalid
 ```
 
-(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 95 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
+(`mutmut/stats.py`, `record_trampoline_hit`; visto no Billing, que tem o mesmo layout). Renomear o pacote ou remendar a ferramenta mudaria o que se mede, então a alternativa são mutantes escritos à mão: [`scripts/mutantes.toml`](scripts/mutantes.toml) lista 98 defeitos plausíveis nos módulos críticos, e [`scripts/mutacao_manual.py`](scripts/mutacao_manual.py), o mesmo script do Billing, aplica um por vez numa cópia do código (`mutants/`, fora do git) e roda só os testes que deveriam pegá-lo.
 
-**Resultado** em 18/10/2026: 94 de 94 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
+**Resultado** em 23/10/2026: 97 de 97 mutantes mortos (100,0%), com 1 equivalente de fora da conta.
 
 | Área | Mutantes | Mortos | Equivalentes |
 |---|---:|---:|---:|
@@ -463,9 +463,9 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
 | Idempotência e concorrência | 6 | 6 | 0 |
 | Placa do veículo | 8 | 8 | 0 |
 | Validação do JWT | 14 | 13 | 1 |
-| Consumidor | 13 | 13 | 0 |
-| Relay e outbox | 10 | 10 | 0 |
-| **total** | **95** | **94** | **1** |
+| Consumidor | 14 | 14 | 0 |
+| Relay e outbox | 12 | 12 | 0 |
+| **total** | **98** | **97** | **1** |
 
 - **Limites que só a mutação mostrou, hoje com teste:**
   - corpo de 64 KiB cravados tratado como grande demais (`test_corpo_no_teto_exato_passa_do_limite_e_chega_ao_parse`);
@@ -473,9 +473,10 @@ AssertionError: Failed trampoline hit. Module name starts with `src.`, which is 
   - JWK Set ainda fresco na hora exata dos 10 min e cópia velha valendo na hora exata de 1 h (`test_jwk_set_fica_fresco_10_minutos_e_renova_na_hora_exata` e `test_copia_velha_vale_ate_1_hora_e_nao_na_hora_exata`, que prendem as duas constantes);
   - memória da falha do JWKS diferente de 5 s e `Retry-After` do 503 arredondado para baixo (`test_falha_memorizada_responde_na_hora_sem_buscar_de_novo`, que prende a constante e espera 2,5 s);
   - placa aceita com um dígito a mais ou a menos, nos dois formatos, porque o regex casava só o começo ou um formato mais curto (casos em `test_placa_invalida_sem_ecoar_o_valor`);
-  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`).
+  - execução iniciada fora de "em andamento", que dispara o aviso da eliminação LGPD com registro aberto (`test_em_andamento_vale_na_fila_e_em_execucao`);
+  - janela de retenção trocada por uma maior: 30 por 31 dias nas mensagens processadas (C14) e nas `dead` da outbox (O11), 7 por 8 nas entregues (O12). A linha um dia além do limite (31 ou 8 dias) sai também com a janela maior, porque a limpeza roda alguns milissegundos depois da gravação. Só a de meio dia além (30,5 ou 7,5 dias) separa as duas janelas, e a de meio dia aquém (29,5 ou 6,5 dias) tem de ficar (`test_processada_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica`, `test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica` e `test_entregue_de_7_dias_e_meio_sai_e_a_de_6_e_meio_fica`).
 - **Equivalente:** `HS256` na lista de algoritmos do JWT (J01), e só enquanto valem duas condições: o PyJWT amarra a chave ao algoritmo dela (na 2.15, o `decode` com um `PyJWK` recusa `Token algorithm 'HS256' does not match the key's algorithm 'RS256'`) e o validador passa um `PyJWK` ao `decode`. Com elas, a lista é a segunda barreira, e `test_algoritmo_simetrico_e_recusado` guarda o desfecho; sem elas, a lista `RS256` do ADR-039 é a única barreira, e nenhum teste a prende. O motivo fica no campo `equivalente` do `mutantes.toml`.
-- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 95 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
+- **O que o percentual não é:** a lista é curada, então ele diz que a suíte pega esses 98 defeitos, e não é comparável ao de uma ferramenta que gera os mutantes sozinha.
 
 Para refazer:
 

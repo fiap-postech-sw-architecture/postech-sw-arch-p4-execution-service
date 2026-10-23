@@ -724,6 +724,16 @@ testes = "consumidor"
 de = "if not registrar_processada(conexao, comando_id):"
 para = "if False:"
 
+# A janela das processadas e testada em tests/integracao/test_relay.py, junto com
+# a da outbox, e por isso roda no grupo `relay`.
+[[mutante]]
+id = "C14"
+area = "Consumidor"
+arquivo = "src/compartilhado/infraestrutura/mensageria/consumidor.py"
+testes = "relay"
+de = "_RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=30)"
+para = "_RETENCAO_DAS_PROCESSADAS: Final = timedelta(days=31)"
+
 # --- Relay e outbox -----------------------------------------------------------
 
 [[mutante]]
@@ -807,3 +817,19 @@ arquivo = "src/compartilhado/infraestrutura/mensageria/relay.py"
 testes = "relay"
 de = "except (UnroutableError, NackError, ChannelClosedByBroker) as falha:"
 para = "except (UnroutableError, NackError) as falha:"
+
+[[mutante]]
+id = "O11"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "_RETENCAO_DAS_DEAD: Final = timedelta(days=30)"
+para = "_RETENCAO_DAS_DEAD: Final = timedelta(days=31)"
+
+[[mutante]]
+id = "O12"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "_RETENCAO_DAS_ENTREGUES: Final = timedelta(days=7)"
+para = "_RETENCAO_DAS_ENTREGUES: Final = timedelta(days=8)"
