@@ -1,6 +1,6 @@
 # Relay da outbox para o RabbitMQ (python -m src.relay), /metrics na 9100. Uma
-# replica fixa: o lease com fencing deixaria escalar sem entrega dupla (README,
-# Mensageria). Sondas pelos arquivos em /tmp (a imagem nao tem curl): o
+# replica fixa: o lease com fencing deixaria escalar sem entrega dupla
+# (docs/mensageria.md). Sondas pelos arquivos em /tmp (a imagem nao tem curl): o
 # heartbeat a cada volta do laco, inclusive reconectando, e o pronto enquanto
 # banco e broker estao conectados.
 apiVersion: apps/v1
@@ -93,7 +93,8 @@ spec:
           # sobrevive ao restart do container, e o arquivo do container morto, de
           # qualquer idade, a satisfaria na hora. Pela idade a janela encurta e nao
           # fecha: o heartbeat de menos de 90 s do container morto ainda satisfaz a
-          # startup antes de o processo novo girar o laco (README, Processos e sondas).
+          # startup antes de o processo novo girar o laco (docs/implantacao.md,
+          # Processos e sondas).
           startupProbe:
             exec:
               command:

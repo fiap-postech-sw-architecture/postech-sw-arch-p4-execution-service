@@ -1,7 +1,8 @@
 # Execution Service no namespace pytstop-execucao: API, relay e consumidor (a
 # mesma imagem, comandos diferentes), o PostgreSQL 16 com o exporter, o Job de
 # migracao e a borda no Kong da plataforma. Nenhum Secret aqui: as senhas do
-# banco e a RABBITMQ_URL vem do make deploy do platform (README, Implantacao).
+# banco e a RABBITMQ_URL vem do make deploy do platform (docs/seguranca.md,
+# Segredos e papeis do banco).
 #
 # Nao aplique este diretorio direto: use um overlay pelo
 # scripts/ci/implantar-servicos.sh do platform (make kind-deploy), que apaga o
@@ -36,7 +37,7 @@ resources:
   - borda.yaml
 
 configMapGenerator:
-  # Configuracao dos processos e do Job (README, Configuracao). O hash no nome
+  # Configuracao dos processos e do Job (docs/configuracao.md). O hash no nome
   # troca os pods quando um valor muda. ENVIRONMENT=production liga a guarda que
   # recusa as senhas de demonstracao do compose, tambem no kind.
   - name: execution-service

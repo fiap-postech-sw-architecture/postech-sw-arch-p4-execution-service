@@ -102,7 +102,7 @@ def _pagina(item: dict[str, Any]) -> dict[str, Any]:
     return {"items": [item], "total": 1, "offset": 0, "limit": 20}
 
 
-# Ordem dos fluxos do README; as chaves sao as do OpenAPI (metodo, rota).
+# Ordem dos fluxos de docs/api/exemplos.md; as chaves sao as do OpenAPI (metodo, rota).
 EXEMPLOS: dict[tuple[str, str], dict[str, Any]] = {
     ("get", "/api/v1/saude"): {"status": 200, "resposta": {"status": "ok"}},
     ("get", "/api/v1/saude/pronto"): {"status": 200, "resposta": {"status": "ok"}},

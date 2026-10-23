@@ -1,4 +1,8 @@
-"""Documentos do servico: docs/api, o curl de cada rota no README e a arquitetura."""
+"""Documentos do servico: docs/api, o curl de cada rota, os links e a arquitetura.
+
+O README segue o esqueleto comum dos servicos e guarda as ancoras que o
+platform cita.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +30,8 @@ if TYPE_CHECKING:
 RAIZ = Path(__file__).resolve().parents[2]
 README = RAIZ / "README.md"
 ARQUITETURA = RAIZ / "docs" / "arquitetura.md"
+EXEMPLOS_CURL = RAIZ / "docs" / "api" / "exemplos.md"
+DOCUMENTOS = sorted((RAIZ / "docs").glob("**/*.md"))
 OPENAPI = RAIZ / "docs" / "api" / "openapi.json"
 COLECAO = RAIZ / "docs" / "api" / "execucao.postman_collection.json"
 GERADOR = RAIZ / "scripts" / "gerar_docs_api.py"
@@ -112,7 +118,7 @@ _VARIAVEIS_DA_COLECAO = ["baseUrl", "ordem_id", "sku", "token"]
 
 
 def _promessas_quebradas(openapi: dict[str, Any], colecao: dict[str, Any]) -> list[str]:
-    """O que o README promete da colecao e ela nao cumpre.
+    """O que a documentacao promete da colecao e ela nao cumpre.
 
     O token da colecao, herdado pelas rotas com 401, e ``noauth`` nas outras (as
     sondas); ``Content-Type`` em todo corpo; a URL a partir de ``{{baseUrl}}``; e
@@ -147,7 +153,7 @@ def _promessas_quebradas(openapi: dict[str, Any], colecao: dict[str, Any]) -> li
     return erros
 
 
-def test_colecao_versionada_e_a_do_script_cumprem_o_que_o_readme_promete(
+def test_colecao_versionada_e_a_do_script_cumprem_o_que_a_documentacao_promete(
     openapi: dict[str, Any], gerador: ModuleType
 ) -> None:
     assert _promessas_quebradas(openapi, json.loads(COLECAO.read_text())) == []
@@ -290,6 +296,13 @@ def test_arquitetura_existe_e_o_readme_a_linka() -> None:
     assert "](docs/arquitetura.md)" in README.read_text()
 
 
+def test_readme_linka_cada_documento_de_docs() -> None:
+    readme = README.read_text()
+    caminhos = [documento.relative_to(RAIZ).as_posix() for documento in DOCUMENTOS]
+
+    assert [c for c in caminhos if f"]({c}" not in readme] == []
+
+
 def _fora_de_codigo(texto: str) -> Iterator[str]:
     """Linhas do Markdown fora dos blocos de codigo."""
     em_codigo = False
@@ -334,7 +347,9 @@ def _links_quebrados(documento: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "documento", [README, ARQUITETURA], ids=["README", "arquitetura"]
+    "documento",
+    [README, *DOCUMENTOS],
+    ids=lambda documento: documento.relative_to(RAIZ).as_posix(),
 )
 def test_links_relativos_apontam_arquivo_e_ancora_que_existem(
     documento: Path,
@@ -359,6 +374,38 @@ def test_link_para_arquivo_ou_ancora_que_nao_existe_e_apontado(
     )
 
     assert _links_quebrados(documento) == ["sumiu.md", "outro.md#seção-dois", "#ali"]
+
+
+# Os titulos do README que o platform cita por ancora (entrega da fase 4 e matriz
+# de rastreabilidade). Renomear um deles quebra o link do outro lado sem aviso.
+ANCORAS_CITADAS_NO_README = frozenset({"cobertura", "mutação"})
+# Os titulos de nivel 2, na ordem: o esqueleto que os tres servicos repetem. O
+# sumario sao duas linhas de links, sem titulo proprio.
+ESQUELETO_DO_README = [
+    "Como rodar",
+    "Como testar",
+    "Cobertura",
+    "API",
+    "Mensageria",
+    "Arquitetura",
+    "Observabilidade",
+    "CI/CD",
+    "Segurança",
+    "Decisões e rastreabilidade",
+]
+
+
+def test_readme_guarda_as_ancoras_que_o_platform_cita() -> None:
+    assert _ancoras(README) >= ANCORAS_CITADAS_NO_README
+    # O platform cita tambem docs/arquitetura.md#3-modelo-de-dados.
+    assert "3-modelo-de-dados" in _ancoras(ARQUITETURA)
+
+
+def test_readme_segue_o_esqueleto_comum_dos_servicos() -> None:
+    texto = "\n".join(_fora_de_codigo(README.read_text()))
+
+    assert re.findall(r"^## (.+)$", texto, re.MULTILINE) == ESQUELETO_DO_README
+    assert re.search(r"^\*\*Sumário\*\*: ", texto, re.MULTILINE) is not None
 
 
 def _colunas_do_er(texto: str) -> dict[str, set[str]]:
@@ -461,7 +508,7 @@ def _erros_dos_curls(openapi: dict[str, Any], texto: str) -> list[str]:
                 if c.metodo == metodo.upper() and modelo.fullmatch(c.caminho)
             ]
             if not casados:
-                erros.append(f"{onde}: sem curl no README")
+                erros.append(f"{onde}: sem curl nos exemplos")
             for curl in casados:
                 cabecalhos = [h.lower() for h in curl.cabecalhos]
                 com_token = any(
@@ -483,10 +530,10 @@ def _erros_dos_curls(openapi: dict[str, Any], texto: str) -> list[str]:
     return erros
 
 
-def test_readme_tem_um_curl_por_rota_com_token_e_corpo_aceito(
+def test_exemplos_tem_um_curl_por_rota_com_token_e_corpo_aceito(
     openapi: dict[str, Any],
 ) -> None:
-    assert _erros_dos_curls(openapi, README.read_text()) == []
+    assert _erros_dos_curls(openapi, EXEMPLOS_CURL.read_text()) == []
 
 
 def test_curl_que_falta_ou_que_a_rota_recusa_e_apontado(
@@ -505,7 +552,7 @@ def test_curl_que_falta_ou_que_a_rota_recusa_e_apontado(
     )
 
     assert sorted(_erros_dos_curls(recorte, texto)) == [
-        "GET /api/v1/estoque: sem curl no README",
+        "GET /api/v1/estoque: sem curl nos exemplos",
         "GET /api/v1/fila: curl sem o token",
         "GET /api/v1/saude: corpo numa rota sem requestBody",
         "POST /api/v1/estoque: corpo sem Content-Type: application/json",
