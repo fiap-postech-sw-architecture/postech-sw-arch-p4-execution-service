@@ -1,4 +1,8 @@
-"""Documentos do servico: docs/api, o curl de cada rota, os links e a arquitetura."""
+"""Documentos do servico: docs/api, o curl de cada rota, os links e a arquitetura.
+
+O README segue o esqueleto comum dos servicos e guarda as ancoras que o
+platform cita.
+"""
 
 from __future__ import annotations
 
@@ -370,6 +374,38 @@ def test_link_para_arquivo_ou_ancora_que_nao_existe_e_apontado(
     )
 
     assert _links_quebrados(documento) == ["sumiu.md", "outro.md#seção-dois", "#ali"]
+
+
+# Os titulos do README que o platform cita por ancora (entrega da fase 4 e matriz
+# de rastreabilidade). Renomear um deles quebra o link do outro lado sem aviso.
+ANCORAS_CITADAS_NO_README = frozenset({"cobertura", "mutação"})
+# Os titulos de nivel 2, na ordem: o esqueleto que os tres servicos repetem. O
+# sumario sao duas linhas de links, sem titulo proprio.
+ESQUELETO_DO_README = [
+    "Como rodar",
+    "Como testar",
+    "Cobertura",
+    "API",
+    "Mensageria",
+    "Arquitetura",
+    "Observabilidade",
+    "CI/CD",
+    "Segurança",
+    "Decisões e rastreabilidade",
+]
+
+
+def test_readme_guarda_as_ancoras_que_o_platform_cita() -> None:
+    assert _ancoras(README) >= ANCORAS_CITADAS_NO_README
+    # O platform cita tambem docs/arquitetura.md#3-modelo-de-dados.
+    assert "3-modelo-de-dados" in _ancoras(ARQUITETURA)
+
+
+def test_readme_segue_o_esqueleto_comum_dos_servicos() -> None:
+    texto = "\n".join(_fora_de_codigo(README.read_text()))
+
+    assert re.findall(r"^## (.+)$", texto, re.MULTILINE) == ESQUELETO_DO_README
+    assert re.search(r"^\*\*Sumário\*\*: ", texto, re.MULTILINE) is not None
 
 
 def _colunas_do_er(texto: str) -> dict[str, set[str]]:
