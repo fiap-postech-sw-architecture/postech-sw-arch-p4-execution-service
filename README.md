@@ -10,12 +10,12 @@ Serviço de execução e produção da oficina PytStop, um dos quatro repositór
 |---|---|
 | [Como rodar](#como-rodar) | [como-rodar.md](docs/como-rodar.md), [configuracao.md](docs/configuracao.md), [implantacao.md](docs/implantacao.md) |
 | [Como testar](#como-testar) | [testes.md](docs/testes.md), [mutacao.md](docs/mutacao.md) |
-| [Cobertura](#cobertura) | [testes.md](docs/testes.md#cobertura) |
+| [Cobertura](#cobertura) | [cobertura.md](docs/cobertura.md) |
 | [API](#api) | [api/exemplos.md](docs/api/exemplos.md), [openapi.json](docs/api/openapi.json) |
 | [Mensageria](#mensageria) | [mensageria.md](docs/mensageria.md) |
 | [Arquitetura](#arquitetura) | [arquitetura.md](docs/arquitetura.md) |
 | [Observabilidade](#observabilidade) | [observabilidade.md](docs/observabilidade.md) |
-| [CI/CD](#cicd) | [ci-cd.md](docs/ci-cd.md) |
+| [CI/CD](#cicd) | [cicd.md](docs/cicd.md), [dependencias.md](docs/dependencias.md) |
 | [Segurança](#segurança) | [seguranca.md](docs/seguranca.md) |
 | [Decisões e rastreabilidade](#decisões-e-rastreabilidade) | [arquitetura.md, seção 8](docs/arquitetura.md#8-decisões) |
 
@@ -60,7 +60,7 @@ Mutantes escritos à mão nos módulos críticos, sem gate de CI (`make mutacao`
 
 ## Cobertura
 
-Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no código novo de cada pull request (`make diff-cover`), como pede o [ADR-041](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/041-estrategia-de-testes-e-qualidade.md) (RNF-050). A tabela é gerada do `coverage.xml` de um run do CI por `scripts/cobertura_resumo.py`; como ela é conferida e como refazê-la: [docs/testes.md](docs/testes.md#cobertura).
+Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no código novo de cada pull request (`make diff-cover`), como pede o [ADR-041](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/041-estrategia-de-testes-e-qualidade.md) (RNF-050). A tabela é gerada do `coverage.xml` de um run do CI por `scripts/cobertura_resumo.py`; como ela é conferida e como refazê-la: [docs/cobertura.md](docs/cobertura.md).
 
 <!-- cobertura:inicio -->
 ### Cobertura de testes: 100.0% no gate (linhas e ramos)
@@ -91,7 +91,7 @@ Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no c�
 Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
 <!-- cobertura:fim -->
 
-**Oscilação:** a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 39937419103); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/testes.md](docs/testes.md#oscilação).
+**Oscilação:** a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 39937419103); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/cobertura.md](docs/cobertura.md#oscilação).
 
 ## API
 
@@ -141,7 +141,7 @@ Com o kind no ar, `make -C ../postech-sw-arch-p4-platform port-forward` abre o J
 
 ## CI/CD
 
-Todo PR para a `main` roda dois workflows, com jobs de nome estável (os nove checks obrigatórios da branch protection): `CI` (`lint`, `type-check`, `security`, `test`, `sonarqube`, `build`) e `Security` (`pip-audit`, `gitleaks`, `trivy`; roda também toda segunda-feira). O [`cd.yml`](.github/workflows/cd.yml) é um caller fino do [workflow reutilizável do `platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/.github/workflows/cd-servico.yml): publica a imagem no GHCR, com SBOM e proveniência, e implanta num kind efêmero (Kubernetes dentro de contêineres do runner), com smoke e E2E da saga. O deploy remoto segue desligado. O Dependabot abre PRs toda segunda, em três blocos (uv, Actions e Docker). Jobs, gates, pin do reutilizável e exceções do Dependabot: [docs/ci-cd.md](docs/ci-cd.md).
+Todo PR para a `main` roda dois workflows, com jobs de nome estável (os nove checks obrigatórios da branch protection): `CI` (`lint`, `type-check`, `security`, `test`, `sonarqube`, `build`) e `Security` (`pip-audit`, `gitleaks`, `trivy`; roda também toda segunda-feira). O [`cd.yml`](.github/workflows/cd.yml) é um caller fino do [workflow reutilizável do `platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/.github/workflows/cd-servico.yml): publica a imagem no GHCR, com SBOM e proveniência, e implanta num kind efêmero (Kubernetes dentro de contêineres do runner), com smoke e E2E da saga. O deploy remoto segue desligado. O Dependabot abre PRs toda segunda, em três blocos (uv, Actions e Docker). Jobs, gates e pin do reutilizável: [docs/cicd.md](docs/cicd.md); regras e exceções do Dependabot: [docs/dependencias.md](docs/dependencias.md).
 
 ## Segurança
 
