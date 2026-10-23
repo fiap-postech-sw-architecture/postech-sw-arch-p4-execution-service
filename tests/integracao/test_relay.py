@@ -518,6 +518,34 @@ def test_dead_de_30_dias_e_meio_sai_e_a_de_29_e_meio_fica(engine: Engine) -> Non
         assert list(restantes) == [nova]
 
 
+def test_entregue_de_7_dias_e_meio_sai_e_a_de_6_e_meio_fica(engine: Engine) -> None:
+    # Os 8 e os 6 dias de `test_retencao_apaga_entregues_e_processadas_antigas`
+    # nao separam 7 de 8: a linha de 8 dias tem alguns ms a mais quando a limpeza
+    # roda e sai tambem com a janela de 8. Os 7,5 so saem com a de 7.
+    velha, nova = uuid4(), uuid4()
+    with engine.begin() as conexao:
+        for mensagem_id, idade in (
+            (velha, timedelta(days=7, hours=12)),
+            (nova, timedelta(days=6, hours=12)),
+        ):
+            conexao.execute(
+                text(
+                    "INSERT INTO outbox (mensagem_id, tipo, correlation_id, exchange, "
+                    "routing_key, envelope, status, entregue_em) VALUES "
+                    "(:id, 'ReservaLiberada', gen_random_uuid(), "
+                    "'pytstop.eventos', 'evento.execucao.reserva_liberada', "
+                    "'{}', 'entregue', now() - :idade)"
+                ),
+                {"id": mensagem_id, "idade": idade},
+            )
+
+    assert Outbox(engine).limpar() == 1
+
+    with engine.connect() as conexao:
+        restantes = conexao.execute(text("SELECT mensagem_id FROM outbox")).scalars()
+        assert list(restantes) == [nova]
+
+
 def test_limpeza_das_processadas_tambem_apaga_em_lotes(
     broker: Broker,
     engine: Engine,

@@ -825,3 +825,11 @@ arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
 testes = "relay"
 de = "_RETENCAO_DAS_DEAD: Final = timedelta(days=30)"
 para = "_RETENCAO_DAS_DEAD: Final = timedelta(days=31)"
+
+[[mutante]]
+id = "O12"
+area = "Relay e outbox"
+arquivo = "src/compartilhado/infraestrutura/mensageria/outbox.py"
+testes = "relay"
+de = "_RETENCAO_DAS_ENTREGUES: Final = timedelta(days=7)"
+para = "_RETENCAO_DAS_ENTREGUES: Final = timedelta(days=8)"
