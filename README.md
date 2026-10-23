@@ -2,22 +2,11 @@
 
 [![CD](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/cd.yml/badge.svg?branch=main)](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/workflows/cd.yml)
 
-Serviço de execução e produção da oficina PytStop, um dos quatro repositórios da entrega da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT). Nessa fase o PytStop, sistema de gestão de oficina mecânica das fases anteriores, virou microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes. Este serviço reúne três contextos (as pastas `src/diagnostico`, `src/execucao` e `src/estoque`): Diagnóstico (a fila de diagnóstico e os apontamentos do mecânico), Execução (a fila de execução e a finalização do reparo) e Estoque (o estoque físico de peças, com reserva, liberação e baixa). É participante da saga orquestrada pelo OS Service ([ADR-035](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/035-saga-orquestrada.md)): recebe os comandos pela fila `execucao.comandos` do RabbitMQ e responde com eventos publicados pela outbox. O início do reparo (`ExecucaoIniciada`) é o pivot da saga: depois dele a OS não cancela. A única chamada síncrona a outro serviço é a validação de preços no Billing, na conclusão do diagnóstico, e o token do mecânico é validado localmente pelo JWKS do OS Service. Banco próprio: PostgreSQL 16 (`execucao`). O [índice da entrega](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/INDICE-DA-ENTREGA.md) liga os quatro repositórios, os requisitos e as evidências.
+Serviço de execução e produção da oficina PytStop. Reúne três contextos (as pastas `src/diagnostico`, `src/execucao` e `src/estoque`): Diagnóstico (a fila de diagnóstico e os apontamentos do mecânico), Execução (a fila de execução e a finalização do reparo) e Estoque (o estoque físico de peças, com reserva, liberação e baixa). É participante da saga que o OS Service orquestra ([ADR-035](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/035-saga-orquestrada.md)): recebe os comandos pela fila `execucao.comandos` do RabbitMQ e responde com eventos, gravados na outbox e publicados pelo relay. O início do reparo (`ExecucaoIniciada`) é o pivot da saga: depois dele a OS não cancela. Banco próprio: PostgreSQL 16 (`execucao`). Integrações: RabbitMQ, o Billing (a única chamada síncrona, na conclusão do diagnóstico, para validar preços), o JWKS do OS Service (para validar o JWT do mecânico) e, na observabilidade, o Jaeger, o Prometheus e o Loki do `platform`. Faz parte da entrega da fase 4 do Tech Challenge, e o [índice da entrega](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/INDICE-DA-ENTREGA.md) liga os quatro repositórios, os requisitos e as evidências.
 
-## Sumário
+**Sumário**: [Como rodar](#como-rodar), [Como testar](#como-testar), [Cobertura](#cobertura), [API](#api), [Mensageria](#mensageria), [Arquitetura](#arquitetura), [Observabilidade](#observabilidade), [CI/CD](#cicd), [Segurança](#segurança) e [Decisões e rastreabilidade](#decisões-e-rastreabilidade).
 
-| Seção | Detalhe em `docs/` |
-|---|---|
-| [Como rodar](#como-rodar) | [como-rodar.md](docs/como-rodar.md), [configuracao.md](docs/configuracao.md), [implantacao.md](docs/implantacao.md) |
-| [Como testar](#como-testar) | [testes.md](docs/testes.md), [mutacao.md](docs/mutacao.md) |
-| [Cobertura](#cobertura) | [cobertura.md](docs/cobertura.md) |
-| [API](#api) | [api/exemplos.md](docs/api/exemplos.md), [openapi.json](docs/api/openapi.json) |
-| [Mensageria](#mensageria) | [mensageria.md](docs/mensageria.md) |
-| [Arquitetura](#arquitetura) | [arquitetura.md](docs/arquitetura.md) |
-| [Observabilidade](#observabilidade) | [observabilidade.md](docs/observabilidade.md) |
-| [CI/CD](#cicd) | [cicd.md](docs/cicd.md), [dependencias.md](docs/dependencias.md) |
-| [Segurança](#segurança) | [seguranca.md](docs/seguranca.md) |
-| [Decisões e rastreabilidade](#decisões-e-rastreabilidade) | [arquitetura.md, seção 8](docs/arquitetura.md#8-decisões) |
+**Documentos em `docs/`**: [arquitetura](docs/arquitetura.md), [API](docs/api/) e [exemplos da API](docs/api/exemplos.md), [mensageria e saga](docs/mensageria.md), [observabilidade](docs/observabilidade.md), [como rodar](docs/como-rodar.md), [configuração](docs/configuracao.md), [implantação](docs/implantacao.md), [testes](docs/testes.md), [cobertura](docs/cobertura.md), [mutação](docs/mutacao.md), [CI/CD](docs/cicd.md), [dependências](docs/dependencias.md) e [segurança](docs/seguranca.md).
 
 ## Como rodar
 
@@ -25,11 +14,12 @@ Requisitos: [uv](https://docs.astral.sh/uv/) 0.11 ou mais novo (instala o Python
 
 ```bash
 make compose-up
-make compose-logs
+curl http://127.0.0.1:8003/api/v1/saude
+curl http://127.0.0.1:8003/api/v1/saude/pronto
 make compose-down
 ```
 
-O `make compose-up` sobe a API em http://127.0.0.1:8003, o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`), com migração e seed do estoque no boot. A mesma imagem roda os três processos, cada um com o seu comando. O `make compose-logs` acompanha o log da API, e o `make compose-down` derruba a stack e apaga o volume. Sem o OS Service no ar, as rotas autenticadas respondem 401 ou 503: a stack completa vem do repositório [`platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform), que sobe o kind com os três serviços. Fora do compose, sem o OS Service, o seed e o fluxo à mão pelo RabbitMQ: [docs/como-rodar.md](docs/como-rodar.md); variáveis de ambiente: [docs/configuracao.md](docs/configuracao.md).
+O `make compose-up` sobe a API em http://127.0.0.1:8003 (Swagger em `/docs`), o relay, o consumidor, o PostgreSQL (127.0.0.1:5433) e o RabbitMQ (127.0.0.1:5673, console em 15673, usuário `admin`), com migração e seed do estoque no boot. A mesma imagem roda os três processos, cada um com o seu comando. O `make compose-logs` acompanha o log da API, e o `make compose-down` derruba a stack e apaga o volume. Sem o OS Service no ar, só as sondas respondem e as rotas autenticadas dão 401 ou 503: a stack completa vem do repositório [`platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform), que sobe o kind com os três serviços. Fora do compose, sem o OS Service, o seed e o fluxo à mão pelo RabbitMQ: [docs/como-rodar.md](docs/como-rodar.md); variáveis de ambiente: [docs/configuracao.md](docs/configuracao.md).
 
 No kind, com o `platform` clonado ao lado deste repositório:
 
@@ -49,9 +39,9 @@ make smoke
 
 O `make check` roda `uv.lock` em dia, ruff, ruff format, import-linter, mypy strict, bandit, os testes (unitários, de integração e de contrato) com gate de cobertura de 95% e o `diff-cover` (90% no código que a branch muda em relação à `origin/main`). O `make smoke` prova a imagem pelo entrypoint real. Os dois pedem Docker.
 
-- **Integração:** PostgreSQL 16 e RabbitMQ 4.3.6 efêmeros por testcontainers, com as migrações do Alembic e a topologia do `platform`: mensageria de ponta a ponta, relay com duas réplicas, API com JWT real, concorrência, implantação e observabilidade.
-- **Contrato:** `contratos/` é cópia do `platform`, e o teste compara cada arquivo byte a byte com o commit de `contratos/ORIGEM` (precisa de rede, marcador `rede`).
-- **BDD:** não há neste repositório. O fluxo completo da saga em Gherkin é do `platform` ([`saga_atendimento.feature`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/e2e/features/saga_atendimento.feature)) e roda no E2E do `deploy-kind` do CD deste serviço.
+- **Integração**: PostgreSQL 16 e RabbitMQ 4.3.6 efêmeros por testcontainers, com as migrações do Alembic e a topologia do `platform`: mensageria de ponta a ponta, relay com duas réplicas, API com JWT real, concorrência, implantação e observabilidade.
+- **Contrato**: `contratos/` é cópia do `platform`, e o teste compara cada arquivo byte a byte com o commit de `contratos/ORIGEM` (precisa de rede, marcador `rede`).
+- **BDD**: não há neste repositório. O fluxo completo da saga em Gherkin é do `platform` ([`saga_atendimento.feature`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/e2e/features/saga_atendimento.feature)) e roda no E2E do `deploy-kind` do CD deste serviço.
 - Os casos por área estão em [docs/testes.md](docs/testes.md).
 
 ### Mutação
@@ -91,7 +81,7 @@ Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no c�
 Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
 <!-- cobertura:fim -->
 
-**Oscilação:** a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 39937419103); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/cobertura.md](docs/cobertura.md#oscilação).
+**Oscilação**: a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 39937419103); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/cobertura.md](docs/cobertura.md#oscilação).
 
 ## API
 
@@ -115,9 +105,9 @@ Comandos e eventos da saga pelo RabbitMQ, com o usuário `execucao` do broker ([
 | Consome | fila `execucao.comandos` (`pytstop.comandos`, `comando.execucao.#`) | `SolicitarDiagnostico`, `DescartarDiagnostico`, `ReservarPecas`, `LiberarReserva`, `AgendarExecucao`, `CancelarExecucao`, `AnonimizarVeiculo` (todas do OS Service) |
 | Publica | exchange `pytstop.eventos`, routing key `evento.execucao.<tipo em snake_case>` | `DiagnosticoIniciado`, `DiagnosticoConcluido`, `DiagnosticoDescartado`, `PecasReservadas`, `ReservaDePecasFalhou`, `ReservaLiberada`, `ExecucaoAgendada`, `ExecucaoCancelada`, `ExecucaoIniciada`, `ExecucaoFinalizada` |
 
-- **Outbox:** o caso de uso grava o evento na tabela `outbox`, na mesma transação do estado, e o relay (`python -m src.relay`) o publica com confirmação do broker.
-- **Idempotência:** o consumidor (`python -m src.consumidor`) grava o `id` da mensagem em `mensagens_processadas` na mesma transação do efeito. `id` repetido recebe ack sem efeito, e comando que não corresponde ao estado (lápide, original atrasado) é ignorado com ack.
-- **Retry e DLQ:** erro transitório vai para as filas de retry com atraso (`execucao.comandos.retry.1s` a `.300s`); erro permanente, erro não classificado e a quinta falha vão para `execucao.comandos.dlq`.
+- **Outbox**: o caso de uso grava o evento na tabela `outbox`, na mesma transação do estado, e o relay (`python -m src.relay`) o publica com confirmação do broker.
+- **Idempotência**: o consumidor (`python -m src.consumidor`) grava o `id` da mensagem em `mensagens_processadas` na mesma transação do efeito. `id` repetido recebe ack sem efeito, e comando que não corresponde ao estado (lápide, original atrasado) é ignorado com ack.
+- **Retry e DLQ**: erro transitório vai para as filas de retry com atraso (`execucao.comandos.retry.1s` a `.300s`); erro permanente, erro não classificado e a quinta falha vão para `execucao.comandos.dlq`.
 
 Cada comando, o caso de uso, a resposta e a regra de repetição: [docs/mensageria.md](docs/mensageria.md#participação-na-saga). Envelope, lease do relay, entrada hostil, prontidão e métricas: [docs/mensageria.md](docs/mensageria.md#mensageria).
 
@@ -141,23 +131,33 @@ Com o kind no ar, `make -C ../postech-sw-arch-p4-platform port-forward` abre o J
 
 ## CI/CD
 
-Todo PR para a `main` roda dois workflows, com jobs de nome estável (os nove checks obrigatórios da branch protection): `CI` (`lint`, `type-check`, `security`, `test`, `sonarqube`, `build`) e `Security` (`pip-audit`, `gitleaks`, `trivy`; roda também toda segunda-feira). O [`cd.yml`](.github/workflows/cd.yml) é um caller fino do [workflow reutilizável do `platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/.github/workflows/cd-servico.yml): publica a imagem no GHCR, com SBOM e proveniência, e implanta num kind efêmero (Kubernetes dentro de contêineres do runner), com smoke e E2E da saga. O deploy remoto segue desligado. O Dependabot abre PRs toda segunda, em três blocos (uv, Actions e Docker). Jobs, gates e pin do reutilizável: [docs/cicd.md](docs/cicd.md); regras e exceções do Dependabot: [docs/dependencias.md](docs/dependencias.md).
+A `main` é protegida desde o primeiro commit: toda mudança entra por pull request com squash. Todo PR para a `main` roda dois workflows, com jobs de nome estável (os nove checks obrigatórios da branch protection): `CI` (`lint`, `type-check`, `security`, `test`, `sonarqube`, `build`) e `Security` (`pip-audit`, `gitleaks`, `trivy`; roda também toda segunda-feira). O [`cd.yml`](.github/workflows/cd.yml) é um caller fino do [workflow reutilizável do `platform`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/3f7cca2eb555a038b0d2780058ef0e692f93ee8a/.github/workflows/cd-servico.yml): publica a imagem no GHCR, com SBOM e proveniência, e implanta num kind efêmero (Kubernetes dentro de contêineres do runner), com smoke e E2E da saga. O deploy remoto segue desligado. O Dependabot abre PRs toda segunda, em três blocos (uv, Actions e Docker). Jobs, gates e pin do reutilizável: [docs/cicd.md](docs/cicd.md); regras e exceções do Dependabot: [docs/dependencias.md](docs/dependencias.md).
 
 ## Segurança
 
-- **Autenticação:** JWT RS256 emitido pelo OS Service e validado localmente pela chave pública do JWKS (`iss`, `aud`, `exp`, `sub` e `type=access`), sem segredo compartilhado entre serviços. Toda falha de credencial responde o mesmo 401, papel sem permissão responde 403 e JWKS indisponível e sem cópia, 503 ([ADR-039](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/039-autenticacao-entre-servicos.md)).
-- **Papéis:** mecânico, atendente e admin, conferidos por rota. Só o mecânico que iniciou conclui o diagnóstico ou finaliza a execução; o admin age em nome dele, com log de auditoria.
-- **LGPD:** o serviço guarda o retrato do veículo e textos livres, e não os dados do cliente. O `AnonimizarVeiculo` elimina a placa e os textos livres. Os logs saem mascarados, os spans sem o caminho cru nem o texto de erro, e as métricas só com códigos do catálogo.
-- **Banco e cluster:** papéis separados no PostgreSQL (o dono só no Job de migração, a aplicação só com DML), Pod Security `restricted`, NetworkPolicy com entrada negada por padrão e nenhum Secret no repositório.
-- **Cadeia de entrega:** `pip-audit`, `gitleaks` e `trivy` em todo PR ([CI/CD](#cicd)).
+- **Autenticação**: JWT RS256 emitido pelo OS Service e validado localmente pela chave pública do JWKS (`iss`, `aud`, `exp`, `sub` e `type=access`), sem segredo compartilhado entre serviços. Toda falha de credencial responde o mesmo 401, papel sem permissão responde 403 e JWKS indisponível e sem cópia, 503 ([ADR-039](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/039-autenticacao-entre-servicos.md)).
+- **Papéis**: mecânico, atendente e admin, conferidos por rota. Só o mecânico que iniciou conclui o diagnóstico ou finaliza a execução; o admin age em nome dele, com log de auditoria.
+- **LGPD**: o serviço guarda o retrato do veículo e textos livres, e não os dados do cliente. O `AnonimizarVeiculo` elimina a placa e os textos livres. Os logs saem mascarados, os spans sem o caminho cru nem o texto de erro, e as métricas só com códigos do catálogo.
+- **Banco e cluster**: papéis separados no PostgreSQL (o dono só no Job de migração, a aplicação só com DML), Pod Security `restricted`, NetworkPolicy com entrada negada por padrão e nenhum Secret no repositório.
+- **Cadeia de entrega**: `pip-audit`, `gitleaks` e `trivy` em todo PR ([CI/CD](#cicd)).
 
-Detalhe, inclusive a troca de senha do banco: [docs/seguranca.md](docs/seguranca.md).
+O detalhe de cada item está em [docs/seguranca.md](docs/seguranca.md).
+
+### Troca de senha do banco
+
+A senha de cada papel do PostgreSQL (`execucao_app`, `execucao_exporter`, `execucao` e `postgres`) troca por um procedimento de `kubectl`, com janela até o restart e sem deixar a senha no log do servidor: [docs/seguranca.md](docs/seguranca.md#troca-de-senha-do-banco). A mecânica geral é a de [Troca de senha do banco](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform#troca-de-senha-do-banco), no README do `platform`.
 
 ## Decisões e rastreabilidade
 
-- A [RFC-004 e os ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) do `platform` registram a divisão dos serviços, a saga, o catálogo de mensagens, as rotas, os dados e a segurança. As decisões deste serviço, com o arquivo de cada uma, estão na [seção 8 de `docs/arquitetura.md`](docs/arquitetura.md#8-decisões).
-- Os entregáveis RNF-050 a RNF-052 vêm da [gap analysis da fase](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/requisitos/fase4/gap-analysis-fase-4.md). A [matriz de rastreabilidade](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/entrega/matriz-de-rastreabilidade.md) do `platform` liga cada requisito às evidências.
-- Proveniência: `src/compartilhado` e o contexto `estoque` partem do [p3 no commit `08dcffe`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p3/tree/08dcffe6365ece594f438cdbc4c5eef1d88ebfb1) (base de entidades, UoW, outbox, logging com mascaramento de PII, handlers de erro, padrões de teste, Dockerfile), enxugados ao que este serviço usa.
+Este repositório é um dos quatro da entrega da fase 4 do Tech Challenge (FIAP Pós Tech, Software Architecture, 15SOAT). Nessa fase o PytStop, sistema de gestão de oficina mecânica das fases anteriores, virou microsserviços com Saga Pattern, mensageria assíncrona, CI/CD por serviço e deploy automatizado em Kubernetes. O [índice da entrega](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/INDICE-DA-ENTREGA.md) liga os quatro repositórios, os requisitos e as evidências.
+
+A arquitetura global da fase 4 está na [RFC-004 e nos ADRs 034 a 043](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/tree/main/docs/arquitetura) do repositório `platform`: divisão dos serviços, saga, catálogo de mensagens, rotas, dados e segurança. As decisões deste serviço, com o arquivo de cada uma, estão na [seção 8 de docs/arquitetura.md](docs/arquitetura.md#8-decisões). Os entregáveis RNF-050 a RNF-052 vêm da [gap analysis da fase](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/requisitos/fase4/gap-analysis-fase-4.md), e a [matriz de rastreabilidade](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/entrega/matriz-de-rastreabilidade.md) do `platform` liga cada requisito aos pull requests e às evidências.
+
+### Proveniência
+
+`src/compartilhado` e o contexto `estoque` partem do [p3 no commit `08dcffe`](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p3/tree/08dcffe6365ece594f438cdbc4c5eef1d88ebfb1) (base de entidades, UoW, outbox, logging com mascaramento de PII, handlers de erro, padrões de teste, Dockerfile), enxugados ao que este serviço usa.
+
+### Repositórios da fase 4
 
 | Repositório | Papel |
 |---|---|
@@ -165,5 +165,3 @@ Detalhe, inclusive a troca de senha do banco: [docs/seguranca.md](docs/seguranca
 | [postech-sw-arch-p4-billing-service](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-billing-service) | Orçamentos, pagamentos via Mercado Pago e tabela de preços |
 | [postech-sw-arch-p4-execution-service](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service) | Fila de diagnóstico e execução e estoque de peças |
 | [postech-sw-arch-p4-platform](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform) | Infraestrutura compartilhada, testes E2E, arquitetura global e entrega |
-
-A `main` é protegida desde o primeiro commit: toda mudança entra por pull request com squash.
