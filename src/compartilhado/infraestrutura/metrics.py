@@ -3,7 +3,9 @@
 ``http_request_duration_seconds{method,rota,status}`` mantem o nome e os labels
 do p3 (contrato com os dashboards). ``rota`` e o TEMPLATE da rota casada
 (``/api/v1/execucoes/{ordem_id}/inicio``), nunca o path bruto: cardinalidade
-limitada; request sem rota casada agrega em ``nao_roteada``.
+limitada; request sem rota casada agrega em ``nao_roteada``. ``method`` e o que o
+cliente mandou, entao so GET, POST, PUT, PATCH, DELETE, HEAD e OPTIONS viram
+rotulo e qualquer outro agrega em ``OUTRO`` (o mesmo rotulo do OS Service).
 
 Diferente do p3 (OTel MeterProvider + PrometheusMetricReader atras de flag),
 aqui o ``prometheus_client`` e usado direto e sempre ligado: um processo
@@ -26,6 +28,12 @@ if TYPE_CHECKING:
 
 ROTA_NAO_ROTEADA: Final = "nao_roteada"
 
+# O metodo vem do chamador e pode ser qualquer token: so os conhecidos viram label.
+_METODOS: Final = frozenset(
+    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+)
+_METODO_DESCONHECIDO: Final = "OUTRO"
+
 # 5ms..5s: do hit simples ao pior caso com lock pessimista ou retry no Billing.
 _LATENCIA_HTTP = Histogram(
     "http_request_duration_seconds",
@@ -33,6 +41,10 @@ _LATENCIA_HTTP = Histogram(
     ["method", "rota", "status"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
+
+
+def _metodo(request: Request) -> str:
+    return request.method if request.method in _METODOS else _METODO_DESCONHECIDO
 
 
 def _rota_template(request: Request) -> str:
@@ -55,7 +67,7 @@ class MetricasHTTPMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             _LATENCIA_HTTP.labels(
-                request.method, _rota_template(request), str(status)
+                _metodo(request), _rota_template(request), str(status)
             ).observe(time.perf_counter() - inicio)
 
 
