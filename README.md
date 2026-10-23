@@ -410,7 +410,7 @@ A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_
 | `src` | 318 | 318 | 100.0% |
 | `src/compartilhado/aplicacao` | 59 | 59 | 100.0% |
 | `src/compartilhado/dominio` | 144 | 144 | 100.0% |
-| `src/compartilhado/infraestrutura` | 1324 | 1324 | 100.0% |
+| `src/compartilhado/infraestrutura` | 1329 | 1329 | 100.0% |
 | `src/compartilhado/interfaces` | 236 | 236 | 100.0% |
 | `src/diagnostico/aplicacao` | 127 | 127 | 100.0% |
 | `src/diagnostico/dominio` | 177 | 177 | 100.0% |
@@ -424,9 +424,9 @@ A tabela abaixo, por contexto e camada, não é digitada: o [`scripts/cobertura_
 | `src/execucao/dominio` | 122 | 122 | 100.0% |
 | `src/execucao/infraestrutura` | 99 | 99 | 100.0% |
 | `src/execucao/interfaces` | 84 | 84 | 100.0% |
-| **total** | 3681 | 3681 | 100.0% |
+| **total** | 3686 | 3686 | 100.0% |
 
-Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39235791515 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39235791515).
+Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
 <!-- cobertura:fim -->
 
 Para refazer a tabela com o `coverage.xml` de outro run, com o número dele em `RUN`:
