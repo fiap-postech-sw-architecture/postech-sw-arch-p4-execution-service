@@ -134,8 +134,10 @@ class TestMetricas:
     def test_metodo_fora_dos_conhecidos_agrega_em_outro(
         self, metodo: str, caminho: str, rota: str, status: str
     ) -> None:
-        # O metodo vem do chamador: um token novo por requisicao criaria uma
-        # serie nova, sem teto.
+        # O metodo vem do chamador. O httptools da imagem responde 400 a `FOO` e
+        # `BREW-1` antes do app, mas deixa chegar `PROPFIND`, `TRACE` e `CONNECT`,
+        # e cada um abriria uma serie; com `--http h11` os cinco chegam. O
+        # TestClient nao tem parser, entao aqui os cinco chegam ao app.
         antes = _contagem(rota, status, "OUTRO")
         _app().request(metodo, caminho)
         assert _contagem(rota, status, "OUTRO") == antes + 1
