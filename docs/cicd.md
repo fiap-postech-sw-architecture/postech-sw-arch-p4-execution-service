@@ -4,7 +4,7 @@ Detalhe de [CI/CD](../README.md#cicd) do README. As atualizações automáticas 
 
 ## Integração contínua
 
-Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os checks obrigatórios da branch protection):
+Todo PR para a `main` roda dois workflows, com jobs de nome estável (são os checks obrigatórios do ruleset):
 
 | Workflow | Jobs | O que garante |
 |---|---|---|
