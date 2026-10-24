@@ -441,7 +441,7 @@ sequenceDiagram
 
 - **Gravação.** O caso de uso registra o evento na unidade de trabalho, que grava a linha da outbox no commit, já como o envelope do contrato, validado contra o JSON Schema (falha aqui é defeito do serviço), com o destino e o contexto de trace de quem gravou ([`unit_of_work.py`](../src/compartilhado/infraestrutura/unit_of_work.py)).
 - **Relay** ([`relay.py`](../src/compartilhado/infraestrutura/mensageria/relay.py), [`outbox.py`](../src/compartilhado/infraestrutura/mensageria/outbox.py)): acorda pelo `NOTIFY` ou pelo poll; reivindica em transação curta e publica sem transação aberta; não passa à frente de mensagem pendente da mesma ordem (`ix_outbox_correlacao`). Sem rota, nack ou recusa do broker contam tentativa, com atraso crescente, e a quinta falha vira `dead`; queda do broker não conta tentativa. A limpeza periódica apaga, em lotes, as entregues e as `dead` vencidas. O tamanho do lote, o lease, o poll, os atrasos e os prazos da limpeza estão em [Mensageria](mensageria.md#mensageria).
-- **Consumidor** ([`consumidor.py`](../src/compartilhado/infraestrutura/mensageria/consumidor.py)): o `id` entra em `mensagens_processadas` antes do handler, a sessão do handler fica presa à transação da mensagem por savepoint e só o consumidor comita. `id` repetido recebe ack sem efeito; comando fora do estado é ignorado com ack (o `id` fica gravado); erro transitório vai para a fila de retry da tentativa; erro permanente, não classificado ou a quinta falha vão para a DLQ.
+- **Consumidor** ([`consumidor.py`](../src/compartilhado/infraestrutura/mensageria/consumidor.py)): o `id` entra em `mensagens_processadas` antes do handler, a sessão do handler fica presa à transação da mensagem por savepoint e só o consumidor comita. `id` repetido recebe ack sem efeito; comando fora do estado é ignorado com ack (o `id` fica gravado); erro transitório vai para a fila de retry da tentativa; erro permanente, não classificado ou a sexta falha (depois das cinco cópias de retry) vão para a DLQ.
 
 ## 5. Mensageria
 
@@ -452,7 +452,7 @@ Topologia, envelope, catálogo e garantias estão na [RFC-004, seções 4 e 5](h
 | Consome | fila `execucao.comandos` (exchange `pytstop.comandos`, binding `comando.execucao.#`) | `SolicitarDiagnostico`, `DescartarDiagnostico`, `ReservarPecas`, `LiberarReserva`, `AgendarExecucao`, `CancelarExecucao`, `AnonimizarVeiculo` |
 | Publica | exchange `pytstop.eventos`, routing key `evento.execucao.<tipo em snake_case>` | `DiagnosticoIniciado`, `DiagnosticoConcluido`, `DiagnosticoDescartado`, `PecasReservadas`, `ReservaDePecasFalhou`, `ReservaLiberada`, `ExecucaoAgendada`, `ExecucaoCancelada`, `ExecucaoIniciada`, `ExecucaoFinalizada` |
 | Retry | `execucao.comandos.retry.1s`, `.5s`, `.15s`, `.60s` e `.300s` (exchange `pytstop.retry`), cujo TTL devolve a cópia à fila de trabalho | cópia do comando com `x-tentativa` incrementado |
-| DLQ | `execucao.comandos.dlq` (exchange `pytstop.dlx`) | erro permanente, não classificado, quinta falha ou `delivery-limit` 5 da fila |
+| DLQ | `execucao.comandos.dlq` (exchange `pytstop.dlx`) | erro permanente, não classificado, falha depois da quinta cópia de retry ou `delivery-limit` 5 da fila |
 
 O `causation_id` é como o orquestrador casa cada evento: a resposta a um comando leva o `id` dele, e o fato que o mecânico gera pela API leva o `id` do comando que abriu o fluxo (`solicitacao_id` e `agendamento_id`). Os detalhes de entrega (lease, fencing, `Connection.Blocked`, entrada hostil, prontidão) estão em [Mensageria](mensageria.md#mensageria).
 

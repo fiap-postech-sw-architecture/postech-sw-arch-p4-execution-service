@@ -108,7 +108,7 @@ Comandos e eventos da saga pelo RabbitMQ, com o usuário `execucao` do broker ([
 
 - **Outbox**: o caso de uso grava o evento na tabela `outbox`, na mesma transação do estado, e o relay (`python -m src.relay`) o publica com confirmação do broker.
 - **Idempotência**: o consumidor (`python -m src.consumidor`) grava o `id` da mensagem em `mensagens_processadas` na mesma transação do efeito. `id` repetido recebe ack sem efeito, e comando que não corresponde ao estado (lápide, original atrasado) é ignorado com ack.
-- **Retry e DLQ**: erro transitório vai para as filas de retry com atraso (`execucao.comandos.retry.1s` a `.300s`); erro permanente, erro não classificado e a quinta falha vão para `execucao.comandos.dlq`.
+- **Retry e DLQ**: erro transitório vai para as filas de retry com atraso (`execucao.comandos.retry.1s` a `.300s`); erro permanente, erro não classificado e a sexta falha (depois das cinco cópias de retry) vão para `execucao.comandos.dlq`.
 
 Cada comando, o caso de uso, a resposta e a regra de repetição: [docs/mensageria.md](docs/mensageria.md#participação-na-saga). Envelope, lease do relay, entrada hostil, prontidão e métricas: [docs/mensageria.md](docs/mensageria.md#mensageria).
 
