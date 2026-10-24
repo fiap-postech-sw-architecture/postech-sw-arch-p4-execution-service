@@ -10,6 +10,8 @@ cobertura pedida no enunciado ficar legivel no summary do CI e no README, onde
 a tabela e gerada, nunca digitada: o coverage.xml e o do artefato
 `relatorios-de-teste` do run que o link aponta. O XML lido e o gerado pelo
 proprio pytest-cov, nao entrada externa (por isso o parser da stdlib basta).
+Os numeros saem em pt-BR (virgula na casa decimal, ponto no milhar), como nas
+tabelas do OS Service e do Billing.
 """
 
 from __future__ import annotations
@@ -39,6 +41,16 @@ def _sem_linha_de_cobertura(caminho: Path) -> bool:
     return next(raiz.iter("line"), None) is None
 
 
+# A mesma regra do cobertura_resumo.py do OS Service e do Billing: milhar com
+# ponto (`3.686`) e uma casa decimal com virgula (`100,0%`).
+def _inteiro(valor: int) -> str:
+    return f"{valor:,}".replace(",", ".")
+
+
+def _pct(taxa: float) -> str:
+    return f"{taxa:.1f}".replace(".", ",") + "%"
+
+
 def resumir(caminho: Path) -> str:
     # Arquivo gerado pelo proprio pytest-cov no mesmo job, nao entrada externa.
     raiz = ElementTree.parse(caminho).getroot()  # noqa: S314  # nosec B314
@@ -62,9 +74,9 @@ def resumir(caminho: Path) -> str:
     )
     gate = 100.0 * cobertos / validos if validos else 0.0
     saida = [
-        f"### Cobertura de testes: {gate:.1f}% no gate (linhas e ramos)",
+        f"### Cobertura de testes: {_pct(gate)} no gate (linhas e ramos)",
         "",
-        f"{pct_total:.1f}% de linhas e {ramo:.1f}% de ramos.",
+        f"{_pct(pct_total)} de linhas e {_pct(ramo)} de ramos.",
         "",
         "| Pacote | Linhas | Cobertas | Cobertura |",
         "|---|---:|---:|---:|",
@@ -72,9 +84,10 @@ def resumir(caminho: Path) -> str:
     for grupo in sorted(linhas):
         tot, cob = linhas[grupo]
         pct = 100.0 * cob / tot if tot else 0.0
-        saida.append(f"| `{grupo}` | {tot} | {cob} | {pct:.1f}% |")
+        saida.append(f"| `{grupo}` | {_inteiro(tot)} | {_inteiro(cob)} | {_pct(pct)} |")
     saida.append(
-        f"| **total** | {total_linhas} | {total_cobertas} | {pct_total:.1f}% |"
+        f"| **total** | {_inteiro(total_linhas)} | {_inteiro(total_cobertas)} | "
+        f"{_pct(pct_total)} |"
     )
     return "\n".join(saida) + "\n"
 

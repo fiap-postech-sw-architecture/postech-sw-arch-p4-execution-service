@@ -34,6 +34,29 @@ _XML = """<?xml version="1.0" ?>
 """
 
 
+def _linhas(total: int, cobertas: int) -> str:
+    return "".join(
+        f'<line number="{n}" hits="{1 if n <= cobertas else 0}"/>'
+        for n in range(1, total + 1)
+    )
+
+
+# 1.250 linhas em estoque/dominio (1.000 cobertas) e 3 em main.py (1 coberta): so
+# com numeros assim aparecem o ponto do milhar e a virgula decimal.
+_XML_DE_MILHAR = f"""<?xml version="1.0" ?>
+<coverage branch-rate="0.75" lines-valid="1253" lines-covered="1001"
+          branches-valid="1000" branches-covered="750">
+  <sources><source>/repo/src</source></sources>
+  <packages><package name="x"><classes>
+    <class filename="estoque/dominio/grande.py">
+      <lines>{_linhas(1250, 1000)}</lines>
+    </class>
+    <class filename="main.py"><lines>{_linhas(3, 1)}</lines></class>
+  </classes></package></packages>
+</coverage>
+"""
+
+
 @pytest.fixture
 def script() -> ModuleType:
     spec = importlib.util.spec_from_file_location("cobertura_resumo", _SCRIPT)
@@ -53,11 +76,32 @@ def test_agrupa_por_contexto_e_camada_com_total(
     linhas = script.resumir(xml).splitlines()
 
     # O gate (fail_under com branch = True) soma linhas e ramos: (4 + 2) / (6 + 4).
-    assert linhas[0] == "### Cobertura de testes: 60.0% no gate (linhas e ramos)"
-    assert linhas[2] == "66.7% de linhas e 50.0% de ramos."
-    assert "| `src` | 2 | 1 | 50.0% |" in linhas
-    assert "| `src/estoque/dominio` | 4 | 3 | 75.0% |" in linhas
-    assert linhas[-1] == "| **total** | 6 | 4 | 66.7% |"
+    assert linhas[0] == "### Cobertura de testes: 60,0% no gate (linhas e ramos)"
+    assert linhas[2] == "66,7% de linhas e 50,0% de ramos."
+    assert "| `src` | 2 | 1 | 50,0% |" in linhas
+    assert "| `src/estoque/dominio` | 4 | 3 | 75,0% |" in linhas
+    assert linhas[-1] == "| **total** | 6 | 4 | 66,7% |"
+
+
+def test_numeros_em_pt_br_com_ponto_no_milhar_e_virgula_na_casa_decimal(
+    script: ModuleType, tmp_path: Path
+) -> None:
+    """O formato do OS Service e do Billing, e nao o en-US (`79.9%`, `1250`)."""
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(_XML_DE_MILHAR)
+
+    assert script.resumir(xml).splitlines() == [
+        # Gate: (1.001 + 750) / (1.253 + 1.000).
+        "### Cobertura de testes: 77,7% no gate (linhas e ramos)",
+        "",
+        "79,9% de linhas e 75,0% de ramos.",
+        "",
+        "| Pacote | Linhas | Cobertas | Cobertura |",
+        "|---|---:|---:|---:|",
+        "| `src` | 3 | 1 | 33,3% |",
+        "| `src/estoque/dominio` | 1.250 | 1.000 | 80,0% |",
+        "| **total** | 1.253 | 1.001 | 79,9% |",
+    ]
 
 
 def test_xml_ausente_avisa_sem_falhar_o_job(
@@ -80,7 +124,7 @@ def test_main_escreve_o_resumo(
     xml = tmp_path / "coverage.xml"
     xml.write_text(_XML)
     assert script.main(["prog", str(xml)]) == 0
-    assert capsys.readouterr().out.startswith("### Cobertura de testes: 60.0% no gate")
+    assert capsys.readouterr().out.startswith("### Cobertura de testes: 60,0% no gate")
 
 
 _URL = "https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/123"
@@ -181,8 +225,16 @@ def test_readme_com_entrada_que_nao_serve_sai_com_1_numa_linha_sem_tocar_no_read
     assert not readme_existe or readme.read_text() == conteudo
 
 
+# O formato do OS Service e do Billing: ponto no milhar, virgula na casa decimal.
+_INTEIRO = r"\d{1,3}(?:\.\d{3})*"
+_PERCENTUAL = r"\d+,\d"
+_CABECALHO = re.compile(
+    rf"### Cobertura de testes: ({_PERCENTUAL})% no gate \(linhas e ramos\)"
+)
+_TAXAS = re.compile(rf"({_PERCENTUAL})% de linhas e ({_PERCENTUAL})% de ramos\.")
 _LINHA_DA_TABELA = re.compile(
-    r"\| (`src[\w/]*`|\*\*total\*\*) \| (\d+) \| (\d+) \| (\d+\.\d)% \|"
+    rf"\| (`src[\w/]*`|\*\*total\*\*) \| ({_INTEIRO}) \| ({_INTEIRO}) "
+    rf"\| ({_PERCENTUAL})% \|"
 )
 _LINK_DO_RUN = re.compile(
     r"\[run (\d+) do CI\]\(https://github\.com/fiap-postech-sw-architecture/"
@@ -190,11 +242,21 @@ _LINK_DO_RUN = re.compile(
 )
 
 
+def _sem_milhar(texto: str) -> int:
+    return int(texto.replace(".", ""))
+
+
+def _decimal(texto: str) -> float:
+    return float(texto.replace(",", "."))
+
+
 def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None:
     """O trecho entre os marcadores tem o formato do script e as contas certas.
 
-    A taxa de linhas e a do total da tabela; o gate, que soma linhas e ramos, fica
-    entre as duas taxas (com a folga do arredondamento); e cada pacote existe.
+    O formato e o pt-BR do OS Service e do Billing: os numeros do gerador antigo
+    (`100.0%`, `3686`) reprovam. A taxa de linhas e a do total da tabela; o gate,
+    que soma linhas e ramos, fica entre as duas taxas (com a folga do
+    arredondamento); e cada pacote existe.
     """
     texto = _README.read_text()
     assert texto.count(script.INICIO) == texto.count(script.FIM) == 1
@@ -202,10 +264,8 @@ def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None
 
     cabecalho, _, taxas, _, *tabela, _, link = secao
     linhas = [_LINHA_DA_TABELA.fullmatch(linha) for linha in tabela[2:]]
-    gate = re.fullmatch(
-        r"### Cobertura de testes: (\d+\.\d)% no gate \(linhas e ramos\)", cabecalho
-    )
-    taxa = re.fullmatch(r"(\d+\.\d)% de linhas e (\d+\.\d)% de ramos\.", taxas)
+    gate = _CABECALHO.fullmatch(cabecalho)
+    taxa = _TAXAS.fullmatch(taxas)
 
     assert gate, cabecalho
     assert taxa, taxas
@@ -214,14 +274,43 @@ def test_secao_de_cobertura_do_readme_saiu_do_script(script: ModuleType) -> None
         "|---|---:|---:|---:|",
     ]
     assert all(linhas), tabela
-    contagens = [(int(m[2]), int(m[3]), m[4]) for m in linhas if m]
-    assert all(pct == f"{100 * cob / tot:.1f}" for tot, cob, pct in contagens)
+    contagens = [(_sem_milhar(m[2]), _sem_milhar(m[3]), m[4]) for m in linhas if m]
+    assert all(
+        pct == f"{100 * cob / tot:.1f}".replace(".", ",") for tot, cob, pct in contagens
+    )
     *pacotes, total = contagens
     assert total[:2] == (sum(t for t, _, _ in pacotes), sum(c for _, c, _ in pacotes))
     assert taxa[1] == total[2]
-    de_linhas, de_ramos = float(taxa[1]), float(taxa[2])
-    assert min(de_linhas, de_ramos) - 0.1 <= float(gate[1])
-    assert float(gate[1]) <= max(de_linhas, de_ramos) + 0.1
+    de_linhas, de_ramos = _decimal(taxa[1]), _decimal(taxa[2])
+    assert min(de_linhas, de_ramos) - 0.1 <= _decimal(gate[1])
+    assert _decimal(gate[1]) <= max(de_linhas, de_ramos) + 0.1
     nomes = [m[1].strip("`") for m in linhas[:-1] if m]
     assert [nome for nome in nomes if not (_RAIZ / nome).is_dir()] == []
     assert _LINK_DO_RUN.search(link), link
+
+
+@pytest.mark.parametrize(
+    ("padrao", "linha", "aceita"),
+    [
+        (_CABECALHO, "### Cobertura de testes: 100,0% no gate (linhas e ramos)", True),
+        (_CABECALHO, "### Cobertura de testes: 100.0% no gate (linhas e ramos)", False),
+        (_TAXAS, "99,9% de linhas e 100,0% de ramos.", True),
+        (_TAXAS, "99.9% de linhas e 100.0% de ramos.", False),
+        (_LINHA_DA_TABELA, "| `src/x/dominio` | 1.329 | 1.329 | 100,0% |", True),
+        (_LINHA_DA_TABELA, "| `src/x/dominio` | 318 | 318 | 100.0% |", False),
+        (_LINHA_DA_TABELA, "| `src/x/dominio` | 1329 | 1329 | 100,0% |", False),
+    ],
+    ids=[
+        "cabecalho-pt-br",
+        "cabecalho-en-us",
+        "taxas-pt-br",
+        "taxas-en-us",
+        "linha-pt-br",
+        "linha-com-percentual-en-us",
+        "linha-sem-ponto-no-milhar",
+    ],
+)
+def test_conferencia_do_readme_aceita_pt_br_e_reprova_o_formato_en_us(
+    padrao: re.Pattern[str], linha: str, aceita: bool
+) -> None:
+    assert bool(padrao.fullmatch(linha)) is aceita
