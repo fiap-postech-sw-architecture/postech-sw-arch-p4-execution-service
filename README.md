@@ -54,30 +54,30 @@ Mutantes escritos à mão nos módulos críticos, sem gate de CI (`make mutacao`
 Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no código novo de cada pull request (`make diff-cover`), como pede o [ADR-041](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-platform/blob/main/docs/arquitetura/adr/fase4/041-estrategia-de-testes-e-qualidade.md) (RNF-050). A tabela é gerada do `coverage.xml` de um run do CI por `scripts/cobertura_resumo.py`; como ela é conferida e como refazê-la: [docs/cobertura.md](docs/cobertura.md).
 
 <!-- cobertura:inicio -->
-### Cobertura de testes: 100.0% no gate (linhas e ramos)
+### Cobertura de testes: 100,0% no gate (linhas e ramos)
 
-100.0% de linhas e 100.0% de ramos.
+100,0% de linhas e 100,0% de ramos.
 
 | Pacote | Linhas | Cobertas | Cobertura |
 |---|---:|---:|---:|
-| `src` | 318 | 318 | 100.0% |
-| `src/compartilhado/aplicacao` | 59 | 59 | 100.0% |
-| `src/compartilhado/dominio` | 144 | 144 | 100.0% |
-| `src/compartilhado/infraestrutura` | 1329 | 1329 | 100.0% |
-| `src/compartilhado/interfaces` | 236 | 236 | 100.0% |
-| `src/diagnostico/aplicacao` | 127 | 127 | 100.0% |
-| `src/diagnostico/dominio` | 177 | 177 | 100.0% |
-| `src/diagnostico/infraestrutura` | 127 | 127 | 100.0% |
-| `src/diagnostico/interfaces` | 92 | 92 | 100.0% |
-| `src/estoque/aplicacao` | 155 | 155 | 100.0% |
-| `src/estoque/dominio` | 226 | 226 | 100.0% |
-| `src/estoque/infraestrutura` | 105 | 105 | 100.0% |
-| `src/estoque/interfaces` | 113 | 113 | 100.0% |
-| `src/execucao/aplicacao` | 173 | 173 | 100.0% |
-| `src/execucao/dominio` | 122 | 122 | 100.0% |
-| `src/execucao/infraestrutura` | 99 | 99 | 100.0% |
-| `src/execucao/interfaces` | 84 | 84 | 100.0% |
-| **total** | 3686 | 3686 | 100.0% |
+| `src` | 318 | 318 | 100,0% |
+| `src/compartilhado/aplicacao` | 59 | 59 | 100,0% |
+| `src/compartilhado/dominio` | 144 | 144 | 100,0% |
+| `src/compartilhado/infraestrutura` | 1.329 | 1.329 | 100,0% |
+| `src/compartilhado/interfaces` | 236 | 236 | 100,0% |
+| `src/diagnostico/aplicacao` | 127 | 127 | 100,0% |
+| `src/diagnostico/dominio` | 177 | 177 | 100,0% |
+| `src/diagnostico/infraestrutura` | 127 | 127 | 100,0% |
+| `src/diagnostico/interfaces` | 92 | 92 | 100,0% |
+| `src/estoque/aplicacao` | 155 | 155 | 100,0% |
+| `src/estoque/dominio` | 226 | 226 | 100,0% |
+| `src/estoque/infraestrutura` | 105 | 105 | 100,0% |
+| `src/estoque/interfaces` | 113 | 113 | 100,0% |
+| `src/execucao/aplicacao` | 173 | 173 | 100,0% |
+| `src/execucao/dominio` | 122 | 122 | 100,0% |
+| `src/execucao/infraestrutura` | 99 | 99 | 100,0% |
+| `src/execucao/interfaces` | 84 | 84 | 100,0% |
+| **total** | 3.686 | 3.686 | 100,0% |
 
 Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
 <!-- cobertura:fim -->
