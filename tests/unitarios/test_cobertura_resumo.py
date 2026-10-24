@@ -34,6 +34,29 @@ _XML = """<?xml version="1.0" ?>
 """
 
 
+def _linhas(total: int, cobertas: int) -> str:
+    return "".join(
+        f'<line number="{n}" hits="{1 if n <= cobertas else 0}"/>'
+        for n in range(1, total + 1)
+    )
+
+
+# 1.250 linhas em estoque/dominio (1.000 cobertas) e 3 em main.py (1 coberta): so
+# com numeros assim aparecem o ponto do milhar e a virgula decimal.
+_XML_DE_MILHAR = f"""<?xml version="1.0" ?>
+<coverage branch-rate="0.75" lines-valid="1253" lines-covered="1001"
+          branches-valid="1000" branches-covered="750">
+  <sources><source>/repo/src</source></sources>
+  <packages><package name="x"><classes>
+    <class filename="estoque/dominio/grande.py">
+      <lines>{_linhas(1250, 1000)}</lines>
+    </class>
+    <class filename="main.py"><lines>{_linhas(3, 1)}</lines></class>
+  </classes></package></packages>
+</coverage>
+"""
+
+
 @pytest.fixture
 def script() -> ModuleType:
     spec = importlib.util.spec_from_file_location("cobertura_resumo", _SCRIPT)
@@ -53,11 +76,32 @@ def test_agrupa_por_contexto_e_camada_com_total(
     linhas = script.resumir(xml).splitlines()
 
     # O gate (fail_under com branch = True) soma linhas e ramos: (4 + 2) / (6 + 4).
-    assert linhas[0] == "### Cobertura de testes: 60.0% no gate (linhas e ramos)"
-    assert linhas[2] == "66.7% de linhas e 50.0% de ramos."
-    assert "| `src` | 2 | 1 | 50.0% |" in linhas
-    assert "| `src/estoque/dominio` | 4 | 3 | 75.0% |" in linhas
-    assert linhas[-1] == "| **total** | 6 | 4 | 66.7% |"
+    assert linhas[0] == "### Cobertura de testes: 60,0% no gate (linhas e ramos)"
+    assert linhas[2] == "66,7% de linhas e 50,0% de ramos."
+    assert "| `src` | 2 | 1 | 50,0% |" in linhas
+    assert "| `src/estoque/dominio` | 4 | 3 | 75,0% |" in linhas
+    assert linhas[-1] == "| **total** | 6 | 4 | 66,7% |"
+
+
+def test_numeros_em_pt_br_com_ponto_no_milhar_e_virgula_na_casa_decimal(
+    script: ModuleType, tmp_path: Path
+) -> None:
+    """O formato do OS Service e do Billing, e nao o en-US (`79.9%`, `1250`)."""
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(_XML_DE_MILHAR)
+
+    assert script.resumir(xml).splitlines() == [
+        # Gate: (1.001 + 750) / (1.253 + 1.000).
+        "### Cobertura de testes: 77,7% no gate (linhas e ramos)",
+        "",
+        "79,9% de linhas e 75,0% de ramos.",
+        "",
+        "| Pacote | Linhas | Cobertas | Cobertura |",
+        "|---|---:|---:|---:|",
+        "| `src` | 3 | 1 | 33,3% |",
+        "| `src/estoque/dominio` | 1.250 | 1.000 | 80,0% |",
+        "| **total** | 1.253 | 1.001 | 79,9% |",
+    ]
 
 
 def test_xml_ausente_avisa_sem_falhar_o_job(
@@ -80,7 +124,7 @@ def test_main_escreve_o_resumo(
     xml = tmp_path / "coverage.xml"
     xml.write_text(_XML)
     assert script.main(["prog", str(xml)]) == 0
-    assert capsys.readouterr().out.startswith("### Cobertura de testes: 60.0% no gate")
+    assert capsys.readouterr().out.startswith("### Cobertura de testes: 60,0% no gate")
 
 
 _URL = "https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/123"
