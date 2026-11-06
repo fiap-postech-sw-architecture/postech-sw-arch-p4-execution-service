@@ -79,10 +79,10 @@ Gate de 95% no total, com linhas e ramos somados (`.coveragerc`), e de 90% no c�
 | `src/execucao/interfaces` | 84 | 84 | 100,0% |
 | **total** | 3.686 | 3.686 | 100,0% |
 
-Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 39937419103 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/39937419103).
+Tabela gerada por `scripts/cobertura_resumo.py` a partir do `coverage.xml` do [run 42214181079 do CI](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/actions/runs/42214181079).
 <!-- cobertura:fim -->
 
-**Oscilação**: a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 39937419103); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/cobertura.md](docs/cobertura.md#oscilação).
+**Oscilação**: a cobertura não oscila (100,0% de linhas e de ramos nos runs 39536414057 e 42214181079); o que já oscilou foi um teste do relay, corrigido no [#23](https://github.com/fiap-postech-sw-architecture/postech-sw-arch-p4-execution-service/pull/23). Detalhe em [docs/cobertura.md](docs/cobertura.md#oscilação).
 
 ## API
 
